@@ -1,0 +1,10 @@
+streamlit
+supabase
+pandas
+plotly
+PyPDF2
+fpdf2
+num2words
+qrcode
+Pillow
+requests
