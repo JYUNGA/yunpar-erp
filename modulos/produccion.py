@@ -33,10 +33,26 @@ def subir_img(supabase, archivo_streamlit, carpeta="bocetos"):
 
 def cod_ord(supabase):
     try:
+        # 1. Traemos todos los códigos existentes
         res = supabase.table('ordenes').select("codigo_orden").execute()
-        n = len(res.data) + 1
-        return f"ORD-{str(n).zfill(4)}"
-    except: return "ORD-0001"
+        codigos = [d['codigo_orden'] for d in res.data if d.get('codigo_orden')]
+        
+        # 2. DEFINIMOS TU NÚMERO BASE HISTÓRICO
+        max_num = 6400
+        
+        # 3. Buscamos cuál es el número más alto real en la base de datos
+        for c in codigos:
+            partes = c.split('-') # Separa "ORD" de "6401"
+            if len(partes) == 2 and partes[1].isdigit():
+                num = int(partes[1])
+                if num > max_num:
+                    max_num = num
+        
+        # 4. Sumamos 1 al máximo encontrado (Si está vacío, será 6400 + 1)
+        return f"ORD-{str(max_num + 1).zfill(4)}"
+        
+    except Exception as e: 
+        return "ORD-6401" # Respaldo en caso de error de red
 
 def limpiar_texto_pdf(texto):
     if not texto: return ""
