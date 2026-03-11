@@ -251,7 +251,8 @@ def render(supabase):
                 with st.spinner("Procesando y guardando datos masivamente..."):
                     try:
                         df = pd.read_excel(archivo)
-                        df.columns = df.columns.str.strip().str.upper() # Mantiene tu limpieza de columnas
+                        # Estandarizamos las columnas (mayúsculas y sin espacios extra)
+                        df.columns = df.columns.str.strip().str.upper()
 
                         # Traductor de booleanos super robusto
                         mapeo_booleanos = {
@@ -265,46 +266,54 @@ def render(supabase):
                             val_str = str(valor).strip().upper()
                             return mapeo_booleanos.get(val_str, False)
 
+                        def limpiar_precio(valor):
+                            val = pd.to_numeric(valor, errors='coerce')
+                            return 0.0 if pd.isna(val) else float(val)
+
                         batch_productos = []
 
                         for i, row in df.iterrows():
+                            # 1. Buscar el código (Tu Excel usa 'ID' pero soportamos 'COD.' por si acaso)
+                            raw_cod = row.get('COD.') if 'COD.' in df.columns else row.get('ID', '')
+                            
+                            # Saltar filas completamente vacías al final del Excel
+                            if pd.isna(raw_cod) or str(raw_cod).strip() == "":
+                                continue 
+                                
+                            # 2. Formatear el código a formato "A0622" de forma blindada
                             try:
-                                # Lógica para tu código
-                                raw_cod = row.get('COD.') if 'COD.' in df.columns else row.get('ID', '')
+                                # float() primero soluciona el problema si Pandas lo lee como "622.0"
+                                num = int(float(raw_cod))
+                                cod_final = f"A{str(num).zfill(4)}"
+                            except ValueError:
+                                cod_final = str(raw_cod).strip()
+                            
+                            # 3. Construir el producto leyendo TUS columnas exactas
+                            item = {
+                                "codigo_referencia": cod_final,
+                                "descripcion": str(row.get('DESCRIPCION', '')).strip(),
+                                "tipo_prenda": str(row.get('PRENDA', '')).strip().upper(),
+                                "linea_categoria": str(row.get('TIPO', '')).strip().upper(), # <-- CORREGIDO: Tu excel dice TIPO
+                                "grupo_edad": str(row.get('EDAD', '')).strip().upper(),
+                                "precio_unitario": limpiar_precio(row.get('UNI')),
+                                "precio_docena": limpiar_precio(row.get('>12')),
+                                "precio_mayorista": limpiar_precio(row.get('>25')),
+                                "requiere_sublimado": limpiar_booleano(row.get('SUBLIMADO')),
+                                "requiere_ticket": limpiar_booleano(row.get('TICKET')),
+                                "requiere_dtf": limpiar_booleano(row.get('DTF')),
+                                "requiere_bordado": limpiar_booleano(row.get('BORDADO')),
+                                "activo": True
+                            }
+                            batch_productos.append(item)
                                 
-                                # Saltar filas vacías al final del excel
-                                if pd.isna(raw_cod) or str(raw_cod).strip() == "":
-                                    continue 
-                                    
-                                cod_final = f"A{str(int(raw_cod)).zfill(4)}" if isinstance(raw_cod, (int, float)) else str(raw_cod).strip()
-                                
-                                item = {
-                                    "codigo_referencia": cod_final,
-                                    "descripcion": str(row.get('DESCRIPCION', '')).strip(),
-                                    "tipo_prenda": str(row.get('PRENDA', '')).strip().upper(),
-                                    "linea_categoria": str(row.get('TELA|CATEG', '')).strip().upper(),
-                                    "grupo_edad": str(row.get('EDAD', '')).strip().upper(),
-                                    "precio_unitario": float(pd.to_numeric(row.get('UNI'), errors='coerce') or 0),
-                                    "precio_docena": float(pd.to_numeric(row.get('>12'), errors='coerce') or 0),
-                                    "precio_mayorista": float(pd.to_numeric(row.get('>25'), errors='coerce') or 0),
-                                    "requiere_sublimado": limpiar_booleano(row.get('SUBLIMADO')),
-                                    "requiere_ticket": limpiar_booleano(row.get('TICKET')),
-                                    "requiere_dtf": limpiar_booleano(row.get('DTF')),
-                                    "requiere_bordado": limpiar_booleano(row.get('BORDADO')),
-                                    "activo": True
-                                }
-                                batch_productos.append(item)
-                            except Exception:
-                                pass # Ignorar fila si está corrupta y continuar con la siguiente
-                                
-                        # Inserción masiva usando tu misma regla de UPSERT
+                        # Inserción masiva usando UPSERT
                         if batch_productos:
                             supabase.table('productos_catalogo').upsert(batch_productos, on_conflict="codigo_referencia").execute()
                             st.success(f"✅ ¡Se procesaron {len(batch_productos)} productos correctamente!")
                             time.sleep(2)
                             st.rerun()
                         else:
-                            st.warning("⚠️ No se encontraron productos válidos en el archivo.")
+                            st.warning("⚠️ No se encontraron productos válidos. Revisa que la columna ID tenga datos.")
 
                     except Exception as e: 
                         st.error(f"Error crítico al leer el archivo: {e}")
