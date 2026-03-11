@@ -247,38 +247,67 @@ def render(supabase):
         with c_imp:
             st.subheader("🚀 Carga Masiva")
             archivo = st.file_uploader("Sube Lista Precios.xlsx", type=['xlsx'])
-            if archivo and st.button("Procesar Archivo"):
-                try:
-                    df = pd.read_excel(archivo)
-                    df.columns = df.columns.str.strip().str.upper()
-                    barra = st.progress(0)
-                    for i, row in df.iterrows():
-                        try:
-                            raw_cod = row.get('COD.', '')
-                            cod_final = f"A{str(int(raw_cod)).zfill(4)}" if isinstance(raw_cod, (int, float)) else str(raw_cod).strip()
-                            def es_si(x): return str(x).strip().upper() == 'SI'
-                            item = {
-                                "codigo_referencia": cod_final,
-                                "descripcion": str(row.get('DESCRIPCION', '')).strip(),
-                                "tipo_prenda": str(row.get('PRENDA', '')).strip().upper(),
-                                "linea_categoria": str(row.get('TELA|CATEG', '')).strip().upper(),
-                                "grupo_edad": str(row.get('EDAD', '')).strip().upper(),
-                                "precio_unitario": pd.to_numeric(row.get('UNI'), errors='coerce') or 0,
-                                "precio_docena": pd.to_numeric(row.get('>12'), errors='coerce') or 0,
-                                "precio_mayorista": pd.to_numeric(row.get('>25'), errors='coerce') or 0,
-                                "requiere_sublimado": es_si(row.get('SUBLIMADO')),
-                                "requiere_ticket": es_si(row.get('TICKET')),
-                                "requiere_dtf": es_si(row.get('DTF')),
-                                "requiere_bordado": es_si(row.get('BORDADO')),
-                                "activo": True
-                            }
-                            supabase.table('productos_catalogo').upsert(item, on_conflict="codigo_referencia").execute()
-                        except: pass
-                        barra.progress((i + 1) / len(df))
-                    st.success("Proceso finalizado.")
-                    time.sleep(2)
-                    st.rerun()
-                except Exception as e: st.error(f"Error: {e}")
+            if archivo and st.button("Procesar Archivo", type="primary"):
+                with st.spinner("Procesando y guardando datos masivamente..."):
+                    try:
+                        df = pd.read_excel(archivo)
+                        df.columns = df.columns.str.strip().str.upper() # Mantiene tu limpieza de columnas
+
+                        # Traductor de booleanos super robusto
+                        mapeo_booleanos = {
+                            "VERDADERO": True, "FALSO": False, 
+                            "TRUE": True, "FALSE": False, 
+                            "SI": True, "NO": False,
+                            "1": True, "0": False
+                        }
+                        
+                        def limpiar_booleano(valor):
+                            val_str = str(valor).strip().upper()
+                            return mapeo_booleanos.get(val_str, False)
+
+                        batch_productos = []
+
+                        for i, row in df.iterrows():
+                            try:
+                                # Lógica para tu código
+                                raw_cod = row.get('COD.') if 'COD.' in df.columns else row.get('ID', '')
+                                
+                                # Saltar filas vacías al final del excel
+                                if pd.isna(raw_cod) or str(raw_cod).strip() == "":
+                                    continue 
+                                    
+                                cod_final = f"A{str(int(raw_cod)).zfill(4)}" if isinstance(raw_cod, (int, float)) else str(raw_cod).strip()
+                                
+                                item = {
+                                    "codigo_referencia": cod_final,
+                                    "descripcion": str(row.get('DESCRIPCION', '')).strip(),
+                                    "tipo_prenda": str(row.get('PRENDA', '')).strip().upper(),
+                                    "linea_categoria": str(row.get('TELA|CATEG', '')).strip().upper(),
+                                    "grupo_edad": str(row.get('EDAD', '')).strip().upper(),
+                                    "precio_unitario": float(pd.to_numeric(row.get('UNI'), errors='coerce') or 0),
+                                    "precio_docena": float(pd.to_numeric(row.get('>12'), errors='coerce') or 0),
+                                    "precio_mayorista": float(pd.to_numeric(row.get('>25'), errors='coerce') or 0),
+                                    "requiere_sublimado": limpiar_booleano(row.get('SUBLIMADO')),
+                                    "requiere_ticket": limpiar_booleano(row.get('TICKET')),
+                                    "requiere_dtf": limpiar_booleano(row.get('DTF')),
+                                    "requiere_bordado": limpiar_booleano(row.get('BORDADO')),
+                                    "activo": True
+                                }
+                                batch_productos.append(item)
+                            except Exception:
+                                pass # Ignorar fila si está corrupta y continuar con la siguiente
+                                
+                        # Inserción masiva usando tu misma regla de UPSERT
+                        if batch_productos:
+                            supabase.table('productos_catalogo').upsert(batch_productos, on_conflict="codigo_referencia").execute()
+                            st.success(f"✅ ¡Se procesaron {len(batch_productos)} productos correctamente!")
+                            time.sleep(2)
+                            st.rerun()
+                        else:
+                            st.warning("⚠️ No se encontraron productos válidos en el archivo.")
+
+                    except Exception as e: 
+                        st.error(f"Error crítico al leer el archivo: {e}")
 
         with c_exp:
             st.subheader("📤 Respaldo")
