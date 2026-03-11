@@ -101,32 +101,38 @@ inicializar_estado()
 if not st.session_state['usuario']:
     login()
 else:
-    # --- SIDEBAR DINÁMICO ---
+    # --- 1. ESCUDO DE MEMORIA (ANTIBUG) ---
+    # Si la caché del navegador corrompió el rol convirtiéndolo en diccionario, lo forzamos a texto
+    if isinstance(st.session_state.get('rol'), dict):
+        st.session_state['rol'] = str(st.session_state['rol'].get('rol', 'Inicio'))
+    elif not isinstance(st.session_state.get('rol'), str):
+        st.session_state['rol'] = str(st.session_state.get('rol', 'Inicio'))
+        
+    rol_seguro = st.session_state['rol'].strip()
+
+    # --- 2. SIDEBAR DINÁMICO ---
     with st.sidebar:
         st.title("🏭 YUNPAR")
         
-        # 🛠️ CORRECCIÓN: Limpiamos el rol por si Supabase lo envió como diccionario
-        rol_crudo = st.session_state['rol']
-        if isinstance(rol_crudo, dict):
-            # Extraemos el texto real del diccionario y reescribimos la memoria
-            rol_limpio = rol_crudo.get('rol', list(rol_crudo.values())[0] if rol_crudo else "Inicio")
-            st.session_state['rol'] = rol_limpio 
-        else:
-            rol_limpio = str(rol_crudo)
-
-        st.write(f"👤 **{st.session_state['usuario']}**")
-        st.caption(f"Rol: {rol_limpio}")
+        # También protegemos el nombre de usuario por si acaso
+        usuario_seguro = st.session_state.get('usuario', 'Desconocido')
+        if isinstance(usuario_seguro, dict):
+            usuario_seguro = str(usuario_seguro.get('nombre_completo', 'Desconocido'))
+            
+        st.write(f"👤 **{usuario_seguro}**")
+        st.caption(f"Rol: {rol_seguro}")
         st.divider()
         
-        # Obtener los módulos permitidos para el rol actual
-        modulos_permitidos = PERMISOS.get(rol_limpio, ["Inicio"])
+        # Obtener los módulos permitidos de forma 100% segura
+        modulos_permitidos = PERMISOS.get(rol_seguro, ["Inicio"])
         
-        # Generar los botones de navegación de forma dinámica
+        # Generar los botones de navegación
         opcion_seleccionada = st.radio("Navegación", modulos_permitidos)
         
         st.divider()
         if st.button("🚪 Cerrar Sesión", use_container_width=True):
-            st.session_state.clear()
+            for key in list(st.session_state.keys()):
+                del st.session_state[key] # Limpieza absoluta
             st.rerun()
 
     # Ejecutar el módulo seleccionado
