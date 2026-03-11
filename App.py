@@ -104,13 +104,22 @@ else:
     # --- SIDEBAR DINÁMICO ---
     with st.sidebar:
         st.title("🏭 YUNPAR")
+        
+        # 🛠️ CORRECCIÓN: Limpiamos el rol por si Supabase lo envió como diccionario
+        rol_crudo = st.session_state['rol']
+        if isinstance(rol_crudo, dict):
+            # Extraemos el texto real del diccionario y reescribimos la memoria
+            rol_limpio = rol_crudo.get('rol', list(rol_crudo.values())[0] if rol_crudo else "Inicio")
+            st.session_state['rol'] = rol_limpio 
+        else:
+            rol_limpio = str(rol_crudo)
+
         st.write(f"👤 **{st.session_state['usuario']}**")
-        st.caption(f"Rol: {st.session_state['rol']}")
+        st.caption(f"Rol: {rol_limpio}")
         st.divider()
         
         # Obtener los módulos permitidos para el rol actual
-        rol_actual = st.session_state['rol']
-        modulos_permitidos = PERMISOS.get(rol_actual, ["Inicio"])
+        modulos_permitidos = PERMISOS.get(rol_limpio, ["Inicio"])
         
         # Generar los botones de navegación de forma dinámica
         opcion_seleccionada = st.radio("Navegación", modulos_permitidos)
