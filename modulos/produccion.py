@@ -202,6 +202,8 @@ def render(supabase):
                     st.session_state['url_boceto_view'] = row['url_boceto_vendedora']
                     st.session_state['url_diseno_view'] = row['url_diseno_final']
                     st.session_state['editando_cliente_id'] = row['cliente_id'] 
+                    # --- NUEVO: Cargar observaciones generales al estado ---
+                    st.session_state['editando_obs_g'] = row.get('observaciones_generales', "")
                     
                     # NUEVO: Recuperar fecha de entrega de la BD
                     try:
@@ -425,8 +427,22 @@ def render(supabase):
             if prod_obj:
                 c1, c2, c3 = st.columns(3)
                 
-                # 1. Selector de Tarifa
-                tarifa_sel = c1.selectbox("Tarifa", ["Unitario", "Docena", "Mayorista", "Manual"], key=f"tar_sel_{prod_obj['id']}")
+                # 1. Selector de Tarifa con Deducción Inteligente
+                tarifa_sel_def = 0 # Unitario por defecto
+                
+                restore_price = st.session_state.get('restore_price')
+                if restore_price is not None:
+                    if float(restore_price) == float(prod_obj.get('precio_unitario', 0)): tarifa_sel_def = 0
+                    elif float(restore_price) == float(prod_obj.get('precio_docena', 0)): tarifa_sel_def = 1
+                    elif float(restore_price) == float(prod_obj.get('precio_mayorista', 0)): tarifa_sel_def = 2
+                    else: tarifa_sel_def = 3 # Manual
+                
+                tarifa_sel = c1.selectbox(
+                    "Tarifa", 
+                    ["Unitario", "Docena", "Mayorista", "Manual"], 
+                    index=tarifa_sel_def, 
+                    key=f"tar_sel_{prod_obj['id']}"
+                )
                 
                 # 2. Cálculo del Precio Base
                 precio_base = 0.0
@@ -664,8 +680,22 @@ def render(supabase):
                 titulo_item = f"📦 {it['obj_p']['descripcion']} ({cant:.2f} {unidad_txt}) - ${sub:.2f}"
                 
                 with st.expander(titulo_item, expanded=False):
-                    # Mostramos los datos (Solo lectura aquí)
-                    st.dataframe(pd.DataFrame(it['detalles']), use_container_width=True)
+                    # --- CORRECCIÓN UI VENTAS: Mostrar Cantidad y Cuellos limpios ---
+                    df_resumen = pd.DataFrame(it['detalles'])
+                    
+                    renombres = {
+                        "talla_superior": "T. Sup",
+                        "talla_inferior": "T. Inf",
+                        "tipo_cuello_texto": "Cuello",
+                        "_cantidad_manual": "Cant.",
+                        "observacion_individual": "Obs."
+                    }
+                    df_resumen = df_resumen.rename(columns=renombres)
+                    
+                    # Quitar columnas que están 100% vacías (limpia visualmente la tabla)
+                    df_resumen = df_resumen.dropna(axis=1, how='all')
+                    
+                    st.dataframe(df_resumen, use_container_width=True)
                     
                     col_edit, col_del = st.columns([1, 5])
                     
@@ -731,10 +761,12 @@ def render(supabase):
                 help="Los pagos adicionales deben registrarse desde el módulo de Finanzas." if es_edicion_ui else ""
             )
 
-            # SOLUCIÓN ERROR CRÍTICO: Creamos el campo para obs_g
+            # SOLUCIÓN ERROR CRÍTICO: Recuperamos observaciones del estado si existen
+            val_obs = st.session_state.get('editando_obs_g', "")
+            
             obs_g = c_obs.text_area(
                 "Observaciones Generales de la Orden", 
-                value="", 
+                value=val_obs, 
                 placeholder="Escriba aquí cualquier nota general para producción..."
             )
 
@@ -764,18 +796,27 @@ def render(supabase):
                     }
                     
                     # 3. Lógica Diferenciada (AQUÍ ESTÁ LA MAGIA)
+                    # 3. Lógica Diferenciada (AQUÍ ESTÁ LA MAGIA)
                     if es_edicion:
                         id_o = st.session_state['editando_orden_id']
-                        
                         cab["alerta_cambios"] = True 
                         
-                        # ⚠️ PROTECCIÓN FINANCIERA: Evitamos que al editar una orden 
-                        # se sobrescriba el abono inicial y descuadre la caja.
-                        # Eliminamos 'abono_inicial' y 'saldo_pendiente' del diccionario cab para no alterarlos.
+                        # PROTECCIÓN FINANCIERA
                         cab.pop("abono_inicial", None)
                         cab.pop("saldo_pendiente", None)
                         
                         supabase.table('ordenes').update(cab).eq('id', id_o).execute()
+                        
+                        # --- CORRECCIÓN ERROR 400: Borrar en cascada manual ---
+                        # 1. Obtener los IDs de los items actuales
+                        items_actuales = supabase.table('items_orden').select('id').eq('orden_id', id_o).execute().data
+                        ids_items = [item['id'] for item in items_actuales]
+                        
+                        # 2. Borrar especificaciones (hijos) primero
+                        if ids_items:
+                            supabase.table('especificaciones_producto').delete().in_('item_orden_id', ids_items).execute()
+                        
+                        # 3. Borrar los items (padres) después
                         supabase.table('items_orden').delete().eq('orden_id', id_o).execute()
                     else:
                         id_o = st.session_state.get('id_usuario', 1) # Asegurar un fallback
@@ -830,8 +871,13 @@ def render(supabase):
                                     "color_polines": d.get("color_polines"), 
                                     "es_arquero": d.get("es_arquero"), 
                                     "genero": d.get("genero"), 
-                                    "observacion_individual": d.get("observacion_individual")
-                                    # NOTA: Agrega 'acabado', 'calandra_si_no', etc., si tu esquema SQL final los usa
+                                    "observacion_individual": d.get("observacion_individual"),
+                                    # --- CORRECCIÓN: Agregamos los campos que faltaban ---
+                                    "tipo_cuello_texto": d.get("tipo_cuello_texto"),
+                                    "ancho_cm": d.get("ancho_cm"),
+                                    "alto_cm": d.get("alto_cm"),
+                                    "calandra_si_no": d.get("calandra_si_no"),
+                                    "acabado": d.get("acabado")
                                 }
                                 batch_especs.append(esp)
                         
