@@ -54,10 +54,10 @@ def render(supabase):
             st.write("") 
             submit_search = col4.form_submit_button("Filtrar Bandeja", use_container_width=True)
 
+    # CÓDIGO NUEVO (Reemplazar por esto)
     try:
-        # IMPORTANTE: Se añadió 'observaciones' a la consulta
         res_ordenes = supabase.table("ordenes") \
-            .select("id, codigo_orden, estado, fecha_entrega, alerta_cambios, cliente_id, created_at, url_boceto_vendedora, url_arte_final, observaciones") \
+            .select("id, codigo_orden, estado, fecha_entrega, alerta_cambios, cliente_id, created_at, url_boceto_vendedora, url_arte_final, observaciones_generales") \
             .or_("estado.eq.Pendiente,estado.eq.En Diseño,alerta_cambios.eq.true") \
             .order("created_at", desc=True) \
             .execute()
@@ -130,10 +130,11 @@ def render(supabase):
             if orden.get('url_arte_final'): st.image(orden['url_arte_final'], use_container_width=True)
             else: st.info("No hay arte final registrado.")
             
+        # CÓDIGO NUEVO (Reemplazar por esto)
         # --- NUEVO: OBSERVACIONES GENERALES DE LA ORDEN ---
         st.markdown("### 📝 Observaciones Generales de la Orden")
-        if orden.get('observaciones'):
-            st.info(f"**Nota del cliente/comercial:** {orden['observaciones']}")
+        if orden.get('observaciones_generales'):
+            st.info(f"**Nota del cliente/comercial:** {orden['observaciones_generales']}")
         else:
             st.warning("No hay observaciones generales registradas para esta orden.")
         st.divider()
