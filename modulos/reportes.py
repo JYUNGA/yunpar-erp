@@ -260,7 +260,17 @@ def generar_comprobante_cliente(orden):
     pdf.cell(25, 8, f"${orden.get('saldo_pendiente', 0):.2f}", align="R", new_x="LMARGIN", new_y="NEXT"); pdf.set_text_color(0, 0, 0) 
     
     pdf.ln(10)
-    url_imagen = orden.get('url_arte_final') or orden.get('url_boceto_vendedora')
+    # --- 1. LÓGICA ESTRICTA DE PRIORIDAD DE IMÁGENES ---
+    arte = str(orden.get('url_arte_final') or '').strip()
+    boceto = str(orden.get('url_boceto_vendedora') or '').strip()
+    
+    if arte and arte.lower() not in ['none', 'null']:
+        url_imagen = arte
+    elif boceto and boceto.lower() not in ['none', 'null']:
+        url_imagen = boceto
+    else:
+        url_imagen = None
+        
     pagos = orden.get('pagos', [])
     
     if url_imagen and pagos:
@@ -268,32 +278,46 @@ def generar_comprobante_cliente(orden):
         pdf.cell(0, 10, "Referencia de Diseño e Historial de Pagos:", align="L", new_x="LMARGIN", new_y="NEXT")
         start_y = pdf.get_y()
         try:
-            pdf.image(url_imagen, w=105)
+            # AJUSTE: Reduje la imagen a 95mm (antes 105) para dar más espacio a la tabla
+            pdf.image(url_imagen, w=95)
             end_image_y = pdf.get_y()
         except:
-            pdf.set_font("helvetica", "I", 9); pdf.cell(105, 10, "(Imagen no disponible)"); end_image_y = pdf.get_y()
+            pdf.set_font("helvetica", "I", 9); pdf.cell(95, 10, "(Imagen no disponible)"); end_image_y = pdf.get_y()
             
-        pdf.set_y(start_y); pdf.set_left_margin(120) 
+        pdf.set_y(start_y)
+        
+        # --------------------------------------------------------------------------
+        # AQUÍ HACES EL AJUSTE MANUAL DE LA TABLA:
+        # 'set_left_margin' empuja la tabla a la derecha. Antes era 120, lo subí a 135.
+        # Puedes jugar con este valor (ej: 140), pero cuida que no se salga de la hoja.
+        # --------------------------------------------------------------------------
+        pdf.set_left_margin(135) 
+        
         pdf.set_font("helvetica", "", 9)
         estilo_cabecera_pagos = FontFace(fill_color=(0, 51, 153), color=(255, 255, 255), emphasis="B")
         estilo_datos_pagos = FontFace(fill_color=(255, 255, 255), color=(0, 0, 0), emphasis="")
-        with pdf.table(col_widths=(23, 37, 20), text_align=("CENTER", "LEFT", "RIGHT")) as t_pagos:
+        
+        # AJUSTE: Reduje ligeramente el ancho de las columnas (20, 35, 15) que suman 70mm.
+        # Así, Margen(135) + Tabla(70) = 205mm. Entra perfecto en la A4 (210mm).
+        with pdf.table(col_widths=(20, 35, 15), text_align=("CENTER", "LEFT", "RIGHT")) as t_pagos:
             row = t_pagos.row(style=estilo_cabecera_pagos)
-            for h in ["Fecha", "Banco/Método", "Monto"]: row.cell(h)
+            for h in ["Fecha", "Banco", "Monto"]: row.cell(h)
             for p in pagos:
                 row = t_pagos.row(style=estilo_datos_pagos)
                 f_pago = p.get('fecha_pago', '')
-                if f_pago and len(f_pago) >= 10: f_pago = f"{f_pago[8:10]}/{f_pago[5:7]}/{f_pago[0:4]}"
+                if f_pago and len(f_pago) >= 10: f_pago = f"{f_pago[8:10]}/{f_pago[5:7]}/{f_pago[2:4]}" # Acorté el año a 2 dígitos para ahorrar espacio
                 banco = p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo'
-                row.cell(f_pago); row.cell(str(banco)); row.cell(f"${float(p.get('monto', 0)):.2f}")
+                row.cell(f_pago); row.cell(str(banco)[:15]); row.cell(f"${float(p.get('monto', 0)):.2f}")
                 
         end_table_y = pdf.get_y()
         pdf.set_left_margin(10); pdf.set_y(max(end_table_y, end_image_y) + 5)
+        
     elif url_imagen and not pagos:
         pdf.set_font("helvetica", "B", 10)
         pdf.cell(0, 10, "Referencia de Diseño:", align="L", new_x="LMARGIN", new_y="NEXT")
         try: pdf.image(url_imagen, w=160, x="CENTER")
         except: pass
+        
     elif not url_imagen and pagos:
         pdf.set_font("helvetica", "B", 10)
         pdf.cell(0, 10, "Historial de Pagos / Abonos:", align="L", new_x="LMARGIN", new_y="NEXT")
@@ -460,7 +484,15 @@ def generar_hoja_produccion(orden):
                     resumen_polines[k] = resumen_polines.get(k, 0) + 1
 
     # --- 3. IMAGEN MAXIMIZADA ---
-    url_imagen = orden.get('url_arte_final') or orden.get('url_boceto_vendedora')
+    arte = str(orden.get('url_arte_final') or '').strip()
+    boceto = str(orden.get('url_boceto_vendedora') or '').strip()
+    
+    if arte and arte.lower() not in ['none', 'null']:
+        url_imagen = arte
+    elif boceto and boceto.lower() not in ['none', 'null']:
+        url_imagen = boceto
+    else:
+        url_imagen = None
     
     pdf.set_font("helvetica", "B", 12)
     pdf.cell(0, 8, "REFERENCIA VISUAL DE CORTE Y CONFECCIÓN", align="C", new_x="LMARGIN", new_y="NEXT")
