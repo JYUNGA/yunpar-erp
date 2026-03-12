@@ -57,7 +57,7 @@ def render(supabase):
     # CÓDIGO NUEVO (Reemplazar por esto)
     try:
         res_ordenes = supabase.table("ordenes") \
-            .select("id, codigo_orden, estado, fecha_entrega, alerta_cambios, cliente_id, created_at, url_boceto_vendedora, url_arte_final, observaciones_generales") \
+            .select("id, codigo_orden, estado, fecha_entrega, alerta_cambios, cliente_id, created_at, url_boceto_vendedora, url_arte_final, url_diseno_final, observaciones_generales") \
             .or_("estado.eq.Pendiente,estado.eq.En Diseño,alerta_cambios.eq.true") \
             .order("created_at", desc=True) \
             .execute()
