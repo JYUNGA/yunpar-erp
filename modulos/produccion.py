@@ -622,25 +622,35 @@ def render(supabase):
                             elif ver_cant: cantidad_grupo = df_final['Cantidad'].sum()
                             else: cantidad_grupo = len(df_final)
 
-                            # --- MAPEO A BASE DE DATOS ---
+                          # --- MAPEO A BASE DE DATOS (CON SANITIZACIÓN DE NAN) ---
                             detalles_db = []
                             for _, r in df_final.iterrows():
+                                # Limpiamos los NaN de Pandas que causan el error crítico
+                                cant = r.get("Cantidad", 1)
+                                cant = 1 if pd.isna(cant) else int(cant)
+                                
+                                ancho = r.get("Ancho (m)", 0.0)
+                                ancho = 0.0 if pd.isna(ancho) else float(ancho)
+                                
+                                alto = r.get("Largo (m)", 0.0)
+                                alto = 0.0 if pd.isna(alto) else float(alto)
+                                
                                 detalles_db.append({
-                                    "talla_superior": r.get("Camiseta"),
-                                    "talla_inferior": r.get("Pantaloneta"),
-                                    "nombre_jugador": r.get("Nombre", ""), 
-                                    "numero_dorsal": r.get("Numero", ""),
-                                    "talla_polines": r.get("Talla Polin"),
-                                    "color_polines": r.get("Color Polin"),
-                                    "es_arquero": r.get("Arquero", False),
-                                    "genero": r.get("Genero"),
-                                    "observacion_individual": r.get("Obs"),
-                                    "tipo_cuello_texto": r.get("Tipo Cuello", ""),
-                                    "ancho_cm": float(r.get("Ancho (m)", 0) or 0), 
-                                    "alto_cm": float(r.get("Largo (m)", 0) or 0),  
-                                    "calandra_si_no": r.get("Calandrar", False),
-                                    "acabado": r.get("Acabado", ""),
-                                    "_cantidad_manual": r.get("Cantidad", 1) 
+                                    "talla_superior": None if pd.isna(r.get("Camiseta")) else r.get("Camiseta"),
+                                    "talla_inferior": None if pd.isna(r.get("Pantaloneta")) else r.get("Pantaloneta"),
+                                    "nombre_jugador": "" if pd.isna(r.get("Nombre")) else r.get("Nombre", ""), 
+                                    "numero_dorsal": "" if pd.isna(r.get("Numero")) else r.get("Numero", ""),
+                                    "talla_polines": None if pd.isna(r.get("Talla Polin")) else r.get("Talla Polin"),
+                                    "color_polines": "" if pd.isna(r.get("Color Polin")) else r.get("Color Polin", ""),
+                                    "es_arquero": False if pd.isna(r.get("Arquero")) else r.get("Arquero", False),
+                                    "genero": None if pd.isna(r.get("Genero")) else r.get("Genero"),
+                                    "observacion_individual": "" if pd.isna(r.get("Obs")) else r.get("Obs", ""),
+                                    "tipo_cuello_texto": "" if pd.isna(r.get("Tipo Cuello")) else r.get("Tipo Cuello", ""),
+                                    "ancho_cm": ancho, 
+                                    "alto_cm": alto,  
+                                    "calandra_si_no": False if pd.isna(r.get("Calandrar")) else r.get("Calandrar", False),
+                                    "acabado": "" if pd.isna(r.get("Acabado")) else r.get("Acabado", ""),
+                                    "_cantidad_manual": cant 
                                 })
 
                             st.session_state['prod_items'].append({
@@ -693,7 +703,7 @@ def render(supabase):
                     df_resumen = df_resumen.rename(columns=renombres)
                     
                     # Quitar columnas que están 100% vacías (limpia visualmente la tabla)
-                    df_resumen = df_resumen.dropna(axis=1, how='all')
+                    # df_resumen = df_resumen.dropna(axis=1, how='all')
                     
                     st.dataframe(df_resumen, use_container_width=True)
                     
@@ -841,7 +851,7 @@ def render(supabase):
                     for it in st.session_state['prod_items']:
                         
                         # A. Calculamos la cantidad real sumando la columna Cantidad de la matriz
-                        cantidad_real_prendas = sum(int(d.get("_cantidad_manual", 1)) for d in it['detalles'])
+                        cantidad_real_prendas = sum(int(d.get("_cantidad_manual", 1) if pd.notna(d.get("_cantidad_manual")) else 1) for d in it['detalles'])
 
                         item_data = {
                             "orden_id": id_o, 
@@ -857,7 +867,7 @@ def render(supabase):
                         batch_especs = []
                         for d in it['detalles']:
                             # B. Obtenemos cuántas veces debemos repetir esta fila
-                            cantidad_fila = int(d.get("_cantidad_manual", 1))
+                            cantidad_fila = int(d.get("_cantidad_manual", 1) if pd.notna(d.get("_cantidad_manual")) else 1)
                             
                             # C. Bucle multiplicador (Opción B)
                             for _ in range(cantidad_fila):
