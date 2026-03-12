@@ -125,10 +125,16 @@ def render(supabase):
             st.caption("Boceto Vendedora")
             if orden.get('url_boceto_vendedora'): st.image(orden['url_boceto_vendedora'], use_container_width=True)
             else: st.info("No hay boceto registrado.")
+        # CÓDIGO NUEVO
         with col_img2:
-            st.caption("Arte Final")
-            if orden.get('url_arte_final'): st.image(orden['url_arte_final'], use_container_width=True)
-            else: st.info("No hay arte final registrado.")
+            st.caption("Arte Final / Diseño")
+            # Obtenemos la URL de cualquiera de las dos columnas que tenga datos
+            url_imagen_final = orden.get('url_arte_final') or orden.get('url_diseno_final')
+            
+            if url_imagen_final: 
+                st.image(url_imagen_final, use_container_width=True)
+            else: 
+                st.info("No hay arte final registrado en la base de datos.")
             
         # CÓDIGO NUEVO (Reemplazar por esto)
         # --- NUEVO: OBSERVACIONES GENERALES DE LA ORDEN ---
@@ -183,6 +189,8 @@ def render(supabase):
                 specs_list.append({
                     "Producto": prod,
                     "Tela": tela,
+                    "Género": esp.get("genero", "-"),           # <-- NUEVA COLUMNA
+                    "Cuello": esp.get("tipo_cuello", "-"),      # <-- NUEVA COLUMNA
                     "Talla Sup.": t_sup if t_sup != 'NONE' else "-",
                     "Talla Inf.": t_inf if t_inf != 'NONE' else "-",
                     "Jugador": esp.get("nombre_jugador", "-"),
