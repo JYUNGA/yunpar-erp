@@ -55,8 +55,9 @@ def render(supabase):
             submit_search = col4.form_submit_button("Filtrar Bandeja", use_container_width=True)
 
     try:
+        # IMPORTANTE: Se añadió 'observaciones' a la consulta
         res_ordenes = supabase.table("ordenes") \
-            .select("id, codigo_orden, estado, fecha_entrega, alerta_cambios, cliente_id, created_at, url_boceto_vendedora, url_arte_final") \
+            .select("id, codigo_orden, estado, fecha_entrega, alerta_cambios, cliente_id, created_at, url_boceto_vendedora, url_arte_final, observaciones") \
             .or_("estado.eq.Pendiente,estado.eq.En Diseño,alerta_cambios.eq.true") \
             .order("created_at", desc=True) \
             .execute()
@@ -128,6 +129,14 @@ def render(supabase):
             st.caption("Arte Final")
             if orden.get('url_arte_final'): st.image(orden['url_arte_final'], use_container_width=True)
             else: st.info("No hay arte final registrado.")
+            
+        # --- NUEVO: OBSERVACIONES GENERALES DE LA ORDEN ---
+        st.markdown("### 📝 Observaciones Generales de la Orden")
+        if orden.get('observaciones'):
+            st.info(f"**Nota del cliente/comercial:** {orden['observaciones']}")
+        else:
+            st.warning("No hay observaciones generales registradas para esta orden.")
+        st.divider()
 
         try:
             res_items = supabase.table("items_orden").select("*").eq("orden_id", order_id).execute()
@@ -190,7 +199,6 @@ def render(supabase):
                 df_sup['Orden'] = df_sup['Talla'].apply(orden_talla)
                 df_sup = df_sup.sort_values('Orden').drop(columns=['Orden']).reset_index(drop=True)
                 
-                # --- MÉTODO SEGURO PARA AGREGAR TOTAL ---
                 total_sup = df_sup['Cantidad'].sum()
                 fila_total = pd.DataFrame([{'Talla': 'TOTAL', 'Cantidad': total_sup}])
                 df_sup = pd.concat([df_sup, fila_total], ignore_index=True)
@@ -204,7 +212,6 @@ def render(supabase):
                 df_inf['Orden'] = df_inf['Talla'].apply(orden_talla)
                 df_inf = df_inf.sort_values('Orden').drop(columns=['Orden']).reset_index(drop=True)
                 
-                # --- MÉTODO SEGURO PARA AGREGAR TOTAL ---
                 total_inf = df_inf['Cantidad'].sum()
                 fila_total = pd.DataFrame([{'Talla': 'TOTAL', 'Cantidad': total_inf}])
                 df_inf = pd.concat([df_inf, fila_total], ignore_index=True)
@@ -218,7 +225,6 @@ def render(supabase):
                 df_pol['Orden'] = df_pol['Talla'].apply(orden_talla)
                 df_pol = df_pol.sort_values('Orden').drop(columns=['Orden']).reset_index(drop=True)
                 
-                # --- MÉTODO SEGURO PARA AGREGAR TOTAL ---
                 total_pol = df_pol['Cantidad'].sum()
                 fila_total = pd.DataFrame([{'Talla': 'TOTAL', 'Color': '-', 'Cantidad': total_pol}])
                 df_pol = pd.concat([df_pol, fila_total], ignore_index=True)
@@ -232,17 +238,15 @@ def render(supabase):
         if specs_list:
             df_specs = pd.DataFrame(specs_list)
             
-            # 5 Columnas para acomodar los 4 filtros + el contador
             col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns([2, 2, 1.5, 1.5, 1])
             
             lista_productos = ["Todos"] + list(df_specs['Producto'].unique())
-            lista_telas = ["Todos"] + list(df_specs['Tela'].unique())
-            # Limpiamos guiones vacíos para los filtros de tallas
+            lista_telas_filtro = ["Todos"] + list(df_specs['Tela'].unique())
             lista_tsup = ["Todos"] + [t for t in df_specs['Talla Sup.'].unique() if t != "-"]
             lista_tinf = ["Todos"] + [t for t in df_specs['Talla Inf.'].unique() if t != "-"]
             
             filtro_prod = col_f1.selectbox("Producto:", lista_productos)
-            filtro_tela = col_f2.selectbox("Tela:", lista_telas)
+            filtro_tela = col_f2.selectbox("Tela:", lista_telas_filtro)
             filtro_tsup = col_f3.selectbox("Talla Sup:", lista_tsup)
             filtro_tinf = col_f4.selectbox("Talla Inf:", lista_tinf)
             
@@ -264,34 +268,43 @@ def render(supabase):
         st.divider()
         st.subheader("🖨️ Gestor de Archivos de Impresión")
         
+        # OBTENER TELAS DISPONIBLES DESDE LA BASE DE DATOS
+        try:
+            res_telas_bd = supabase.table("insumos").select("nombre").execute()
+            lista_telas_db = [t['nombre'] for t in res_telas_bd.data] if res_telas_bd.data else ["Estándar"]
+        except Exception:
+            lista_telas_db = ["Estándar"]
+
         lista_perfiles = ["CMYK", "Textil Brillante", "Escala de Grises", "Fondo Oscuro", "Fluor"] 
 
         st.markdown("**1. Subir PDFs en lote (Extrae medidas automáticamente)**")
-        # Cambio clave: accept_multiple_files=True permite arrastrar 5, 10 o 20 archivos de golpe
         archivos_pdf = st.file_uploader("Arrastra aquí los archivos PDF de tu diseño (Puedes seleccionar varios a la vez):", type=["pdf"], accept_multiple_files=True)
         
         if archivos_pdf:
             st.success(f"✅ Se han detectado {len(archivos_pdf)} archivo(s) PDF.")
             
             archivos_extraidos = []
+            tela_por_defecto = lista_telas_db[0] if lista_telas_db else "Estándar"
+
             for pdf in archivos_pdf:
                 nombre_auto, ancho_auto, largo_auto = extraer_metadata_pdf(pdf)
                 archivos_extraidos.append({
                     "Nombre": nombre_auto,
+                    "Tela": tela_por_defecto,
                     "Ancho": ancho_auto,
                     "Largo": largo_auto,
-                    "Perfil": "CMYK", # Perfil por defecto
+                    "Perfil": "CMYK", 
                     "Notas": ""
                 })
             
-            st.markdown("**2. Revisa y asigna perfiles a los archivos detectados:**")
+            st.markdown("**2. Revisa y asigna perfiles y telas a los archivos detectados:**")
             df_nuevos = pd.DataFrame(archivos_extraidos)
             
-            # Tabla interactiva temporal para revisar antes de guardar a la base de datos
             edited_nuevos = st.data_editor(
                 df_nuevos,
                 column_config={
                     "Perfil": st.column_config.SelectboxColumn("Perfil", options=lista_perfiles),
+                    "Tela": st.column_config.SelectboxColumn("Tela a Usar", options=lista_telas_db, required=True),
                     "Ancho": st.column_config.NumberColumn("Ancho (m)", format="%.2f"),
                     "Largo": st.column_config.NumberColumn("Largo (m)", format="%.2f"),
                 },
@@ -307,38 +320,42 @@ def render(supabase):
                         payloads.append({
                             "orden_id": order_id,
                             "nombre_archivo": row['Nombre'].strip(),
+                            "tela": row['Tela'], # <-- Nuevo Campo
                             "perfil_color": row['Perfil'],
-                            "ancho_metros": row['Ancho'], # <- REQUIERE LA COLUMNA EN SUPABASE
+                            "ancho_metros": row['Ancho'], 
                             "longitud_metros": row['Largo'],
                             "estado_impresion": "Pendiente",
                             "notas_disenador": str(row['Notas']).strip() if pd.notna(row['Notas']) else ""
                         })
                     
-                    # Inserción múltiple en Supabase
                     supabase.table("archivos_impresion").insert(payloads).execute()
                     st.success("¡Todos los archivos fueron registrados exitosamente en la base de datos!")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"❌ Error al guardar. ¡Asegúrate de haber creado la columna 'ancho_metros' en Supabase! Detalles del error: {e}")
+                    st.error(f"❌ Error al guardar. ¡Asegúrate de haber creado la columna 'tela' y 'ancho_metros' en Supabase! Detalles del error: {e}")
         else:
             st.info("Arrastra PDFs arriba, o registra manualmente un archivo usando el botón de abajo.")
             with st.expander("➕ Registro Manual (Sin PDF)"):
                 with st.form("form_registro_manual", clear_on_submit=True):
-                    col_m1, col_m2 = st.columns(2)
+                    col_m1, col_m2, col_m_tela = st.columns(3)
                     col_m3, col_m4 = st.columns(2)
+                    
                     nombre_input = col_m1.text_input("Nombre del Archivo")
                     perfil_input = col_m2.selectbox("Perfil de Color", lista_perfiles)
+                    tela_input = col_m_tela.selectbox("Tela a Usar", lista_telas_db)
+                    
                     ancho_input = col_m3.number_input("Ancho (m)", min_value=0.0, step=0.01)
                     largo_input = col_m4.number_input("Largo (m)", min_value=0.0, step=0.01)
                     notas_input = st.text_input("Notas")
+                    
                     if st.form_submit_button("Guardar Registro Manual"):
                         if nombre_input and largo_input > 0:
                             try:
                                 payload = {
                                     "orden_id": order_id, "nombre_archivo": nombre_input.strip(),
-                                    "perfil_color": perfil_input, "ancho_metros": ancho_input,
-                                    "longitud_metros": largo_input, "estado_impresion": "Pendiente",
-                                    "notas_disenador": notas_input.strip()
+                                    "perfil_color": perfil_input, "tela": tela_input,
+                                    "ancho_metros": ancho_input, "longitud_metros": largo_input, 
+                                    "estado_impresion": "Pendiente", "notas_disenador": notas_input.strip()
                                 }
                                 supabase.table("archivos_impresion").insert(payload).execute()
                                 st.success("Guardado.")
@@ -353,10 +370,10 @@ def render(supabase):
         df_archivos = pd.DataFrame(res_archivos.data)
 
         if not df_archivos.empty:
-            # Protegemos el código si el usuario aún no crea ancho_metros en la BDD
             if 'ancho_metros' not in df_archivos.columns: df_archivos['ancho_metros'] = 0.0
+            if 'tela' not in df_archivos.columns: df_archivos['tela'] = lista_telas_db[0] if lista_telas_db else "Estándar"
             
-            df_edit = df_archivos[['id', 'nombre_archivo', 'perfil_color', 'ancho_metros', 'longitud_metros', 'notas_disenador']].copy()
+            df_edit = df_archivos[['id', 'nombre_archivo', 'perfil_color', 'tela', 'ancho_metros', 'longitud_metros', 'notas_disenador']].copy()
             df_edit['Eliminar'] = False 
             
             edited_df = st.data_editor(
@@ -365,6 +382,7 @@ def render(supabase):
                     "id": None, 
                     "nombre_archivo": "Nombre",
                     "perfil_color": st.column_config.SelectboxColumn("Perfil", options=lista_perfiles),
+                    "tela": st.column_config.SelectboxColumn("Tela", options=lista_telas_db, required=True),
                     "ancho_metros": st.column_config.NumberColumn("Ancho (m)", format="%.2f"),
                     "longitud_metros": st.column_config.NumberColumn("Largo (m)", format="%.2f"),
                     "notas_disenador": "Notas",
@@ -381,8 +399,11 @@ def render(supabase):
                             supabase.table("archivos_impresion").delete().eq("id", fila_id).execute()
                         else:
                             supabase.table("archivos_impresion").update({
-                                "nombre_archivo": row['nombre_archivo'], "perfil_color": row['perfil_color'],
-                                "ancho_metros": row['ancho_metros'], "longitud_metros": row['longitud_metros'],
+                                "nombre_archivo": row['nombre_archivo'], 
+                                "perfil_color": row['perfil_color'],
+                                "tela": row['tela'],
+                                "ancho_metros": row['ancho_metros'], 
+                                "longitud_metros": row['longitud_metros'],
                                 "notas_disenador": row['notas_disenador']
                             }).eq("id", fila_id).execute()
                     st.success("Cambios sincronizados correctamente.")
