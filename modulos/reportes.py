@@ -291,7 +291,7 @@ def generar_comprobante_cliente(orden):
         # 'set_left_margin' empuja la tabla a la derecha. Antes era 120, lo subí a 135.
         # Puedes jugar con este valor (ej: 140), pero cuida que no se salga de la hoja.
         # --------------------------------------------------------------------------
-        pdf.set_left_margin(135) 
+        pdf.set_left_margin(150) 
         
         pdf.set_font("helvetica", "", 9)
         estilo_cabecera_pagos = FontFace(fill_color=(0, 51, 153), color=(255, 255, 255), emphasis="B")
