@@ -792,7 +792,7 @@ def render(supabase):
                         "observaciones_generales": obs_g,
                         "disenador_asignado": disenador_sel,
                         "url_boceto_vendedora": st.session_state.get('url_boceto_view'),
-                        "url_diseno_final": st.session_state.get('url_diseno_view')
+                        "url_arte_final": st.session_state.get('url_diseno_view')
                     }
                     
                     # 3. Lógica Diferenciada (AQUÍ ESTÁ LA MAGIA)
