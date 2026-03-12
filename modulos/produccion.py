@@ -149,7 +149,7 @@ def render(supabase):
                         
                         # 2. BORRAR IMÁGENES DE LA NUBE (NUEVO)
                         borrar_img(supabase, row.get('url_boceto_vendedora'))
-                        borrar_img(supabase, row.get('url_diseno_final')) # Si usaste este nombre en la BD
+                        borrar_img(supabase, row.get('url_arte_final'))
                         
                         # 3. Borrar datos
                         supabase.table('items_orden').delete().eq('orden_id', id_s).execute()
@@ -200,7 +200,7 @@ def render(supabase):
                     st.session_state['editando_orden_id'] = id_s
                     st.session_state['editando_orden_cod'] = row['codigo_orden']
                     st.session_state['url_boceto_view'] = row['url_boceto_vendedora']
-                    st.session_state['url_diseno_view'] = row['url_diseno_final']
+                    st.session_state['url_diseno_view'] = row.get('url_arte_final')
                     st.session_state['editando_cliente_id'] = row['cliente_id'] 
                     # --- NUEVO: Cargar observaciones generales al estado ---
                     st.session_state['editando_obs_g'] = row.get('observaciones_generales', "")
@@ -323,7 +323,7 @@ def render(supabase):
                     borrar_img(supabase, st.session_state['url_diseno_view'])
                     st.session_state['url_diseno_view'] = None
                     if st.session_state.get('editando_orden_id'):
-                        supabase.table('ordenes').update({'url_diseno_final': None}).eq('id', st.session_state['editando_orden_id']).execute()
+                        supabase.table('ordenes').update({'url_arte_final': None}).eq('id', st.session_state['editando_orden_id']).execute()
                     st.rerun()
             else:
                 arte_file = st.file_uploader("Cargar Diseño Final", type=["jpg", "png", "pdf"], key="up_art")
