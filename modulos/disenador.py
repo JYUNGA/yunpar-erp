@@ -98,6 +98,9 @@ def render(supabase):
     if len(evento.selection.rows) > 0:
         indice = evento.selection.rows[0]
         st.session_state['orden_diseno_actual'] = df_ordenes.iloc[indice].to_dict()
+    else:
+        # Si el usuario deselecciona la fila, limpiamos la memoria para ocultar los detalles
+        st.session_state['orden_diseno_actual'] = None
 
     # ==========================================
     # 2. VISTA DE DETALLE DE LA ORDEN
