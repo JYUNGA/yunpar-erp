@@ -99,8 +99,10 @@ def render(supabase):
         indice = evento.selection.rows[0]
         st.session_state['orden_diseno_actual'] = df_ordenes.iloc[indice].to_dict()
     else:
-        # Si el usuario deselecciona la fila, limpiamos la memoria para ocultar los detalles
-        st.session_state['orden_diseno_actual'] = None
+        # Si no hay selección, pero la memoria aún tiene datos guardados, limpiamos y FORZAMOS un reinicio visual
+        if st.session_state.get('orden_diseno_actual') is not None:
+            st.session_state['orden_diseno_actual'] = None
+            st.rerun() # El truco mágico para borrar la pantalla fantasma
 
     # ==========================================
     # 2. VISTA DE DETALLE DE LA ORDEN
