@@ -191,11 +191,15 @@ def render(supabase):
                         k = (t_pol, str(esp.get('color_polines') or 'Sin Color').strip())
                         resumen_polines[k] = resumen_polines.get(k, 0) + 1
                 
+                # Leemos el cuello y limpiamos la palabra "EMPTY" si existe
+                cuello_db = esp.get("tipo_cuello_texto", "-")
+                cuello_limpio = "-" if cuello_db == "EMPTY" else cuello_db
+
                 specs_list.append({
                     "Producto": prod,
                     "Tela": tela,
-                    "Género": esp.get("genero", "-"),           # <-- NUEVA COLUMNA
-                    "Cuello": esp.get("tipo_cuello", "-"),      # <-- NUEVA COLUMNA
+                    "Género": esp.get("genero", "-"),
+                    "Cuello": cuello_limpio,                     # <-- CORREGIDO
                     "Talla Sup.": t_sup if t_sup != 'NONE' else "-",
                     "Talla Inf.": t_inf if t_inf != 'NONE' else "-",
                     "Jugador": esp.get("nombre_jugador", "-"),
