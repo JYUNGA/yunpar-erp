@@ -173,7 +173,7 @@ def render(supabase):
                         
                         det_f = []
                         for s in sp:
-                            # Mapeo de datos DB -> Visual
+                            # Mapeo de datos DB -> Visual (AHORA SÍ ESTÁ COMPLETO)
                             d = {
                                 "talla_superior": s.get('talla_superior'),
                                 "talla_inferior": s.get('talla_inferior'),
@@ -183,7 +183,13 @@ def render(supabase):
                                 "color_polines": s.get('color_polines'),
                                 "es_arquero": s.get('es_arquero'),
                                 "genero": s.get('genero'),
-                                "observacion_individual": s.get('observacion_individual')
+                                "observacion_individual": s.get('observacion_individual'),
+                                # --- SOLUCIÓN: Agregamos los campos técnicos perdidos ---
+                                "tipo_cuello_texto": s.get('tipo_cuello_texto', ""),
+                                "ancho_cm": float(s.get('ancho_cm', 0.0) or 0.0),
+                                "alto_cm": float(s.get('alto_cm', 0.0) or 0.0),
+                                "acabado": s.get('acabado', ""),
+                                "calandra_si_no": s.get('calandra_si_no', False)
                             }
                             det_f.append(d)
                         
