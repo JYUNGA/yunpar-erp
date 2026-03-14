@@ -199,11 +199,12 @@ def render(supabase):
                     "Producto": prod,
                     "Tela": tela,
                     "Género": esp.get("genero", "-"),
-                    "Cuello": cuello_limpio,                     # <-- CORREGIDO
+                    "Cuello": cuello_limpio,                     
                     "Talla Sup.": t_sup if t_sup != 'NONE' else "-",
                     "Talla Inf.": t_inf if t_inf != 'NONE' else "-",
                     "Jugador": esp.get("nombre_jugador", "-"),
                     "Dorsal": esp.get("numero_dorsal", "-"),
+                    "Arquero": bool(esp.get("es_arquero", False)), # <-- NUEVO CAMPO AGREGADO
                     "Notas": esp.get("observacion_individual", "")
                 })
 
@@ -276,7 +277,18 @@ def render(supabase):
             
             col_f5.metric("👕 Prendas en vista:", len(df_filtrado))
             
-            st.dataframe(df_filtrado, use_container_width=True, hide_index=True)
+            # --- NUEVO: FUNCIÓN DE ESTILIZADO CONDICIONAL ---
+            def resaltar_arqueros(row):
+                # Aplica un fondo amarillo pastel si la columna 'Arquero' es True
+                if row['Arquero'] == True:
+                    return ['background-color: #FFF2CC; color: #000000;'] * len(row)
+                return [''] * len(row)
+
+            # Aplicamos el estilo al DataFrame
+            df_estilizado = df_filtrado.style.apply(resaltar_arqueros, axis=1)
+            
+            # Mostramos el DataFrame estilizado (Streamlit renderizará los booleanos como casillas de verificación)
+            st.dataframe(df_estilizado, use_container_width=True, hide_index=True)
         else:
             st.info("No se encontraron especificaciones registradas para esta orden.")
 
