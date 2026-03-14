@@ -38,21 +38,21 @@ def cod_ord(supabase):
         codigos = [d['codigo_orden'] for d in res.data if d.get('codigo_orden')]
         
         # 2. DEFINIMOS TU NÚMERO BASE HISTÓRICO
-        max_num = 6400
+        max_num = 6404  # <--- CAMBIO AQUÍ: Ponemos 6404 para que la próxima sea 6405
         
         # 3. Buscamos cuál es el número más alto real en la base de datos
         for c in codigos:
-            partes = c.split('-') # Separa "ORD" de "6401"
+            partes = c.split('-') # Separa "ORD" de "6405"
             if len(partes) == 2 and partes[1].isdigit():
                 num = int(partes[1])
                 if num > max_num:
                     max_num = num
         
-        # 4. Sumamos 1 al máximo encontrado (Si está vacío, será 6400 + 1)
+        # 4. Sumamos 1 al máximo encontrado
         return f"ORD-{str(max_num + 1).zfill(4)}"
         
     except Exception as e: 
-        return "ORD-6401" # Respaldo en caso de error de red
+        return "ORD-6405" # <--- CAMBIO AQUÍ: Respaldo en caso de que falle la red
 
 def limpiar_texto_pdf(texto):
     if not texto: return ""
