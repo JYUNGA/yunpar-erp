@@ -761,6 +761,13 @@ def render(supabase):
                         st.toast("Datos cargados para edición.", icon="✏️")
                         time.sleep(0.5)
                         st.rerun()
+
+            # --- NUEVO: BOTÓN ELIMINAR ---
+                    if col_del.button("🗑️ Eliminar Grupo", type="primary", key=f"btn_del_item_{i}"):
+                        st.session_state['prod_items'].pop(i)
+                        st.toast("Productos eliminados del resumen", icon="🗑️")
+                        st.rerun()
+
             
             # Totales y Guardado Final
             st.metric("Total Orden", f"${tot:.2f}")
@@ -812,14 +819,20 @@ def render(supabase):
                     }
                     
                     # 3. Lógica Diferenciada (AQUÍ ESTÁ LA MAGIA)
-                    # 3. Lógica Diferenciada (AQUÍ ESTÁ LA MAGIA)
                     if es_edicion:
                         id_o = st.session_state['editando_orden_id']
                         cab["alerta_cambios"] = True 
                         
-                        # PROTECCIÓN FINANCIERA
+                        # --- NUEVO: RECALCULAR SALDO PENDIENTE REAL ---
+                        # 1. Sumamos todos los pagos que el cliente ya tiene registrados
+                        res_pagos = supabase.table('pagos').select('monto').eq('orden_id', id_o).execute()
+                        total_pagado = sum([float(p['monto']) for p in res_pagos.data]) if res_pagos.data else 0.0
+                        
+                        # 2. El nuevo saldo es el nuevo total estimado menos lo que ya pagó
+                        cab["saldo_pendiente"] = tot - total_pagado
+                        
+                        # 3. Quitamos el abono_inicial para no sobrescribir el registro histórico de creación
                         cab.pop("abono_inicial", None)
-                        cab.pop("saldo_pendiente", None)
                         
                         supabase.table('ordenes').update(cab).eq('id', id_o).execute()
                         
