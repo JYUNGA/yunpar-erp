@@ -19,7 +19,7 @@ def orden_talla(talla):
     }
     return mapping.get(t, 99)
 
-ddef extraer_metadata_pdf(uploaded_file):
+def extraer_metadata_pdf(uploaded_file):
     """Extrae nombre y suma las dimensiones de TODAS las páginas de un PDF en metros"""
     try:
         reader = PyPDF2.PdfReader(uploaded_file)
