@@ -453,6 +453,7 @@ def render(supabase):
                                 "tela": row['tela'],
                                 "ancho_metros": row['ancho_metros'], 
                                 "longitud_metros": row['longitud_metros'],
+                                "cantidad": row['cantidad'], # <-- FALTABA AGREGAR ESTA LÍNEA AQUÍ
                                 "notas_disenador": row['notas_disenador']
                             }).eq("id", fila_id).execute()
                     st.success("Cambios sincronizados correctamente.")
