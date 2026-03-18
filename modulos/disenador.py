@@ -57,7 +57,7 @@ def render(supabase):
     # CÓDIGO NUEVO (Reemplazar por esto)
     try:
         res_ordenes = supabase.table("ordenes") \
-            .select("id, codigo_orden, estado, fecha_entrega, alerta_cambios, cliente_id, created_at, url_boceto_vendedora, url_arte_final, url_diseno_final, observaciones_generales") \
+            .select("id, codigo_orden, estado, fecha_entrega, alerta_cambios, detalle_cambios, cliente_id, created_at, url_boceto_vendedora, url_arte_final, url_diseno_final, observaciones_generales") \
             .or_("estado.eq.Pendiente,estado.eq.En Diseño,alerta_cambios.eq.true") \
             .order("created_at", desc=True) \
             .execute()
@@ -117,7 +117,10 @@ def render(supabase):
         col_i2.markdown(f"**Estado:** {orden['estado']}\n\n**Entrega:** {orden['fecha_entrega']}")
         
         with col_i3:
-            if orden['alerta_cambios']: st.warning("⚠️ Alerta de cambios activa desde Ventas")
+            if orden['alerta_cambios']: 
+                # Ahora mostramos exactamente QUÉ cambió según lo que escribió el vendedor
+                st.error(f"🚨 **ALERTA DE CAMBIO:** {orden.get('detalle_cambios', 'Se hizo una modificación sin especificar.')}")
+                
             if orden['estado'] == "Pendiente":
                 if st.button("Tomar Orden (Pasar a 'En Diseño')", type="primary"):
                     supabase.table("ordenes").update({"estado": "En Diseño"}).eq("id", order_id).execute()
@@ -305,7 +308,7 @@ def render(supabase):
         except Exception:
             lista_telas_db = ["Estándar"]
 
-        lista_perfiles = ["CMYK", "Textil Brillante", "Escala de Grises", "Fondo Oscuro", "Fluor"] 
+        lista_perfiles = ["Plotter 1", "Plotter 2", "DTF"] 
 
         st.markdown("**1. Subir PDFs en lote (Extrae medidas automáticamente)**")
         archivos_pdf = st.file_uploader("Arrastra aquí los archivos PDF de tu diseño (Puedes seleccionar varios a la vez):", type=["pdf"], accept_multiple_files=True)
