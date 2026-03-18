@@ -303,6 +303,20 @@ def render(supabase):
         else:
             st.info("No se encontraron especificaciones registradas para esta orden.")
 
+        # ==========================================
+        # 3. GESTOR MULTIPLE DE ARCHIVOS DE IMPRESIÓN
+        # ==========================================
+        st.divider()
+        st.subheader("🖨️ Gestor de Archivos de Impresión")
+        
+        # --- RECUPERAMOS EL BLOQUE BORRADO PARA LAS TELAS ---
+        try:
+            res_telas_bd = supabase.table("insumos").select("nombre").execute()
+            lista_telas_db = [t['nombre'] for t in res_telas_bd.data] if res_telas_bd.data else ["Estándar"]
+        except Exception:
+            lista_telas_db = ["Estándar"]
+        # ----------------------------------------------------
+
         lista_perfiles = ["Plotter 1", "Plotter 2", "DTF"] 
         
         # --- NUEVO: Control para limpiar los PDFs subidos tras guardar ---
