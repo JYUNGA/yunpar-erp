@@ -303,40 +303,30 @@ def render(supabase):
         else:
             st.info("No se encontraron especificaciones registradas para esta orden.")
 
-        # ==========================================
-        # 3. GESTOR MULTIPLE DE ARCHIVOS DE IMPRESIÓN
-        # ==========================================
-        st.divider()
-        st.subheader("🖨️ Gestor de Archivos de Impresión")
-        
-        # OBTENER TELAS DISPONIBLES DESDE LA BASE DE DATOS
-        try:
-            res_telas_bd = supabase.table("insumos").select("nombre").execute()
-            lista_telas_db = [t['nombre'] for t in res_telas_bd.data] if res_telas_bd.data else ["Estándar"]
-        except Exception:
-            lista_telas_db = ["Estándar"]
-
         lista_perfiles = ["Plotter 1", "Plotter 2", "DTF"] 
+        
+        # --- NUEVO: Control para limpiar los PDFs subidos tras guardar ---
+        if 'pdf_key' not in st.session_state:
+            st.session_state['pdf_key'] = "uploader_1"
 
         st.markdown("**1. Subir PDFs en lote (Extrae medidas automáticamente)**")
-        archivos_pdf = st.file_uploader("Arrastra aquí los archivos PDF de tu diseño (Puedes seleccionar varios a la vez):", type=["pdf"], accept_multiple_files=True)
+        archivos_pdf = st.file_uploader(
+            "Arrastra aquí los archivos PDF de tu diseño (Puedes seleccionar varios a la vez):", 
+            type=["pdf"], accept_multiple_files=True, 
+            key=st.session_state['pdf_key'] # <-- Clave dinámica
+        )
         
         if archivos_pdf:
             st.success(f"✅ Se han detectado {len(archivos_pdf)} archivo(s) PDF.")
-            
             archivos_extraidos = []
             tela_por_defecto = lista_telas_db[0] if lista_telas_db else "Estándar"
 
             for pdf in archivos_pdf:
                 nombre_auto, ancho_auto, largo_auto = extraer_metadata_pdf(pdf)
                 archivos_extraidos.append({
-                    "Nombre": nombre_auto,
-                    "Tela": tela_por_defecto,
-                    "Ancho": ancho_auto,
-                    "Largo": largo_auto,
-                    "Cantidad": 1,         # <-- NUEVO CAMPO
-                    "Perfil": "Plotter 1", 
-                    "Notas": ""
+                    "Nombre": nombre_auto, "Tela": tela_por_defecto,
+                    "Ancho": ancho_auto, "Largo": largo_auto,
+                    "Cantidad": 1, "Perfil": "Plotter 1", "Notas": ""
                 })
             
             st.markdown("**2. Revisa y asigna perfiles y telas a los archivos detectados:**")
@@ -349,68 +339,70 @@ def render(supabase):
                     "Tela": st.column_config.SelectboxColumn("Tela a Usar", options=lista_telas_db, required=True),
                     "Ancho": st.column_config.NumberColumn("Ancho (m)", format="%.2f"),
                     "Largo": st.column_config.NumberColumn("Largo Unitario (m)", format="%.2f"),
-                    "Cantidad": st.column_config.NumberColumn("Cantidad", min_value=1, step=1), # <-- NUEVA COLUMNA
+                    "Cantidad": st.column_config.NumberColumn("Cantidad", min_value=1, step=1),
                 },
-                use_container_width=True,
-                hide_index=True,
-                key="editor_nuevos_archivos"
+                use_container_width=True, hide_index=True, key="editor_nuevos_archivos"
             )
             
-            if st.button("💾 Guardar todos los archivos", type="primary"):
+            if st.button("💾 Guardar todos los archivos PDF", type="primary"):
                 try:
                     payloads = []
                     for _, row in edited_nuevos.iterrows():
                         payloads.append({
-                            "orden_id": order_id,
-                            "nombre_archivo": row['Nombre'].strip(),
-                            "tela": row['Tela'], 
-                            "perfil_color": row['Perfil'],
-                            "ancho_metros": row['Ancho'], 
-                            "longitud_metros": row['Largo'],
-                            "cantidad": row['Cantidad'], # <-- GUARDAR EN BD
-                            "estado_impresion": "Pendiente",
+                            "orden_id": order_id, "nombre_archivo": row['Nombre'].strip(),
+                            "tela": row['Tela'], "perfil_color": row['Perfil'],
+                            "ancho_metros": row['Ancho'], "longitud_metros": row['Largo'],
+                            "cantidad": row['Cantidad'], "estado_impresion": "Pendiente",
                             "notas_disenador": str(row['Notas']).strip() if pd.notna(row['Notas']) else ""
                         })
                     
                     supabase.table("archivos_impresion").insert(payloads).execute()
-                    st.success("¡Todos los archivos fueron registrados exitosamente en la base de datos!")
+                    
+                    # --- NUEVO: Vaciamos el uploader de PDFs cambiando su ID ---
+                    st.session_state['pdf_key'] = f"uploader_{datetime.now().timestamp()}"
+                    
+                    st.success("¡Archivos PDF guardados! La bandeja de subida ha sido limpiada.")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"❌ Error al guardar. ¡Asegúrate de haber creado la columna 'tela' y 'ancho_metros' en Supabase! Detalles del error: {e}")
-        else:
-            st.info("Arrastra PDFs arriba, o registra manualmente un archivo usando el botón de abajo.")
-            with st.expander("➕ Registro Manual (Sin PDF)"):
-                with st.form("form_registro_manual", clear_on_submit=True):
-                    col_m1, col_m2, col_m_tela = st.columns(3)
-                    col_m3, col_m4, col_m5 = st.columns([1, 1, 1]) # Modificado para hacer espacio
-                    
-                    nombre_input = col_m1.text_input("Nombre del Archivo")
-                    perfil_input = col_m2.selectbox("Perfil de Color", lista_perfiles)
-                    tela_input = col_m_tela.selectbox("Tela a Usar", lista_telas_db)
-                    
-                    ancho_input = col_m3.number_input("Ancho (m)", min_value=0.0, step=0.01)
-                    largo_input = col_m4.number_input("Largo Unitario (m)", min_value=0.0, step=0.01)
-                    cantidad_input = col_m5.number_input("Cantidad", min_value=1, step=1, value=1) # <-- NUEVO
-                    notas_input = st.text_input("Notas")
-                    
-                    if st.form_submit_button("Guardar Registro Manual"):
-                        if nombre_input and largo_input > 0:
-                            try:
-                                payload = {
-                                    "orden_id": order_id, "nombre_archivo": nombre_input.strip(),
-                                    "perfil_color": perfil_input, "tela": tela_input,
-                                    "ancho_metros": ancho_input, "longitud_metros": largo_input, 
-                                    "cantidad": cantidad_input, # <-- GUARDAR EN BD
-                                    "estado_impresion": "Pendiente", "notas_disenador": notas_input.strip()
-                                }
-                                supabase.table("archivos_impresion").insert(payload).execute()
-                                st.success("Guardado.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error: {e}")
-                        else: st.warning("Nombre y largo requeridos.")
+                    st.error(f"❌ Error al guardar: {e}")
+
+        # --- NUEVO: El registro manual SIEMPRE ESTÁ VISIBLE ahora ---
+        st.write("")
+        st.markdown("**Ingreso Manual (Para archivos .AI, .CDR, o correcciones)**")
+        with st.expander("➕ Cargar datos de archivo manualmente"):
+            with st.form("form_registro_manual", clear_on_submit=True):
+                col_m1, col_m2, col_m_tela = st.columns(3)
+                col_m3, col_m4, col_m5 = st.columns([1, 1, 1]) 
+                
+                nombre_input = col_m1.text_input("Nombre del Archivo")
+                perfil_input = col_m2.selectbox("Perfil de Color", lista_perfiles)
+                tela_input = col_m_tela.selectbox("Tela a Usar", lista_telas_db)
+                
+                ancho_input = col_m3.number_input("Ancho (m)", min_value=0.0, step=0.01)
+                largo_input = col_m4.number_input("Largo Unitario (m)", min_value=0.0, step=0.01)
+                cantidad_input = col_m5.number_input("Cantidad", min_value=1, step=1, value=1)
+                notas_input = st.text_input("Notas")
+                
+                if st.form_submit_button("Guardar Registro Manual"):
+                    if nombre_input and largo_input > 0:
+                        try:
+                            payload = {
+                                "orden_id": order_id, "nombre_archivo": nombre_input.strip(),
+                                "perfil_color": perfil_input, "tela": tela_input,
+                                "ancho_metros": ancho_input, "longitud_metros": largo_input, 
+                                "cantidad": cantidad_input, "estado_impresion": "Pendiente", 
+                                "notas_disenador": notas_input.strip()
+                            }
+                            supabase.table("archivos_impresion").insert(payload).execute()
+                            st.success("Guardado manual exitoso.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                    else: 
+                        st.warning("Nombre y largo requeridos.")
 
         # --- Tabla Editable de Archivos ya Registrados ---
+        
         st.markdown("**3. Historial de archivos listos para plotter (Edita o marca para eliminar)**")
         res_archivos = supabase.table("archivos_impresion").select("*").eq("orden_id", order_id).execute()
         df_archivos = pd.DataFrame(res_archivos.data)
@@ -421,7 +413,10 @@ def render(supabase):
             if 'cantidad' not in df_archivos.columns: df_archivos['cantidad'] = 1
             
             df_edit = df_archivos[['id', 'nombre_archivo', 'perfil_color', 'tela', 'ancho_metros', 'longitud_metros', 'cantidad', 'notas_disenador']].copy()
-            df_edit['Eliminar'] = False 
+            
+            # --- NUEVO: Botón maestro para seleccionar todos ---
+            marcar_todos = st.checkbox("☑️ Seleccionar todos para eliminar")
+            df_edit['Eliminar'] = marcar_todos 
             
             edited_df = st.data_editor(
                 df_edit,
