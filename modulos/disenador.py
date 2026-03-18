@@ -19,15 +19,23 @@ def orden_talla(talla):
     }
     return mapping.get(t, 99)
 
-def extraer_metadata_pdf(uploaded_file):
-    """Extrae nombre y dimensiones de la mesa de trabajo de un PDF en metros"""
+ddef extraer_metadata_pdf(uploaded_file):
+    """Extrae nombre y suma las dimensiones de TODAS las páginas de un PDF en metros"""
     try:
         reader = PyPDF2.PdfReader(uploaded_file)
-        box = reader.pages[0].mediabox
-        # Conversión de puntos tipográficos a metros: 1 pt = 0.352778 mm
-        ancho_m = float(box.width) * 0.352778 / 1000
-        alto_m = float(box.height) * 0.352778 / 1000
-        return uploaded_file.name, round(ancho_m, 2), round(alto_m, 2)
+        alto_total_m = 0.0
+        ancho_m = 0.0
+        
+        for page in reader.pages:
+            box = page.mediabox
+            # Calculamos el ancho solo de la primera página
+            if ancho_m == 0.0:
+                ancho_m = float(box.width) * 0.352778 / 1000
+            
+            # Sumamos el alto de cada página encontrada
+            alto_total_m += float(box.height) * 0.352778 / 1000
+            
+        return uploaded_file.name, round(ancho_m, 2), round(alto_total_m, 2)
     except Exception as e:
         st.warning(f"No se pudieron extraer las medidas de {uploaded_file.name}: {e}")
         return uploaded_file.name, 0.0, 0.0
@@ -326,7 +334,8 @@ def render(supabase):
                     "Tela": tela_por_defecto,
                     "Ancho": ancho_auto,
                     "Largo": largo_auto,
-                    "Perfil": "CMYK", 
+                    "Cantidad": 1,         # <-- NUEVO CAMPO
+                    "Perfil": "Plotter 1", 
                     "Notas": ""
                 })
             
@@ -339,7 +348,8 @@ def render(supabase):
                     "Perfil": st.column_config.SelectboxColumn("Perfil", options=lista_perfiles),
                     "Tela": st.column_config.SelectboxColumn("Tela a Usar", options=lista_telas_db, required=True),
                     "Ancho": st.column_config.NumberColumn("Ancho (m)", format="%.2f"),
-                    "Largo": st.column_config.NumberColumn("Largo (m)", format="%.2f"),
+                    "Largo": st.column_config.NumberColumn("Largo Unitario (m)", format="%.2f"),
+                    "Cantidad": st.column_config.NumberColumn("Cantidad", min_value=1, step=1), # <-- NUEVA COLUMNA
                 },
                 use_container_width=True,
                 hide_index=True,
@@ -353,10 +363,11 @@ def render(supabase):
                         payloads.append({
                             "orden_id": order_id,
                             "nombre_archivo": row['Nombre'].strip(),
-                            "tela": row['Tela'], # <-- Nuevo Campo
+                            "tela": row['Tela'], 
                             "perfil_color": row['Perfil'],
                             "ancho_metros": row['Ancho'], 
                             "longitud_metros": row['Largo'],
+                            "cantidad": row['Cantidad'], # <-- GUARDAR EN BD
                             "estado_impresion": "Pendiente",
                             "notas_disenador": str(row['Notas']).strip() if pd.notna(row['Notas']) else ""
                         })
@@ -371,14 +382,15 @@ def render(supabase):
             with st.expander("➕ Registro Manual (Sin PDF)"):
                 with st.form("form_registro_manual", clear_on_submit=True):
                     col_m1, col_m2, col_m_tela = st.columns(3)
-                    col_m3, col_m4 = st.columns(2)
+                    col_m3, col_m4, col_m5 = st.columns([1, 1, 1]) # Modificado para hacer espacio
                     
                     nombre_input = col_m1.text_input("Nombre del Archivo")
                     perfil_input = col_m2.selectbox("Perfil de Color", lista_perfiles)
                     tela_input = col_m_tela.selectbox("Tela a Usar", lista_telas_db)
                     
                     ancho_input = col_m3.number_input("Ancho (m)", min_value=0.0, step=0.01)
-                    largo_input = col_m4.number_input("Largo (m)", min_value=0.0, step=0.01)
+                    largo_input = col_m4.number_input("Largo Unitario (m)", min_value=0.0, step=0.01)
+                    cantidad_input = col_m5.number_input("Cantidad", min_value=1, step=1, value=1) # <-- NUEVO
                     notas_input = st.text_input("Notas")
                     
                     if st.form_submit_button("Guardar Registro Manual"):
@@ -388,6 +400,7 @@ def render(supabase):
                                     "orden_id": order_id, "nombre_archivo": nombre_input.strip(),
                                     "perfil_color": perfil_input, "tela": tela_input,
                                     "ancho_metros": ancho_input, "longitud_metros": largo_input, 
+                                    "cantidad": cantidad_input, # <-- GUARDAR EN BD
                                     "estado_impresion": "Pendiente", "notas_disenador": notas_input.strip()
                                 }
                                 supabase.table("archivos_impresion").insert(payload).execute()
@@ -405,8 +418,9 @@ def render(supabase):
         if not df_archivos.empty:
             if 'ancho_metros' not in df_archivos.columns: df_archivos['ancho_metros'] = 0.0
             if 'tela' not in df_archivos.columns: df_archivos['tela'] = lista_telas_db[0] if lista_telas_db else "Estándar"
+           if 'cantidad' not in df_archivos.columns: df_archivos['cantidad'] = 1
             
-            df_edit = df_archivos[['id', 'nombre_archivo', 'perfil_color', 'tela', 'ancho_metros', 'longitud_metros', 'notas_disenador']].copy()
+            df_edit = df_archivos[['id', 'nombre_archivo', 'perfil_color', 'tela', 'ancho_metros', 'longitud_metros', 'cantidad', 'notas_disenador']].copy()
             df_edit['Eliminar'] = False 
             
             edited_df = st.data_editor(
@@ -417,10 +431,12 @@ def render(supabase):
                     "perfil_color": st.column_config.SelectboxColumn("Perfil", options=lista_perfiles),
                     "tela": st.column_config.SelectboxColumn("Tela", options=lista_telas_db, required=True),
                     "ancho_metros": st.column_config.NumberColumn("Ancho (m)", format="%.2f"),
-                    "longitud_metros": st.column_config.NumberColumn("Largo (m)", format="%.2f"),
+                    "longitud_metros": st.column_config.NumberColumn("Largo Unitario (m)", format="%.2f"),
+                    "cantidad": st.column_config.NumberColumn("Cantidad", min_value=1, step=1), # <-- MOSTRAR AQUÍ
                     "notas_disenador": "Notas",
                     "Eliminar": st.column_config.CheckboxColumn("🗑️ Eliminar", default=False)
                 },
+               
                 disabled=["id"], hide_index=True, use_container_width=True
             )
 
