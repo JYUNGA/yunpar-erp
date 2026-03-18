@@ -418,7 +418,7 @@ def render(supabase):
         if not df_archivos.empty:
             if 'ancho_metros' not in df_archivos.columns: df_archivos['ancho_metros'] = 0.0
             if 'tela' not in df_archivos.columns: df_archivos['tela'] = lista_telas_db[0] if lista_telas_db else "Estándar"
-           if 'cantidad' not in df_archivos.columns: df_archivos['cantidad'] = 1
+            if 'cantidad' not in df_archivos.columns: df_archivos['cantidad'] = 1
             
             df_edit = df_archivos[['id', 'nombre_archivo', 'perfil_color', 'tela', 'ancho_metros', 'longitud_metros', 'cantidad', 'notas_disenador']].copy()
             df_edit['Eliminar'] = False 
