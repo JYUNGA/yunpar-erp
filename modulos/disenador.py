@@ -349,24 +349,58 @@ def render(supabase):
         if 'pdf_key' not in st.session_state:
             st.session_state['pdf_key'] = "uploader_1"
 
-        st.markdown("**1. Subir PDFs en lote (Extrae medidas automáticamente)**")
-        archivos_pdf = st.file_uploader(
-            "Arrastra aquí los archivos PDF de tu diseño (Puedes seleccionar varios a la vez):", 
-            type=["pdf"], accept_multiple_files=True, 
+        st.markdown("**1. Subir PDFs, Excel o CSV en lote (Extrae medidas automáticamente)**")
+        st.info("💡 **Tip:** Para archivos mayores a 50MB, usa el script local y sube aquí solo el archivo Excel/CSV.")
+        
+        archivos_subidos = st.file_uploader(
+            "Arrastra aquí los archivos PDF o el Excel/CSV generado por tu script:", 
+            type=["pdf", "csv", "xlsx"], accept_multiple_files=True, 
             key=st.session_state['pdf_key'] 
         )
         
-        if archivos_pdf:
-            st.success(f"✅ Se han detectado {len(archivos_pdf)} archivo(s) PDF.")
-            archivos_extraidos = []
+        if archivos_subidos:
+            # --- ESCUDO DE MEMORIA ---
+            LIMITE_MB = 200.0
+            peso_total_mb = sum([f.size for f in archivos_subidos]) / (1024 * 1024)
+            
+            if peso_total_mb > LIMITE_MB:
+                st.error(f"🛑 **¡ALERTA DE SOBRECARGA!** Estás intentando subir {peso_total_mb:.1f} MB, lo cual puede colapsar el servidor.")
+                st.warning("Por favor, usa tu script local de Python para generar las medidas y arrastra únicamente el archivo `.xlsx` o `.csv` resultante.")
+            else:
+                st.success(f"✅ Se han detectado {len(archivos_subidos)} archivo(s) validos (Peso total: {peso_total_mb:.1f} MB).")
+                archivos_extraidos = []
 
-            for pdf in archivos_pdf:
-                nombre_auto, ancho_auto, largo_auto = extraer_metadata_pdf(pdf)
-                archivos_extraidos.append({
-                    "Nombre": nombre_auto, "Tela": tela_defecto_final, # Usamos la tela pre-calculada
-                    "Ancho": ancho_auto, "Largo": largo_auto,
-                    "Cantidad": 1, "Perfil": "Plotter 1", "Notas": ""
-                })
+                for archivo in archivos_subidos:
+                    nombre_archivo = archivo.name.lower()
+                    
+                    # SI ES UN PDF (Lo leemos como siempre)
+                    if nombre_archivo.endswith('.pdf'):
+                        nombre_auto, ancho_auto, largo_auto = extraer_metadata_pdf(archivo)
+                        archivos_extraidos.append({
+                            "Nombre": nombre_auto, "Tela": tela_defecto_final, 
+                            "Ancho": ancho_auto, "Largo": largo_auto,
+                            "Cantidad": 1, "Perfil": "Plotter 1", "Notas": ""
+                        })
+                        
+                    # SI ES UN EXCEL O CSV (Lo leemos con Pandas ultra rápido)
+                    elif nombre_archivo.endswith('.csv') or nombre_archivo.endswith('.xlsx'):
+                        try:
+                            if nombre_archivo.endswith('.csv'):
+                                df_local = pd.read_csv(archivo)
+                            else:
+                                df_local = pd.read_excel(archivo)
+                            
+                            # Recorremos cada fila del Excel/CSV y la metemos a la lista
+                            for _, row in df_local.iterrows():
+                                archivos_extraidos.append({
+                                    "Nombre": str(row.get('Nombre', 'Desconocido')), 
+                                    "Tela": tela_defecto_final,
+                                    "Ancho": float(row.get('Ancho en metros', 0.0)), 
+                                    "Largo": float(row.get('Largo en metros', 0.0)),
+                                    "Cantidad": 1, "Perfil": "Plotter 1", "Notas": "Vía Excel/CSV"
+                                })
+                        except Exception as e:
+                            st.warning(f"No se pudo leer el archivo {archivo.name}: Verifique que tenga las columnas correctas. Error: {e}")
             
             st.markdown("**2. Revisa y asigna perfiles y telas a los archivos detectados:**")
             df_nuevos = pd.DataFrame(archivos_extraidos)
