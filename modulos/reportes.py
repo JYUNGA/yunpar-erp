@@ -252,12 +252,12 @@ def generar_comprobante_cliente(orden):
             precio = item.get('precio_aplicado', 0)
             row.cell(f"${precio:.2f}"); row.cell(f"${item.get('cantidad_total', 0) * precio:.2f}")
 
-    pdf.ln(5); pdf.set_font("helvetica", "B", 12)
-    x_offset = 145 
-    pdf.set_x(x_offset); pdf.cell(30, 8, "Total:", align="R"); pdf.cell(25, 8, f"${orden.get('total_estimado', 0):.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_x(x_offset); pdf.cell(30, 8, "Abono:", align="R"); pdf.cell(25, 8, f"${orden.get('abono_inicial', 0):.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_x(x_offset); pdf.cell(30, 8, "Saldo:", align="R"); pdf.set_text_color(200, 0, 0) 
-    pdf.cell(25, 8, f"${orden.get('saldo_pendiente', 0):.2f}", align="R", new_x="LMARGIN", new_y="NEXT"); pdf.set_text_color(0, 0, 0) 
+    pdf.ln(2); pdf.set_font("helvetica", "B", 10) # Letra más pequeña y menos salto
+    x_offset = 150 
+    pdf.set_x(x_offset); pdf.cell(25, 5, "Total:", align="R"); pdf.cell(20, 5, f"${orden.get('total_estimado', 0):.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_x(x_offset); pdf.cell(25, 5, "Abono:", align="R"); pdf.cell(20, 5, f"${orden.get('abono_inicial', 0):.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_x(x_offset); pdf.cell(25, 5, "Saldo:", align="R"); pdf.set_text_color(200, 0, 0) 
+    pdf.cell(20, 5, f"${orden.get('saldo_pendiente', 0):.2f}", align="R", new_x="LMARGIN", new_y="NEXT"); pdf.set_text_color(0, 0, 0)
     
     pdf.ln(10)
     # --- 1. LÓGICA ESTRICTA DE PRIORIDAD DE IMÁGENES ---
@@ -275,42 +275,38 @@ def generar_comprobante_cliente(orden):
     
     if url_imagen and pagos:
         pdf.set_font("helvetica", "B", 10)
-        pdf.cell(0, 10, "Referencia de Diseño e Historial de Pagos:", align="L", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 8, "Referencia de Diseño e Historial de Pagos:", align="L", new_x="LMARGIN", new_y="NEXT")
         start_y = pdf.get_y()
-        try:
-            # AJUSTE: Reduje la imagen a 95mm (antes 105) para dar más espacio a la tabla
-            pdf.image(url_imagen, w=95)
-            end_image_y = pdf.get_y()
-        except:
-            pdf.set_font("helvetica", "I", 9); pdf.cell(95, 10, "(Imagen no disponible)"); end_image_y = pdf.get_y()
-            
-        pdf.set_y(start_y)
         
-        # --------------------------------------------------------------------------
-        # AQUÍ HACES EL AJUSTE MANUAL DE LA TABLA:
-        # 'set_left_margin' empuja la tabla a la derecha. Antes era 120, lo subí a 135.
-        # Puedes jugar con este valor (ej: 140), pero cuida que no se salga de la hoja.
-        # --------------------------------------------------------------------------
-        pdf.set_left_margin(150) 
-        
-        pdf.set_font("helvetica", "", 9)
+        # 1. Dibujar la tabla de pagos a la derecha primero usando XY absoluto
+        pdf.set_xy(120, start_y)
+        pdf.set_font("helvetica", "", 8)
         estilo_cabecera_pagos = FontFace(fill_color=(0, 51, 153), color=(255, 255, 255), emphasis="B")
         estilo_datos_pagos = FontFace(fill_color=(255, 255, 255), color=(0, 0, 0), emphasis="")
         
-        # AJUSTE: Reduje ligeramente el ancho de las columnas (20, 35, 15) que suman 70mm.
-        # Así, Margen(135) + Tabla(70) = 205mm. Entra perfecto en la A4 (210mm).
-        with pdf.table(col_widths=(20, 35, 15), text_align=("CENTER", "LEFT", "RIGHT")) as t_pagos:
+        with pdf.table(col_widths=(20, 35, 15), text_align=("CENTER", "LEFT", "RIGHT"), first_row_as_headings=True) as t_pagos:
             row = t_pagos.row(style=estilo_cabecera_pagos)
             for h in ["Fecha", "Banco", "Monto"]: row.cell(h)
             for p in pagos:
                 row = t_pagos.row(style=estilo_datos_pagos)
                 f_pago = p.get('fecha_pago', '')
-                if f_pago and len(f_pago) >= 10: f_pago = f"{f_pago[8:10]}/{f_pago[5:7]}/{f_pago[2:4]}" # Acorté el año a 2 dígitos para ahorrar espacio
+                if f_pago and len(f_pago) >= 10: f_pago = f"{f_pago[8:10]}/{f_pago[5:7]}/{f_pago[2:4]}"
                 banco = p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo'
                 row.cell(f_pago); row.cell(str(banco)[:15]); row.cell(f"${float(p.get('monto', 0)):.2f}")
                 
         end_table_y = pdf.get_y()
-        pdf.set_left_margin(10); pdf.set_y(max(end_table_y, end_image_y) + 5)
+        
+        # 2. Dibujar la imagen a la izquierda para que sea la protagonista
+        try:
+            pdf.image(url_imagen, x=10, y=start_y, w=105)
+            end_image_y = pdf.get_y()
+        except:
+            pdf.set_xy(10, start_y)
+            pdf.set_font("helvetica", "I", 9); pdf.cell(105, 10, "(Imagen no disponible)")
+            end_image_y = pdf.get_y()
+            
+        # 3. Retomar el flujo normal debajo del elemento más largo
+        pdf.set_y(max(end_table_y, end_image_y) + 5)
         
     elif url_imagen and not pagos:
         pdf.set_font("helvetica", "B", 10)
@@ -416,14 +412,25 @@ def generar_comprobante_cliente(orden):
     pdf.multi_cell(0, 5, "DECLARACIÓN DE APROBACIÓN: Revisé detalladamente y apruebo que los nombres, números, tallas, cuellos, telas y observaciones detalladas en este anexo son correctas para el inicio de la producción.")
     pdf.ln(25); start_firma_y = pdf.get_y()
     
-    pdf.set_x(25); pdf.line(25, start_firma_y, 85, start_firma_y); pdf.set_x(25)
+    # Dibujo Cliente
+    pdf.set_y(start_firma_y - 8); pdf.set_x(25)
+    pdf.set_font("times", "I", 14); pdf.set_text_color(0, 0, 100) # Simula firma en azul
+    pdf.cell(60, 5, f"{nombre_cliente}", align="C")
+    pdf.set_text_color(0, 0, 0) # Restaurar color
+    pdf.set_y(start_firma_y); pdf.set_x(25)
+    pdf.line(25, start_firma_y, 85, start_firma_y); pdf.set_x(25)
+    pdf.set_font("helvetica", "B", 9)
     pdf.cell(60, 5, "Firma del Cliente", align="C", new_x="LMARGIN", new_y="NEXT"); pdf.set_x(25)
-    pdf.set_font("helvetica", "", 8); pdf.cell(60, 5, f"{nombre_cliente}", align="C")
+    pdf.set_font("helvetica", "", 8); pdf.cell(60, 5, f"C.I: ________________", align="C")
 
+    # Dibujo Asesor
+    pdf.set_y(start_firma_y - 8); pdf.set_x(125)
+    pdf.set_font("times", "I", 14); pdf.set_text_color(0, 0, 100)
+    pdf.cell(60, 5, f"{creador}", align="C")
+    pdf.set_text_color(0, 0, 0)
     pdf.set_y(start_firma_y); pdf.set_x(125)
     pdf.line(125, start_firma_y, 185, start_firma_y); pdf.set_x(125)
-    pdf.set_font("helvetica", "B", 9); pdf.cell(60, 5, "Firma del Asesor / Vendedor", align="C", new_x="LMARGIN", new_y="NEXT"); pdf.set_x(125)
-    pdf.set_font("helvetica", "", 8); pdf.cell(60, 5, f"{creador}", align="C")
+    pdf.set_font("helvetica", "B", 9); pdf.cell(60, 5, "Firma del Asesor / Vendedor", align="C", new_x="LMARGIN", new_y="NEXT")
 
     return bytes(pdf.output())
 
@@ -447,7 +454,10 @@ def generar_hoja_produccion(orden):
     pdf.set_font("helvetica", "", 10)
     creador = orden.get('creador', 'No registrado')
     disenador = orden.get('disenador_asignado', 'No asignado')
+    cli = orden.get('clientes', {})
+    nombre_cliente = cli.get('nombre_completo', cli.get('nombre', 'Consumidor Final'))
     pdf.cell(0, 6, f"Diseñador: {disenador}  |  Asesor: {creador}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 6, f"Cliente: {nombre_cliente}", new_x="LMARGIN", new_y="NEXT")
     
     if orden.get('alerta_cambios'):
         pdf.ln(2); pdf.set_font("helvetica", "B", 12); pdf.set_fill_color(255, 200, 200)
@@ -499,7 +509,8 @@ def generar_hoja_produccion(orden):
     
     if url_imagen:
         try:
-            pdf.image(url_imagen, w=190, h=130, keep_aspect_ratio=True, x="CENTER") 
+            # Reducimos h=100 para evitar que empuje las tablas a la siguiente hoja
+            pdf.image(url_imagen, w=190, h=100, keep_aspect_ratio=True, x="CENTER") 
         except:
             pdf.set_font("helvetica", "I", 10)
             pdf.cell(0, 10, "(La imagen no pudo ser cargada)", align="C", new_x="LMARGIN", new_y="NEXT")
@@ -582,37 +593,39 @@ def generar_hoja_produccion(orden):
             pdf.cell(15, 6, str(tot_pan), border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
             max_y = max(max_y, pdf.get_y())
 
-        # TABLA 3: POLINES (Derecha Absoluta X=145)
+        # TABLA 3: POLINES (Derecha Absoluta X=140)
         if resumen_polines:
             pdf.set_y(start_y)
-            pdf.set_x(145)
+            pdf.set_x(140) # Movido un poquito a la izquierda
             pdf.set_font("helvetica", "B", 9)
-            pdf.cell(50, 6, "POLINES", align="C", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(55, 6, "POLINES", align="C", new_x="LMARGIN", new_y="NEXT")
             
             # Cabecera
-            pdf.set_x(145)
+            pdf.set_x(140)
             pdf.set_fill_color(*fill_cab)
             pdf.set_text_color(255, 255, 255)
             pdf.cell(15, 6, "Talla", border=1, align="C", fill=True)
-            pdf.cell(20, 6, "Color", border=1, align="C", fill=True)
+            pdf.cell(25, 6, "Color", border=1, align="C", fill=True) # Aumentado de 20 a 25
             pdf.cell(15, 6, "Cant", border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
             
             # Datos
             pdf.set_text_color(0, 0, 0)
-            pdf.set_font("helvetica", "", 9)
+            pdf.set_font("helvetica", "", 8) # Letra 8 para que entre color largo
             tot_pol = 0
             for (t, c), cant in sorted(resumen_polines.items(), key=lambda x: (orden_talla(x[0][0]), x[0][1])):
-                pdf.set_x(145)
+                pdf.set_x(140)
                 pdf.cell(15, 6, str(t), border=1, align="C")
-                pdf.cell(20, 6, str(c), border=1, align="C")
+                # Acortamos string si es muy largo
+                color_str = str(c)[:15] + "." if len(str(c)) > 15 else str(c)
+                pdf.cell(25, 6, color_str, border=1, align="C")
                 pdf.cell(15, 6, str(cant), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
                 tot_pol += cant
                 
             # Fila Total
-            pdf.set_x(145)
+            pdf.set_x(140)
             pdf.set_font("helvetica", "B", 9)
             pdf.set_fill_color(*fill_tot)
-            pdf.cell(35, 6, "TOTAL", border=1, align="C", fill=True) # Colspan manual sumando anchos (15+20)
+            pdf.cell(40, 6, "TOTAL", border=1, align="C", fill=True) # Suma (15+25)
             pdf.cell(15, 6, str(tot_pol), border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
             max_y = max(max_y, pdf.get_y())
 
@@ -635,8 +648,27 @@ def generar_hoja_produccion(orden):
     for item in items_taller:
         familia = item.get('familia_producto', 'GENERICO').upper()
         nombre_prod = str(item.get('nombre_producto', familia)).replace('│', '|').replace('—', '-')
-        especificaciones = item.get('especificaciones_producto', [])
+        especificaciones_crudas = item.get('especificaciones_producto', [])
         tela = item.get('nombre_tela', 'Estándar') 
+        
+        # AGRUPACIÓN DE IDÉNTICOS PARA AHORRAR ESPACIO
+        agrupadas = {}
+        for esp in especificaciones_crudas:
+            key = (
+                str(esp.get('talla_superior') or '').strip(),
+                str(esp.get('talla_inferior') or '').strip(),
+                str(esp.get('nombre_jugador') or '').strip(),
+                str(esp.get('numero_dorsal') or '').strip(),
+                str(esp.get('tipo_cuello_texto') or '').strip(),
+                str(esp.get('talla_polines') or '').strip(),
+                str(esp.get('observacion_individual') or '').strip()
+            )
+            if key not in agrupadas:
+                agrupadas[key] = {**esp, 'cant_fila': 1}
+            else:
+                agrupadas[key]['cant_fila'] += 1
+        
+        especificaciones = list(agrupadas.values())
         
         # ORDENAMIENTO ESTRICTO DE LA LISTA LARGA
         if familia in ['UNIFORME COMPLETO', 'PRENDA SUPERIOR']:
@@ -653,47 +685,54 @@ def generar_hoja_produccion(orden):
             pdf.set_font("helvetica", "I", 9); pdf.cell(0, 8, "  Sin lista de detalles.", border=1, new_x="LMARGIN", new_y="NEXT"); pdf.ln(5)
             continue
 
-        pdf.set_font("helvetica", "", 10)
+        pdf.set_font("helvetica", "", 8) # Letra más pequeña para ahorrar hojas
         tiene_polines = any(bool(esp.get('talla_polines')) for esp in especificaciones) if familia == 'UNIFORME COMPLETO' else False
 
+        # Incluimos columna "C." (Cantidad)
         if familia == 'UNIFORME COMPLETO' and tiene_polines:
-            cols = (15, 15, 60, 15, 30, 20, 35)
-            headers = ["T. Sup", "T. Inf", "Nombre / Ref.", "Num", "Cuello", "Polín", "Obs"]
+            cols = (10, 15, 15, 50, 15, 30, 20, 35) 
+            headers = ["C.", "T. Sup", "T. Inf", "Nombre / Ref.", "Num", "Cuello", "Polín", "Obs"]
         elif familia in ['UNIFORME COMPLETO', 'PRENDA SUPERIOR']:
-            cols = (20, 20, 65, 15, 30, 40)
-            headers = ["T. Sup", "T. Inf", "Nombre / Ref.", "Num", "Cuello", "Observación"] if familia == 'UNIFORME COMPLETO' else ["T. Sup", "-", "Nombre / Ref.", "Num", "Cuello", "Observación"]
+            cols = (10, 20, 20, 55, 15, 30, 40)
+            headers = ["C.", "T. Sup", "T. Inf", "Nombre / Ref.", "Num", "Cuello", "Observación"] if familia == 'UNIFORME COMPLETO' else ["C.", "T. Sup", "-", "Nombre / Ref.", "Num", "Cuello", "Observación"]
         elif familia == 'PANTALONETA':
-            cols = (30, 30, 130); headers = ["Talla Inf.", "Num", "Observación"]
+            cols = (15, 25, 25, 125); headers = ["C.", "Talla Inf.", "Num", "Observación"]
         elif familia == 'IMPRESION':
-            cols = (30, 30, 50, 80); headers = ["Ancho (m)", "Largo (m)", "Acabado", "Obs / Calandrado"]
+            cols = (10, 30, 30, 40, 80); headers = ["C.", "Ancho (m)", "Largo (m)", "Acabado", "Obs / Calandrado"]
         else:
-            cols = (20, 50, 120); headers = ["Cant", "Acabado", "Observación"]
+            cols = (15, 50, 125); headers = ["C.", "Acabado", "Observación"]
 
-        with pdf.table(col_widths=cols, text_align=("CENTER", "CENTER", "LEFT", "CENTER", "LEFT", "CENTER", "LEFT") if tiene_polines else ("CENTER", "CENTER", "LEFT", "CENTER", "LEFT", "LEFT")) as table:
+        with pdf.table(col_widths=cols, text_align=("CENTER", "CENTER", "CENTER", "LEFT", "CENTER", "LEFT", "CENTER", "LEFT") if tiene_polines and familia == 'UNIFORME COMPLETO' else ("CENTER", "CENTER", "CENTER", "LEFT", "CENTER", "LEFT", "LEFT"), cell_fill_mode="ROWS") as table:
             row = table.row(style=estilo_cabecera_taller)
             for h in headers: row.cell(h)
                 
             for esp in especificaciones:
                 row = table.row(style=estilo_datos_taller)
+                c_fila = str(esp.get('cant_fila', 1))
+                
                 if familia == 'UNIFORME COMPLETO':
+                    row.cell(c_fila)
                     row.cell(str(esp.get('talla_superior') or '-').strip() or '-'); row.cell(str(esp.get('talla_inferior') or '-').strip() or '-')
                     row.cell(str(esp.get('nombre_jugador') or '').strip()); row.cell(str(esp.get('numero_dorsal') or '').strip())
                     row.cell(str(esp.get('tipo_cuello_texto') or '').strip())
                     if tiene_polines: row.cell(str(esp.get('talla_polines') or '-').strip() or '-')
                     row.cell(str(esp.get('observacion_individual') or '').strip())
                 elif familia == 'PRENDA SUPERIOR':
+                    row.cell(c_fila)
                     row.cell(str(esp.get('talla_superior') or '-').strip() or '-'); row.cell("-")
                     row.cell(str(esp.get('nombre_jugador') or '').strip()); row.cell(str(esp.get('numero_dorsal') or '').strip())
                     row.cell(str(esp.get('tipo_cuello_texto') or '').strip()); row.cell(str(esp.get('observacion_individual') or '').strip())
                 elif familia == 'PANTALONETA':
+                    row.cell(c_fila)
                     row.cell(str(esp.get('talla_inferior') or '-').strip() or '-'); row.cell(str(esp.get('numero_dorsal') or '').strip())
                     row.cell(str(esp.get('observacion_individual') or '').strip())
                 elif familia == 'IMPRESION':
+                    row.cell(c_fila)
                     row.cell(f"{esp.get('ancho_cm', 0) / 100:.2f} m" if esp.get('ancho_cm') else "-")
                     row.cell(f"{esp.get('alto_cm', 0) / 100:.2f} m" if esp.get('alto_cm') else "-")
                     row.cell(str(esp.get('acabado') or '').strip()); row.cell(str(esp.get('observacion_individual') or '').strip())
                 else:
-                    row.cell("1"); row.cell(str(esp.get('acabado') or '').strip()); row.cell(str(esp.get('observacion_individual') or '').strip())
+                    row.cell(c_fila); row.cell(str(esp.get('acabado') or '').strip()); row.cell(str(esp.get('observacion_individual') or '').strip())
         pdf.ln(5)
 
     return bytes(pdf.output())
