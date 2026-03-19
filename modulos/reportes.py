@@ -226,17 +226,24 @@ def generar_comprobante_cliente(orden):
     pdf.cell(ancho_etiqueta2, 6, "Fecha Pedido:", border=False); pdf.set_font("helvetica", "", 10)
     pdf.cell(0, 6, f"{formatear_fecha_es(orden.get('created_at'))}", border=False, new_x="LMARGIN", new_y="NEXT")
 
+    # Fila 2: Teléfono y Fecha de Entrega
     pdf.set_font("helvetica", "B", 10)
     pdf.cell(ancho_etiqueta1, 6, "Teléfono:", border=False); pdf.set_font("helvetica", "", 10)
-    pdf.cell(ancho_valor1, 6, f"{telefono}  /  {correo}", border=False); pdf.set_font("helvetica", "B", 10)
+    pdf.cell(ancho_valor1, 6, f"{telefono}", border=False); pdf.set_font("helvetica", "B", 10)
     pdf.cell(ancho_etiqueta2, 6, "Fecha Entrega:", border=False); pdf.set_font("helvetica", "", 10)
     pdf.cell(0, 6, f"{formatear_fecha_es(orden.get('fecha_entrega'))}", border=False, new_x="LMARGIN", new_y="NEXT")
 
+    # Fila 3: Correo (Nueva línea para evitar que se monte) y Diseñador
+    pdf.set_font("helvetica", "B", 10)
+    pdf.cell(ancho_etiqueta1, 6, "Correo:", border=False); pdf.set_font("helvetica", "", 10)
+    pdf.cell(ancho_valor1, 6, f"{correo}", border=False); pdf.set_font("helvetica", "B", 10)
+    pdf.cell(ancho_etiqueta2, 6, "Diseñador:", border=False); pdf.set_font("helvetica", "", 10)
+    pdf.cell(0, 6, f"{disenador}", border=False, new_x="LMARGIN", new_y="NEXT")
+
+    # Fila 4: Atendido por
     pdf.set_font("helvetica", "B", 10)
     pdf.cell(ancho_etiqueta1, 6, "Atendido por:", border=False); pdf.set_font("helvetica", "", 10)
-    pdf.cell(ancho_valor1, 6, f"{creador}", border=False); pdf.set_font("helvetica", "B", 10)
-    pdf.cell(ancho_etiqueta2, 6, "Diseñador:", border=False); pdf.set_font("helvetica", "", 10)
-    pdf.cell(0, 6, f"{disenador}", border=False, new_x="LMARGIN", new_y="NEXT"); pdf.ln(8)
+    pdf.cell(0, 6, f"{creador}", border=False, new_x="LMARGIN", new_y="NEXT"); pdf.ln(6)
 
     pdf.set_font("helvetica", "", 10)
     with pdf.table(col_widths=(115, 20, 25, 30), text_align=("LEFT", "CENTER", "RIGHT", "RIGHT")) as table:
@@ -278,34 +285,35 @@ def generar_comprobante_cliente(orden):
         pdf.cell(0, 8, "Referencia de Diseño e Historial de Pagos:", align="L", new_x="LMARGIN", new_y="NEXT")
         start_y = pdf.get_y()
         
-        # 1. Dibujar la tabla de pagos a la derecha primero usando XY absoluto
-        pdf.set_xy(120, start_y)
+        # 1. Dibujamos la imagen a la izquierda primero
+        try:
+            pdf.image(url_imagen, x=10, y=start_y, w=100)
+            end_image_y = pdf.get_y()
+        except:
+            pdf.set_xy(10, start_y)
+            pdf.set_font("helvetica", "I", 9); pdf.cell(100, 10, "(Imagen no disponible)")
+            end_image_y = pdf.get_y()
+            
+        # 2. Volvemos al punto 'start_y' y dibujamos la tabla usando los atributos nativos de ancho y alineación
+        pdf.set_y(start_y)
         pdf.set_font("helvetica", "", 8)
         estilo_cabecera_pagos = FontFace(fill_color=(0, 51, 153), color=(255, 255, 255), emphasis="B")
         estilo_datos_pagos = FontFace(fill_color=(255, 255, 255), color=(0, 0, 0), emphasis="")
         
-        with pdf.table(col_widths=(20, 35, 15), text_align=("CENTER", "LEFT", "RIGHT"), first_row_as_headings=True) as t_pagos:
+        # Definimos width explícito y align="RIGHT" para evitar que se desborde o deforme
+        with pdf.table(width=85, align="RIGHT", col_widths=(20, 45, 20), text_align=("CENTER", "LEFT", "RIGHT")) as t_pagos:
             row = t_pagos.row(style=estilo_cabecera_pagos)
-            for h in ["Fecha", "Banco", "Monto"]: row.cell(h)
+            for h in ["Fecha", "Banco/Método", "Monto"]: row.cell(h)
             for p in pagos:
                 row = t_pagos.row(style=estilo_datos_pagos)
                 f_pago = p.get('fecha_pago', '')
                 if f_pago and len(f_pago) >= 10: f_pago = f"{f_pago[8:10]}/{f_pago[5:7]}/{f_pago[2:4]}"
                 banco = p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo'
-                row.cell(f_pago); row.cell(str(banco)[:15]); row.cell(f"${float(p.get('monto', 0)):.2f}")
+                row.cell(f_pago); row.cell(str(banco)[:20]); row.cell(f"${float(p.get('monto', 0)):.2f}")
                 
         end_table_y = pdf.get_y()
         
-        # 2. Dibujar la imagen a la izquierda para que sea la protagonista
-        try:
-            pdf.image(url_imagen, x=10, y=start_y, w=105)
-            end_image_y = pdf.get_y()
-        except:
-            pdf.set_xy(10, start_y)
-            pdf.set_font("helvetica", "I", 9); pdf.cell(105, 10, "(Imagen no disponible)")
-            end_image_y = pdf.get_y()
-            
-        # 3. Retomar el flujo normal debajo del elemento más largo
+        # 3. Retomamos el flujo normal debajo del elemento más largo
         pdf.set_y(max(end_table_y, end_image_y) + 5)
         
     elif url_imagen and not pagos:
