@@ -28,11 +28,8 @@ def extraer_metadata_pdf(uploaded_file):
         
         for page in reader.pages:
             box = page.mediabox
-            # Calculamos el ancho solo de la primera página
             if ancho_m == 0.0:
                 ancho_m = float(box.width) * 0.352778 / 1000
-            
-            # Sumamos el alto de cada página encontrada
             alto_total_m += float(box.height) * 0.352778 / 1000
             
         return uploaded_file.name, round(ancho_m, 2), round(alto_total_m, 2)
@@ -59,16 +56,22 @@ def render(supabase):
             busqueda_cli = col2.text_input("Nombre del Cliente", placeholder="Ej: Fra")
             busqueda_fechas = col3.date_input("Rango de Fechas (Pedido)", value=[], format="DD/MM/YYYY")
             
+            # --- NUEVO: Checkbox para reimpresiones ---
+            mostrar_historial = st.checkbox("📦 Buscar también en órdenes ya enviadas a plotter (Para reimpresiones o arreglos)")
+            
             st.write("") 
             submit_search = col4.form_submit_button("Filtrar Bandeja", use_container_width=True)
 
-    # CÓDIGO NUEVO (Reemplazar por esto)
     try:
-        res_ordenes = supabase.table("ordenes") \
-            .select("id, codigo_orden, estado, fecha_entrega, alerta_cambios, detalle_cambios, cliente_id, created_at, url_boceto_vendedora, url_arte_final, url_diseno_final, observaciones_generales") \
-            .or_("estado.eq.Pendiente,estado.eq.En Diseño,alerta_cambios.eq.true") \
-            .order("created_at", desc=True) \
-            .execute()
+        query = supabase.table("ordenes").select("id, codigo_orden, estado, fecha_entrega, alerta_cambios, detalle_cambios, cliente_id, created_at, url_boceto_vendedora, url_arte_final, url_diseno_final, observaciones_generales")
+        
+        # Lógica de búsqueda adaptada
+        if mostrar_historial:
+            query = query.neq("estado", "Entregado") # Muestra todo lo que no esté finalizado
+        else:
+            query = query.or_("estado.eq.Pendiente,estado.eq.En Diseño,alerta_cambios.eq.true")
+            
+        res_ordenes = query.order("created_at", desc=True).execute()
         ordenes_data = res_ordenes.data
     except Exception as e:
         st.error(f"Error al conectar con Supabase: {e}")
@@ -107,10 +110,9 @@ def render(supabase):
         indice = evento.selection.rows[0]
         st.session_state['orden_diseno_actual'] = df_ordenes.iloc[indice].to_dict()
     else:
-        # Si no hay selección, pero la memoria aún tiene datos guardados, limpiamos y FORZAMOS un reinicio visual
         if st.session_state.get('orden_diseno_actual') is not None:
             st.session_state['orden_diseno_actual'] = None
-            st.rerun() # El truco mágico para borrar la pantalla fantasma
+            st.rerun() 
 
     # ==========================================
     # 2. VISTA DE DETALLE DE LA ORDEN
@@ -126,7 +128,6 @@ def render(supabase):
         
         with col_i3:
             if orden['alerta_cambios']: 
-                # Ahora mostramos exactamente QUÉ cambió según lo que escribió el vendedor
                 st.error(f"🚨 **ALERTA DE CAMBIO:** {orden.get('detalle_cambios', 'Se hizo una modificación sin especificar.')}")
                 
             if orden['estado'] == "Pendiente":
@@ -141,19 +142,13 @@ def render(supabase):
             st.caption("Boceto Vendedora")
             if orden.get('url_boceto_vendedora'): st.image(orden['url_boceto_vendedora'], use_container_width=True)
             else: st.info("No hay boceto registrado.")
-        # CÓDIGO NUEVO
+            
         with col_img2:
             st.caption("Arte Final / Diseño")
-            # Obtenemos la URL de cualquiera de las dos columnas que tenga datos
             url_imagen_final = orden.get('url_arte_final') or orden.get('url_diseno_final')
+            if url_imagen_final: st.image(url_imagen_final, use_container_width=True)
+            else: st.info("No hay arte final registrado en la base de datos.")
             
-            if url_imagen_final: 
-                st.image(url_imagen_final, use_container_width=True)
-            else: 
-                st.info("No hay arte final registrado en la base de datos.")
-            
-        # CÓDIGO NUEVO (Reemplazar por esto)
-        # --- NUEVO: OBSERVACIONES GENERALES DE LA ORDEN ---
         st.markdown("### 📝 Observaciones Generales de la Orden")
         if orden.get('observaciones_generales'):
             st.info(f"**Nota del cliente/comercial:** {orden['observaciones_generales']}")
@@ -166,9 +161,17 @@ def render(supabase):
             items = res_items.data
             for item in items:
                 if item.get('producto_id'):
-                    res_p = supabase.table("productos_catalogo").select("descripcion").eq("id", item['producto_id']).execute()
-                    item['nombre_producto'] = res_p.data[0]['descripcion'] if res_p.data else item.get('familia_producto')
-                else: item['nombre_producto'] = item.get('familia_producto')
+                    # NUEVO: Traemos también el tipo de prenda para poder excluir los servicios/diseños
+                    res_p = supabase.table("productos_catalogo").select("descripcion, tipo_prenda").eq("id", item['producto_id']).execute()
+                    if res_p.data:
+                        item['nombre_producto'] = res_p.data[0]['descripcion']
+                        item['tipo_prenda'] = res_p.data[0].get('tipo_prenda', '')
+                    else:
+                        item['nombre_producto'] = item.get('familia_producto')
+                        item['tipo_prenda'] = ''
+                else: 
+                    item['nombre_producto'] = item.get('familia_producto')
+                    item['tipo_prenda'] = ''
                 
                 if item.get('insumo_base_id'):
                     res_t = supabase.table("insumos").select("nombre").eq("id", item['insumo_base_id']).execute()
@@ -187,6 +190,7 @@ def render(supabase):
             fam = str(item.get('familia_producto', '')).strip().upper()
             prod = item['nombre_producto']
             tela = item['nombre_tela']
+            tipo_prenda = item.get('tipo_prenda', '')
             
             for esp in item.get('especificaciones_producto', []):
                 t_sup = str(esp.get('talla_superior') or '').strip().upper()
@@ -202,12 +206,12 @@ def render(supabase):
                         k = (t_pol, str(esp.get('color_polines') or 'Sin Color').strip())
                         resumen_polines[k] = resumen_polines.get(k, 0) + 1
                 
-                # Leemos el cuello y limpiamos la palabra "EMPTY" si existe
                 cuello_db = esp.get("tipo_cuello_texto", "-")
                 cuello_limpio = "-" if cuello_db == "EMPTY" else cuello_db
 
                 specs_list.append({
                     "Producto": prod,
+                    "Tipo": tipo_prenda, # <-- Campo invisible necesario para filtrado
                     "Tela": tela,
                     "Género": esp.get("genero", "-"),
                     "Cuello": cuello_limpio,                     
@@ -215,11 +219,11 @@ def render(supabase):
                     "Talla Inf.": t_inf if t_inf != 'NONE' else "-",
                     "Jugador": esp.get("nombre_jugador", "-"),
                     "Dorsal": esp.get("numero_dorsal", "-"),
-                    "Arquero": bool(esp.get("es_arquero", False)), # <-- NUEVO CAMPO AGREGADO
+                    "Arquero": bool(esp.get("es_arquero", False)), 
                     "Notas": esp.get("observacion_individual", "")
                 })
 
-        # --- CÁLCULO DE TABLAS RESUMEN (Camisetas, Pantalonetas, Polines) ---
+        # --- CÁLCULO DE TABLAS RESUMEN ---
         st.markdown("### 📊 Tablas de Resumen de Corte")
         col_res1, col_res2, col_res3 = st.columns(3)
         
@@ -228,11 +232,8 @@ def render(supabase):
                 df_sup = pd.DataFrame(list(resumen_sup.items()), columns=['Talla', 'Cantidad'])
                 df_sup['Orden'] = df_sup['Talla'].apply(orden_talla)
                 df_sup = df_sup.sort_values('Orden').drop(columns=['Orden']).reset_index(drop=True)
-                
                 total_sup = df_sup['Cantidad'].sum()
-                fila_total = pd.DataFrame([{'Talla': 'TOTAL', 'Cantidad': total_sup}])
-                df_sup = pd.concat([df_sup, fila_total], ignore_index=True)
-                
+                df_sup = pd.concat([df_sup, pd.DataFrame([{'Talla': 'TOTAL', 'Cantidad': total_sup}])], ignore_index=True)
                 st.markdown("**👕 CAMISETAS**")
                 st.dataframe(df_sup, hide_index=True, use_container_width=True)
                 
@@ -241,11 +242,8 @@ def render(supabase):
                 df_inf = pd.DataFrame(list(resumen_inf.items()), columns=['Talla', 'Cantidad'])
                 df_inf['Orden'] = df_inf['Talla'].apply(orden_talla)
                 df_inf = df_inf.sort_values('Orden').drop(columns=['Orden']).reset_index(drop=True)
-                
                 total_inf = df_inf['Cantidad'].sum()
-                fila_total = pd.DataFrame([{'Talla': 'TOTAL', 'Cantidad': total_inf}])
-                df_inf = pd.concat([df_inf, fila_total], ignore_index=True)
-                
+                df_inf = pd.concat([df_inf, pd.DataFrame([{'Talla': 'TOTAL', 'Cantidad': total_inf}])], ignore_index=True)
                 st.markdown("**🩳 PANTALONETAS**")
                 st.dataframe(df_inf, hide_index=True, use_container_width=True)
                 
@@ -254,16 +252,12 @@ def render(supabase):
                 df_pol = pd.DataFrame([{'Talla': t, 'Color': c, 'Cantidad': cant} for (t, c), cant in resumen_polines.items()])
                 df_pol['Orden'] = df_pol['Talla'].apply(orden_talla)
                 df_pol = df_pol.sort_values('Orden').drop(columns=['Orden']).reset_index(drop=True)
-                
                 total_pol = df_pol['Cantidad'].sum()
-                fila_total = pd.DataFrame([{'Talla': 'TOTAL', 'Color': '-', 'Cantidad': total_pol}])
-                df_pol = pd.concat([df_pol, fila_total], ignore_index=True)
-                
+                df_pol = pd.concat([df_pol, pd.DataFrame([{'Talla': 'TOTAL', 'Color': '-', 'Cantidad': total_pol}])], ignore_index=True)
                 st.markdown("**🧦 POLINES**")
                 st.dataframe(df_pol, hide_index=True, use_container_width=True)
                 
-                
-        # --- TABLA DETALLADA CON LOS 4 FILTROS ---
+        # --- TABLA DETALLADA CON FILTROS ---
         st.markdown("### 📋 Listado Detallado de Prendas")
         if specs_list:
             df_specs = pd.DataFrame(specs_list)
@@ -286,19 +280,22 @@ def render(supabase):
             if filtro_tsup != "Todos": df_filtrado = df_filtrado[df_filtrado['Talla Sup.'] == filtro_tsup]
             if filtro_tinf != "Todos": df_filtrado = df_filtrado[df_filtrado['Talla Inf.'] == filtro_tinf]
             
-            col_f5.metric("👕 Prendas en vista:", len(df_filtrado))
+            # --- NUEVO: Exclusión dinámica de servicios para el contador ---
+            if 'Tipo' in df_filtrado.columns:
+                prendas_reales = len(df_filtrado[~df_filtrado['Tipo'].str.contains("DISEÑO", na=False, case=False)])
+            else:
+                prendas_reales = len(df_filtrado)
+                
+            col_f5.metric("👕 Prendas en vista:", prendas_reales)
             
-            # --- NUEVO: FUNCIÓN DE ESTILIZADO CONDICIONAL ---
             def resaltar_arqueros(row):
-                # Aplica un fondo amarillo pastel si la columna 'Arquero' es True
                 if row['Arquero'] == True:
                     return ['background-color: #FFF2CC; color: #000000;'] * len(row)
                 return [''] * len(row)
 
-            # Aplicamos el estilo al DataFrame
-            df_estilizado = df_filtrado.style.apply(resaltar_arqueros, axis=1)
+            df_mostrar = df_filtrado.drop(columns=['Tipo']) # Escondemos la columna técnica antes de renderizar
+            df_estilizado = df_mostrar.style.apply(resaltar_arqueros, axis=1)
             
-            # Mostramos el DataFrame estilizado (Streamlit renderizará los booleanos como casillas de verificación)
             st.dataframe(df_estilizado, use_container_width=True, hide_index=True)
         else:
             st.info("No se encontraron especificaciones registradas para esta orden.")
@@ -309,17 +306,26 @@ def render(supabase):
         st.divider()
         st.subheader("🖨️ Gestor de Archivos de Impresión")
         
-        # --- RECUPERAMOS EL BLOQUE BORRADO PARA LAS TELAS ---
         try:
             res_telas_bd = supabase.table("insumos").select("nombre").execute()
             lista_telas_db = [t['nombre'] for t in res_telas_bd.data] if res_telas_bd.data else ["Estándar"]
         except Exception:
             lista_telas_db = ["Estándar"]
-        # ----------------------------------------------------
+
+        # --- NUEVO: Precálculo inteligente de la tela dominante de la orden ---
+        tela_sugerida = "Estándar"
+        if specs_list:
+            todas_las_telas = [s['Tela'] for s in specs_list if s['Tela'] not in ["Estándar", "-"]]
+            if todas_las_telas:
+                tela_sugerida = max(set(todas_las_telas), key=todas_las_telas.count)
+        
+        # Validar que la tela sugerida exista en DB
+        idx_tela_defecto = lista_telas_db.index(tela_sugerida) if tela_sugerida in lista_telas_db else 0
+        tela_defecto_final = lista_telas_db[idx_tela_defecto]
+        # -------------------------------------------------------------------
 
         lista_perfiles = ["Plotter 1", "Plotter 2", "DTF"] 
         
-        # --- NUEVO: Control para limpiar los PDFs subidos tras guardar ---
         if 'pdf_key' not in st.session_state:
             st.session_state['pdf_key'] = "uploader_1"
 
@@ -327,18 +333,17 @@ def render(supabase):
         archivos_pdf = st.file_uploader(
             "Arrastra aquí los archivos PDF de tu diseño (Puedes seleccionar varios a la vez):", 
             type=["pdf"], accept_multiple_files=True, 
-            key=st.session_state['pdf_key'] # <-- Clave dinámica
+            key=st.session_state['pdf_key'] 
         )
         
         if archivos_pdf:
             st.success(f"✅ Se han detectado {len(archivos_pdf)} archivo(s) PDF.")
             archivos_extraidos = []
-            tela_por_defecto = lista_telas_db[0] if lista_telas_db else "Estándar"
 
             for pdf in archivos_pdf:
                 nombre_auto, ancho_auto, largo_auto = extraer_metadata_pdf(pdf)
                 archivos_extraidos.append({
-                    "Nombre": nombre_auto, "Tela": tela_por_defecto,
+                    "Nombre": nombre_auto, "Tela": tela_defecto_final, # Usamos la tela pre-calculada
                     "Ancho": ancho_auto, "Largo": largo_auto,
                     "Cantidad": 1, "Perfil": "Plotter 1", "Notas": ""
                 })
@@ -371,8 +376,6 @@ def render(supabase):
                         })
                     
                     supabase.table("archivos_impresion").insert(payloads).execute()
-                    
-                    # --- NUEVO: Vaciamos el uploader de PDFs cambiando su ID ---
                     st.session_state['pdf_key'] = f"uploader_{datetime.now().timestamp()}"
                     
                     st.success("¡Archivos PDF guardados! La bandeja de subida ha sido limpiada.")
@@ -380,7 +383,6 @@ def render(supabase):
                 except Exception as e:
                     st.error(f"❌ Error al guardar: {e}")
 
-        # --- NUEVO: El registro manual SIEMPRE ESTÁ VISIBLE ahora ---
         st.write("")
         st.markdown("**Ingreso Manual (Para archivos .AI, .CDR, o correcciones)**")
         with st.expander("➕ Cargar datos de archivo manualmente"):
@@ -390,7 +392,7 @@ def render(supabase):
                 
                 nombre_input = col_m1.text_input("Nombre del Archivo")
                 perfil_input = col_m2.selectbox("Perfil de Color", lista_perfiles)
-                tela_input = col_m_tela.selectbox("Tela a Usar", lista_telas_db)
+                tela_input = col_m_tela.selectbox("Tela a Usar", lista_telas_db, index=idx_tela_defecto) # Cargamos por defecto
                 
                 ancho_input = col_m3.number_input("Ancho (m)", min_value=0.0, step=0.01)
                 largo_input = col_m4.number_input("Largo Unitario (m)", min_value=0.0, step=0.01)
@@ -415,9 +417,12 @@ def render(supabase):
                     else: 
                         st.warning("Nombre y largo requeridos.")
 
-        # --- Tabla Editable de Archivos ya Registrados ---
-        
-        st.markdown("**3. Historial de archivos listos para plotter (Edita o marca para eliminar)**")
+        # --- NUEVO: Tabla Editable con Estado de Impresión en Vivo ---
+        col_hist1, col_hist2 = st.columns([3, 1])
+        col_hist1.markdown("**3. Historial de archivos listos para plotter (Edita o marca para eliminar)**")
+        if col_hist2.button("🔄 Actualizar Estados de Impresión", use_container_width=True):
+            st.rerun()
+            
         res_archivos = supabase.table("archivos_impresion").select("*").eq("orden_id", order_id).execute()
         df_archivos = pd.DataFrame(res_archivos.data)
 
@@ -425,10 +430,10 @@ def render(supabase):
             if 'ancho_metros' not in df_archivos.columns: df_archivos['ancho_metros'] = 0.0
             if 'tela' not in df_archivos.columns: df_archivos['tela'] = lista_telas_db[0] if lista_telas_db else "Estándar"
             if 'cantidad' not in df_archivos.columns: df_archivos['cantidad'] = 1
+            if 'estado_impresion' not in df_archivos.columns: df_archivos['estado_impresion'] = "Pendiente"
             
-            df_edit = df_archivos[['id', 'nombre_archivo', 'perfil_color', 'tela', 'ancho_metros', 'longitud_metros', 'cantidad', 'notas_disenador']].copy()
+            df_edit = df_archivos[['id', 'nombre_archivo', 'perfil_color', 'tela', 'ancho_metros', 'longitud_metros', 'cantidad', 'notas_disenador', 'estado_impresion']].copy()
             
-            # --- NUEVO: Botón maestro para seleccionar todos ---
             marcar_todos = st.checkbox("☑️ Seleccionar todos para eliminar")
             df_edit['Eliminar'] = marcar_todos 
             
@@ -441,12 +446,12 @@ def render(supabase):
                     "tela": st.column_config.SelectboxColumn("Tela", options=lista_telas_db, required=True),
                     "ancho_metros": st.column_config.NumberColumn("Ancho (m)", format="%.2f"),
                     "longitud_metros": st.column_config.NumberColumn("Largo Unitario (m)", format="%.2f"),
-                    "cantidad": st.column_config.NumberColumn("Cantidad", min_value=1, step=1), # <-- MOSTRAR AQUÍ
+                    "cantidad": st.column_config.NumberColumn("Cantidad", min_value=1, step=1), 
                     "notas_disenador": "Notas",
+                    "estado_impresion": st.column_config.TextColumn("Estado", disabled=True), # <-- Mostramos el estado protegido
                     "Eliminar": st.column_config.CheckboxColumn("🗑️ Eliminar", default=False)
                 },
-               
-                disabled=["id"], hide_index=True, use_container_width=True
+                disabled=["id", "estado_impresion"], hide_index=True, use_container_width=True
             )
 
             if st.button("🔄 Sincronizar Cambios de la Tabla"):
@@ -462,7 +467,7 @@ def render(supabase):
                                 "tela": row['tela'],
                                 "ancho_metros": row['ancho_metros'], 
                                 "longitud_metros": row['longitud_metros'],
-                                "cantidad": row['cantidad'], # <-- FALTABA AGREGAR ESTA LÍNEA AQUÍ
+                                "cantidad": row['cantidad'], 
                                 "notas_disenador": row['notas_disenador']
                             }).eq("id", fila_id).execute()
                     st.success("Cambios sincronizados correctamente.")
@@ -476,10 +481,11 @@ def render(supabase):
         # 4. BOTÓN DE ENVÍO A PLOTTER
         # ==========================================
         st.divider()
-        st.info("Al enviar a impresión, la orden saldrá de tu bandeja y pasará al área de plotter.")
+        st.info("Al enviar a impresión, la orden saldrá de tu bandeja principal y pasará al área de plotter.")
         
         if st.button("🚀 Finalizar Diseño y Enviar a Impresión", type="primary", use_container_width=True):
             try:
+                # Actualiza la orden, pero no altera los estados individuales de los archivos
                 supabase.table("ordenes").update({"estado": "Listo para Impresión", "alerta_cambios": False}).eq("id", order_id).execute()
                 st.session_state['orden_diseno_actual'] = None
                 st.success("¡Orden enviada exitosamente a Impresión!")
