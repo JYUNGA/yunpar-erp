@@ -206,21 +206,31 @@ def render(supabase):
                         k = (t_pol, str(esp.get('color_polines') or 'Sin Color').strip())
                         resumen_polines[k] = resumen_polines.get(k, 0) + 1
                 
+                # Limpieza de Cuello
                 cuello_db = esp.get("tipo_cuello_texto", "-")
-                cuello_limpio = "-" if cuello_db == "EMPTY" else cuello_db
+                cuello_limpio = "-" if not cuello_db or str(cuello_db).upper() in ["EMPTY", "NONE"] else cuello_db
+                
+                # Limpieza de Dorsal (para que no salga 'None')
+                dorsal_db = esp.get("numero_dorsal", "-")
+                dorsal_limpio = "-" if not dorsal_db or str(dorsal_db).upper() == "NONE" else str(dorsal_db)
+                
+                # Extracción y limpieza del Acabado
+                acabado_db = esp.get("acabado", "-")
+                acabado_limpio = "-" if not acabado_db or str(acabado_db).upper() in ["EMPTY", "NONE"] else str(acabado_db)
 
                 specs_list.append({
                     "Producto": prod,
                     "Tipo": tipo_prenda, # <-- Campo invisible necesario para filtrado
                     "Tela": tela,
-                    "Género": esp.get("genero", "-"),
-                    "Cuello": cuello_limpio,                     
+                    "Género": esp.get("genero", "-") or "-",
+                    "Cuello": cuello_limpio,
+                    "Acabado": acabado_limpio, # <-- NUEVA COLUMNA DE ACABADO
                     "Talla Sup.": t_sup if t_sup != 'NONE' else "-",
                     "Talla Inf.": t_inf if t_inf != 'NONE' else "-",
-                    "Jugador": esp.get("nombre_jugador", "-"),
-                    "Dorsal": esp.get("numero_dorsal", "-"),
+                    "Jugador": esp.get("nombre_jugador", "-") or "-",
+                    "Dorsal": dorsal_limpio,
                     "Arquero": bool(esp.get("es_arquero", False)), 
-                    "Notas": esp.get("observacion_individual", "")
+                    "Notas": esp.get("observacion_individual", "") or ""
                 })
 
         # --- CÁLCULO DE TABLAS RESUMEN ---
@@ -280,11 +290,22 @@ def render(supabase):
             if filtro_tsup != "Todos": df_filtrado = df_filtrado[df_filtrado['Talla Sup.'] == filtro_tsup]
             if filtro_tinf != "Todos": df_filtrado = df_filtrado[df_filtrado['Talla Inf.'] == filtro_tinf]
             
-            # --- NUEVO: Exclusión dinámica de servicios para el contador ---
-            if 'Tipo' in df_filtrado.columns:
-                prendas_reales = len(df_filtrado[~df_filtrado['Tipo'].str.contains("DISEÑO", na=False, case=False)])
+            # --- NUEVO: Agrupar filas idénticas y sumar cantidad ---
+            columnas_agrupar = ["Producto", "Tipo", "Tela", "Género", "Cuello", "Acabado", "Talla Sup.", "Talla Inf.", "Jugador", "Dorsal", "Arquero", "Notas"]
+            
+            # Agrupamos y contamos cuántas veces se repite exactamente la misma fila
+            df_agrupado = df_filtrado.groupby(columnas_agrupar, dropna=False).size().reset_index(name='Cant.')
+            
+            # Reordenamos para que la 'Cant.' salga al principio (facilita la lectura)
+            cols = ['Cant.'] + [c for c in df_agrupado.columns if c not in ['Cant.', 'Tipo']]
+            df_mostrar = df_agrupado[cols]
+            
+            # --- Exclusión dinámica de servicios para el contador ---
+            if 'Tipo' in df_agrupado.columns:
+                # Sumamos la columna cantidad en lugar de contar las filas
+                prendas_reales = df_agrupado[~df_agrupado['Tipo'].str.contains("DISEÑO", na=False, case=False)]['Cant.'].sum()
             else:
-                prendas_reales = len(df_filtrado)
+                prendas_reales = df_agrupado['Cant.'].sum()
                 
             col_f5.metric("👕 Prendas en vista:", prendas_reales)
             
@@ -293,7 +314,6 @@ def render(supabase):
                     return ['background-color: #FFF2CC; color: #000000;'] * len(row)
                 return [''] * len(row)
 
-            df_mostrar = df_filtrado.drop(columns=['Tipo']) # Escondemos la columna técnica antes de renderizar
             df_estilizado = df_mostrar.style.apply(resaltar_arqueros, axis=1)
             
             st.dataframe(df_estilizado, use_container_width=True, hide_index=True)
