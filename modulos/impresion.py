@@ -49,7 +49,7 @@ def render(supabase):
     try:
         # Traemos órdenes listas para impresión, en impresión o con alertas
         res_ordenes = supabase.table("ordenes") \
-            .select("id, codigo_orden, estado, fecha_entrega, alerta_cambios, cliente_id, created_at, url_arte_final") \
+            .select("id, codigo_orden, estado, fecha_entrega, alerta_cambios, cliente_id, created_at, url_arte_final, observaciones_generales") \
             .or_("estado.eq.Listo para Impresión,estado.eq.En Impresión,alerta_cambios.eq.true") \
             .order("created_at", desc=True) \
             .execute()
@@ -131,6 +131,12 @@ def render(supabase):
         else:
             st.info("No se adjuntó un Arte Final visual para esta orden.")
 
+        st.markdown("### 📝 Observaciones Generales de la Orden")
+        if orden_actual.get('observaciones_generales'):
+            st.info(f"**Nota del cliente/comercial:** {orden_actual['observaciones_generales']}")
+        else:
+            st.warning("No hay observaciones generales registradas para esta orden.")
+
         st.divider()
 
         # ==========================================
@@ -152,16 +158,20 @@ def render(supabase):
                 if 'estado_impresion' not in df_archivos.columns: df_archivos['estado_impresion'] = 'Pendiente'
                 if 'longitud_impresa' not in df_archivos.columns: df_archivos['longitud_impresa'] = None
                 if 'motivo_reimpresion' not in df_archivos.columns: df_archivos['motivo_reimpresion'] = ""
+                if 'cantidad' not in df_archivos.columns: df_archivos['cantidad'] = 1
                 
-                # --- 2. CONVERSIÓN ESTRICTA A NÚMEROS DECIMALES ---
-                # Forzamos a que sean floats para que las sumas jamás fallen
+                # --- 2. CONVERSIÓN ESTRICTA A NÚMEROS Y MULTIPLICADORES ---
                 df_archivos['longitud_metros'] = pd.to_numeric(df_archivos['longitud_metros'], errors='coerce').fillna(0.0)
+                df_archivos['cantidad'] = pd.to_numeric(df_archivos['cantidad'], errors='coerce').fillna(1).astype(int)
+                
+                # NUEVO: Multiplicamos para obtener el largo total esperado por archivo
+                df_archivos['longitud_total_diseno'] = df_archivos['longitud_metros'] * df_archivos['cantidad']
                 df_archivos['longitud_impresa'] = pd.to_numeric(df_archivos['longitud_impresa'], errors='coerce')
                 
                 # --- 3. VALORES POR DEFECTO ---
                 df_archivos['chk_impreso'] = df_archivos['estado_impresion'] == 'Impreso'
-                # Copiamos la longitud exacta del diseño si no hay una impresa registrada
-                df_archivos['longitud_impresa'] = df_archivos['longitud_impresa'].fillna(df_archivos['longitud_metros'])
+                # Copiamos la longitud TOTAL del diseño (incluyendo cantidad) si no hay una impresa registrada
+                df_archivos['longitud_impresa'] = df_archivos['longitud_impresa'].fillna(df_archivos['longitud_total_diseno'])
                 df_archivos['motivo_reimpresion'] = df_archivos['motivo_reimpresion'].fillna("")
 
                 # --- 4. CONFIGURAR TABLA INTERACTIVA ---
@@ -170,19 +180,21 @@ def render(supabase):
                     "nombre_archivo": st.column_config.TextColumn("Nombre Archivo", disabled=True),
                     "perfil_color": st.column_config.TextColumn("Perfil de Color", disabled=True),
                     "ancho_metros": st.column_config.NumberColumn("Ancho (m)", disabled=True, format="%.2f"),
-                    "longitud_metros": st.column_config.NumberColumn("Long. Diseño (m)", disabled=True, format="%.2f"),
+                    "longitud_metros": st.column_config.NumberColumn("Long. Unitaria (m)", disabled=True, format="%.2f"),
+                    
+                    # Agregamos Cantidad y Total Diseño
+                    "cantidad": st.column_config.NumberColumn("Cantidad", min_value=1, step=1),
+                    "longitud_total_diseno": st.column_config.NumberColumn("Total Diseño (m)", disabled=True, format="%.2f"),
+                    
                     "notas_disenador": st.column_config.TextColumn("Notas del Diseñador", disabled=True),
                     "chk_impreso": st.column_config.CheckboxColumn("¿Impreso?", default=False),
-                    
-                    # CORRECCIÓN AQUÍ: step=0.01 para que respete los dos decimales exactos
                     "longitud_impresa": st.column_config.NumberColumn("Long. Impresa Real (m)", min_value=0.0, format="%.2f", step=0.01),
-                    
                     "motivo_reimpresion": st.column_config.TextColumn("Motivo Desperdicio")
                 }
 
                 column_order = [
                     "chk_impreso", "nombre_archivo", "perfil_color", "ancho_metros", 
-                    "longitud_metros", "longitud_impresa", "motivo_reimpresion", "notas_disenador"
+                    "longitud_metros", "cantidad", "longitud_total_diseno", "longitud_impresa", "motivo_reimpresion", "notas_disenador"
                 ]
 
                 st.write("Edita la cantidad de papel real gastado y marca los archivos completados:")
@@ -198,7 +210,10 @@ def render(supabase):
 
                 # --- MÉTRICAS Y GUARDADO ---
                 col_met1, col_met2 = st.columns(2)
-                total_estimado = df_archivos['longitud_metros'].sum()
+                
+                # RECALCULAMOS totales en caso de que el impresor cambie la cantidad en vivo
+                df_editado['longitud_total_diseno'] = df_editado['longitud_metros'] * df_editado['cantidad']
+                total_estimado = df_editado['longitud_total_diseno'].sum()
                 total_real = df_editado['longitud_impresa'].sum()
                 
                 delta_color = "normal" if total_real <= total_estimado else "inverse"
@@ -208,7 +223,8 @@ def render(supabase):
                 if st.button("💾 Guardar Avances de Impresión", use_container_width=True):
                     errores_validacion = False
                     for _, fila in df_editado.iterrows():
-                        if fila['longitud_impresa'] > fila['longitud_metros'] and not str(fila['motivo_reimpresion']).strip():
+                        # Validamos contra el total calculado (unitaria x cantidad)
+                        if fila['longitud_impresa'] > fila['longitud_total_diseno'] and not str(fila['motivo_reimpresion']).strip():
                             st.error(f"El archivo '{fila['nombre_archivo']}' tiene un gasto extra de papel. Debes ingresar un 'Motivo Desperdicio'.")
                             errores_validacion = True
                     
@@ -219,9 +235,10 @@ def render(supabase):
                                     nuevo_estado_str = "Impreso" if fila['chk_impreso'] else "Pendiente"
                                     motivo_val = str(fila['motivo_reimpresion']).strip()
                                     
-                                    # Intentamos guardar (fallará si no has creado las columnas en supabase)
+                                    # ACTUALIZACIÓN BD: Incluimos 'cantidad' para que impacte el modulo de diseño
                                     supabase.table('archivos_impresion').update({
                                         "estado_impresion": nuevo_estado_str,
+                                        "cantidad": fila['cantidad'],
                                         "longitud_impresa": fila['longitud_impresa'],
                                         "motivo_reimpresion": motivo_val if motivo_val else None
                                     }).eq('id', fila['id']).execute()
@@ -229,7 +246,7 @@ def render(supabase):
                             st.success("✅ Avances guardados correctamente.")
                             st.rerun()
                         except Exception as e:
-                            st.error(f"❌ Error al guardar en base de datos. ¿Aseguraste de crear las columnas 'longitud_impresa' y 'motivo_reimpresion' en Supabase? Error: {str(e)}")
+                            st.error(f"❌ Error al guardar en base de datos. Error: {str(e)}")
 
                 st.markdown("<br><br>", unsafe_allow_html=True)
 
