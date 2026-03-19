@@ -174,6 +174,12 @@ def render(supabase):
                 df_archivos['longitud_impresa'] = df_archivos['longitud_impresa'].fillna(df_archivos['longitud_total_diseno'])
                 df_archivos['motivo_reimpresion'] = df_archivos['motivo_reimpresion'].fillna("")
 
+                # --- 3.5 SELECCIONAR TODOS ---
+                st.write("") # Espaciado
+                marcar_todos = st.checkbox("☑️ Marcar todos los archivos de la lista como 'Impresos'")
+                if marcar_todos:
+                    df_archivos['chk_impreso'] = True
+
                 # --- 4. CONFIGURAR TABLA INTERACTIVA ---
                 column_config = {
                     "id": None, "orden_id": None, "estado_impresion": None,
