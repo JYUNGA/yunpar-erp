@@ -326,29 +326,26 @@ def generar_comprobante_cliente(orden):
         y_actual = pdf.get_y()
         espacio_restante = 282 - y_actual
         
-        # Apagamos el salto automático momentáneamente para que FPDF no estorbe nuestros cálculos
-        pdf.set_auto_page_break(auto=False) 
-        
-        if espacio_restante >= 80:
+        if espacio_restante >= 70:
             # Opción A: Cabe en la hoja 1
             try:
-                pdf.image(url_imagen, x="CENTER", w=190, h=espacio_restante - 5, keep_aspect_ratio=True)
+                # TRUCO MAESTRO: Al pasarle 'y=y_actual', obligamos a FPDF a anclar la imagen
+                # como coordenada absoluta, impidiendo que decida saltar de hoja.
+                # También limitamos el alto máximo a 90mm para que no se vea gigante.
+                alto_imagen = min(espacio_restante - 5, 90)
+                pdf.image(url_imagen, x="CENTER", y=y_actual, w=190, h=alto_imagen, keep_aspect_ratio=True)
             except:
                 pdf.set_font("helvetica", "I", 9); pdf.cell(0, 10, "(Imagen no disponible)", align="C")
             necesita_nueva_hoja_anexo = True # La hoja 1 se llenó con la imagen, el anexo va a la hoja 2
         else:
-            # Opción B: No cabe en la hoja 1, forzamos la imagen a la hoja 2
+            # Opción B: No cabe en la hoja 1, la mandamos a la hoja 2
             pdf.add_page()
             try:
-                # Dibujamos en grande ya que estamos en una hoja nueva
-                pdf.image(url_imagen, x="CENTER", w=190, h=120, keep_aspect_ratio=True)
+                pdf.image(url_imagen, x="CENTER", w=190, h=110, keep_aspect_ratio=True)
                 pdf.set_y(pdf.get_y() + 5)
             except:
                 pass
             necesita_nueva_hoja_anexo = False # El anexo va en esta MISMA hoja 2, debajo de la imagen
-            
-        # Volvemos a encender la normalidad
-        pdf.set_auto_page_break(auto=True, margin=15) 
 
     elif url_imagen and not pagos:
         pdf.set_font("helvetica", "B", 10)
@@ -356,16 +353,18 @@ def generar_comprobante_cliente(orden):
         
         y_actual = pdf.get_y()
         espacio_restante = 282 - y_actual
-        pdf.set_auto_page_break(auto=False)
         
-        if espacio_restante >= 80:
-            try: pdf.image(url_imagen, x="CENTER", w=190, h=espacio_restante - 5, keep_aspect_ratio=True)
+        if espacio_restante >= 70:
+            try: 
+                # Hacemos el mismo anclaje de Y absoluto aquí
+                alto_imagen = min(espacio_restante - 5, 90)
+                pdf.image(url_imagen, x="CENTER", y=y_actual, w=190, h=alto_imagen, keep_aspect_ratio=True)
             except: pass
             necesita_nueva_hoja_anexo = True
         else:
             pdf.add_page()
             try: 
-                pdf.image(url_imagen, x="CENTER", w=190, h=120, keep_aspect_ratio=True)
+                pdf.image(url_imagen, x="CENTER", w=190, h=110, keep_aspect_ratio=True)
                 pdf.set_y(pdf.get_y() + 5)
             except: pass
             necesita_nueva_hoja_anexo = False
