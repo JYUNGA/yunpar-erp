@@ -318,13 +318,22 @@ def generar_comprobante_cliente(orden):
         # 3. Retomamos el flujo en el punto más bajo (sea la tabla o el texto de observaciones)
         pdf.set_y(max(y_after_table, y_after_obs) + 4)
         
-        # 4. Dibujamos la IMAGEN CENTRADA
+        # 4. Dibujamos la IMAGEN CENTRADA calculando el espacio restante
         pdf.set_font("helvetica", "B", 10)
         pdf.cell(0, 8, "Referencia de Diseño:", align="L", new_x="LMARGIN", new_y="NEXT")
         
         try:
-            # CORRECCIÓN: x="CENTER" alineará perfectamente la imagen en el medio de la hoja.
-            pdf.image(url_imagen, x="CENTER", w=190, h=105, keep_aspect_ratio=True)
+            # Calculamos dinámicamente el espacio sobrante en la hoja A4 (297mm)
+            # Dejamos unos 15mm de margen inferior de seguridad (297 - 15 = 282)
+            y_actual = pdf.get_y()
+            espacio_restante = 282 - y_actual
+            
+            # Por si acaso la tabla fue gigantesca, le damos un mínimo de supervivencia
+            if espacio_restante < 50:
+                espacio_restante = 80 
+                
+            # Pasamos 'h=espacio_restante'. FPDF2 usará esto como su caja delimitadora sin saltar.
+            pdf.image(url_imagen, x="CENTER", w=190, h=espacio_restante, keep_aspect_ratio=True)
         except:
             pdf.set_font("helvetica", "I", 9); pdf.cell(0, 10, "(Imagen no disponible)", align="C", new_x="LMARGIN", new_y="NEXT")
             
