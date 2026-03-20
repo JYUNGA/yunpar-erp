@@ -303,29 +303,28 @@ def generar_comprobante_cliente(orden):
         
         y_after_table = pdf.get_y()
         
-        # 2. Dibujamos las OBSERVACIONES a la DERECHA de la tabla
-        pdf.set_xy(105, start_y) # Movemos el cursor a la derecha
+        # 2. Dibujamos las OBSERVACIONES a la DERECHA de la tabla (Coordenadas Absolutas estrictas)
+        pdf.set_xy(110, start_y)
         pdf.set_font("helvetica", "B", 9)
-        pdf.cell(95, 6, "Observaciones de la Orden:", border=False, new_x="LMARGIN", new_y="NEXT")
-        pdf.set_xy(105, pdf.get_y())
-        pdf.set_font("helvetica", "", 8)
+        pdf.cell(85, 6, "Observaciones de la Orden:", border=False) # Eliminamos new_x/new_y para no resetear el cursor
         
+        pdf.set_xy(110, start_y + 6) # Bajamos 6mm manualmente para escribir el texto
+        pdf.set_font("helvetica", "", 8)
         observaciones = str(orden.get('observaciones_generales') or 'Ninguna').strip()
-        # multi_cell hará que el texto baje si es muy largo
-        pdf.multi_cell(95, 4, observaciones) 
+        pdf.multi_cell(85, 4, observaciones)
+        
         y_after_obs = pdf.get_y()
         
         # 3. Retomamos el flujo en el punto más bajo (sea la tabla o el texto de observaciones)
-        pdf.set_y(max(y_after_table, y_after_obs) + 2)
+        pdf.set_y(max(y_after_table, y_after_obs) + 4)
         
-        # 4. Dibujamos la IMAGEN forzando su inicio desde el margen izquierdo (x=10)
+        # 4. Dibujamos la IMAGEN CENTRADA
         pdf.set_font("helvetica", "B", 10)
         pdf.cell(0, 8, "Referencia de Diseño:", align="L", new_x="LMARGIN", new_y="NEXT")
         
         try:
-            # x=10 fuerza a que inicie bien a la izquierda, w=190 ocupa todo el ancho útil.
-            # Subimos la altura máxima a 105 para que tenga más libertad de escalar.
-            pdf.image(url_imagen, x=10, w=190, h=105, keep_aspect_ratio=True)
+            # CORRECCIÓN: x="CENTER" alineará perfectamente la imagen en el medio de la hoja.
+            pdf.image(url_imagen, x="CENTER", w=190, h=105, keep_aspect_ratio=True)
         except:
             pdf.set_font("helvetica", "I", 9); pdf.cell(0, 10, "(Imagen no disponible)", align="C", new_x="LMARGIN", new_y="NEXT")
             
