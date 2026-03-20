@@ -412,7 +412,7 @@ def generar_comprobante_cliente(orden):
         familia = item.get('familia_producto', 'GENERICO')
         especificaciones_crudas = item.get('especificaciones_producto', [])
         
-        # AGRUPACIÓN DE IDÉNTICOS PARA AHORRAR ESPACIO EN EL COMPROBANTE
+        # AGRUPACIÓN DE IDÉNTICOS PARA AHORRAR ESPACIO
         agrupadas = {}
         for esp in especificaciones_crudas:
             key = (
@@ -423,7 +423,7 @@ def generar_comprobante_cliente(orden):
                 str(esp.get('tipo_cuello_texto') or '').strip(),
                 str(esp.get('talla_polines') or '').strip(),
                 str(esp.get('observacion_individual') or '').strip(),
-                str(esp.get('acabado') or '').strip() # Añadimos acabado por si es un producto genérico (Ej: Banderas)
+                bool(esp.get('es_arquero', False)) # Añadimos el booleano para no mezclar arqueros con jugadores
             )
             if key not in agrupadas:
                 agrupadas[key] = {**esp, 'cant_fila': 1}
@@ -793,13 +793,13 @@ def generar_hoja_produccion(orden):
             for h in headers: row.cell(h)
                 
             for esp in especificaciones:
-                # LÓGICA CONDICIONAL: Detectar si es arquero para resaltar
-                # Verificamos si "ARQUERO" aparece en observaciones o en el texto del cuello
-                obs_limpia = str(esp.get('observacion_individual') or '').strip().upper()
-                cuello_limpia = str(esp.get('tipo_cuello_texto') or '').strip().upper()
+                # LÓGICA CONDICIONAL REAL: Leer el campo booleano 'es_arquero' de la BD
+                es_arquero_bd = esp.get('es_arquero', False)
                 
-                # Definimos qué estilo usar basándonos en la condición
-                if "ARQUERO" in obs_limpia or "ARQUERO" in cuello_limpia:
+                # Opcional: Mantenemos la búsqueda en texto por si alguna vez lo escriben en las observaciones y olvidan marcar el check
+                obs_limpia = str(esp.get('observacion_individual') or '').strip().upper()
+                
+                if es_arquero_bd or "ARQUERO" in obs_limpia:
                     estilo_fila_actual = estilo_datos_arquero
                 else:
                     estilo_fila_actual = estilo_datos_taller
