@@ -219,7 +219,7 @@ def generar_comprobante_cliente(orden):
     creador = orden.get('creador', 'No registrado')
     disenador = orden.get('disenador_asignado', 'No asignado')
 
-    ancho_etiqueta1 = 27; ancho_valor1 = 70; ancho_etiqueta2 = 31 
+    ancho_etiqueta1 = 27; ancho_valor1 = 75; ancho_etiqueta2 = 31 # Aumentamos 5mm al ancho_valor1 para separar la columna 
     
     pdf.cell(ancho_etiqueta1, 6, "Cliente:", border=False); pdf.set_font("helvetica", "", 10)
     pdf.cell(ancho_valor1, 6, f"{nombre_cliente}", border=False); pdf.set_font("helvetica", "B", 10)
@@ -282,26 +282,14 @@ def generar_comprobante_cliente(orden):
     
     if url_imagen and pagos:
         pdf.set_font("helvetica", "B", 10)
-        pdf.cell(0, 8, "Referencia de Diseño e Historial de Pagos:", align="L", new_x="LMARGIN", new_y="NEXT")
-        start_y = pdf.get_y()
+        pdf.cell(0, 8, "Historial de Pagos y Referencia de Diseño:", align="L", new_x="LMARGIN", new_y="NEXT")
         
-        # 1. Dibujamos la imagen a la izquierda primero
-        try:
-            pdf.image(url_imagen, x=10, y=start_y, w=100)
-            end_image_y = pdf.get_y()
-        except:
-            pdf.set_xy(10, start_y)
-            pdf.set_font("helvetica", "I", 9); pdf.cell(100, 10, "(Imagen no disponible)")
-            end_image_y = pdf.get_y()
-            
-        # 2. Volvemos al punto 'start_y' y dibujamos la tabla usando los atributos nativos de ancho y alineación
-        pdf.set_y(start_y)
+        # 1. Dibujamos la tabla de pagos arriba, alineada a la izquierda (manteniendo el ancho compacto de 85)
         pdf.set_font("helvetica", "", 8)
         estilo_cabecera_pagos = FontFace(fill_color=(0, 51, 153), color=(255, 255, 255), emphasis="B")
         estilo_datos_pagos = FontFace(fill_color=(255, 255, 255), color=(0, 0, 0), emphasis="")
         
-        # Definimos width explícito y align="RIGHT" para evitar que se desborde o deforme
-        with pdf.table(width=85, align="RIGHT", col_widths=(20, 45, 20), text_align=("CENTER", "LEFT", "RIGHT")) as t_pagos:
+        with pdf.table(width=85, align="LEFT", col_widths=(20, 45, 20), text_align=("CENTER", "LEFT", "RIGHT")) as t_pagos:
             row = t_pagos.row(style=estilo_cabecera_pagos)
             for h in ["Fecha", "Banco/Método", "Monto"]: row.cell(h)
             for p in pagos:
@@ -311,10 +299,16 @@ def generar_comprobante_cliente(orden):
                 banco = p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo'
                 row.cell(f_pago); row.cell(str(banco)[:20]); row.cell(f"${float(p.get('monto', 0)):.2f}")
                 
-        end_table_y = pdf.get_y()
+        pdf.ln(5) # Espacio de respiración entre tabla e imagen
         
-        # 3. Retomamos el flujo normal debajo del elemento más largo
-        pdf.set_y(max(end_table_y, end_image_y) + 5)
+        # 2. Dibujamos la imagen abajo, ocupando TODO el ancho de la hoja (w=190)
+        try:
+            # Le pongo un límite de altura (h=130) por si la imagen es vertical, para que no salte de página innecesariamente
+            pdf.image(url_imagen, w=190, h=130, keep_aspect_ratio=True, x="CENTER")
+        except:
+            pdf.set_font("helvetica", "I", 9); pdf.cell(0, 10, "(Imagen no disponible)", align="C", new_x="LMARGIN", new_y="NEXT")
+            
+        pdf.ln(5)
         
     elif url_imagen and not pagos:
         pdf.set_font("helvetica", "B", 10)
