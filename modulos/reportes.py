@@ -264,9 +264,9 @@ def generar_comprobante_cliente(orden):
     pdf.set_x(x_offset); pdf.cell(25, 5, "Total:", align="R"); pdf.cell(20, 5, f"${orden.get('total_estimado', 0):.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
     pdf.set_x(x_offset); pdf.cell(25, 5, "Abono:", align="R"); pdf.cell(20, 5, f"${orden.get('abono_inicial', 0):.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
     pdf.set_x(x_offset); pdf.cell(25, 5, "Saldo:", align="R"); pdf.set_text_color(200, 0, 0) 
-    pdf.cell(20, 5, f"${orden.get('saldo_pendiente', 0):.2f}", align="R", new_x="LMARGIN", new_y="NEXT"); pdf.set_text_color(0, 0, 0)
+    pdf.cell(20, 5, f"${orden.get('saldo_pendiente', 0):.2f}", align="R", new_x="LMARGIN", new_y="NEXT"); pdf.set_text_color(0, 0, 0) 
     
-    pdf.ln(10)
+    pdf.ln(2) # Reducido de 10 a 2 para pegar la tabla de pagos hacia arriba
     # --- 1. LÓGICA ESTRICTA DE PRIORIDAD DE IMÁGENES ---
     arte = str(orden.get('url_arte_final') or '').strip()
     boceto = str(orden.get('url_boceto_vendedora') or '').strip()
@@ -299,12 +299,12 @@ def generar_comprobante_cliente(orden):
                 banco = p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo'
                 row.cell(f_pago); row.cell(str(banco)[:20]); row.cell(f"${float(p.get('monto', 0)):.2f}")
                 
-        pdf.ln(5) # Espacio de respiración entre tabla e imagen
+        pdf.ln(2) # Reducimos también este espacio de respiración
         
         # 2. Dibujamos la imagen abajo, ocupando TODO el ancho de la hoja (w=190)
         try:
-            # Le pongo un límite de altura (h=130) por si la imagen es vertical, para que no salte de página innecesariamente
-            pdf.image(url_imagen, w=190, h=130, keep_aspect_ratio=True, x="CENTER")
+            # Reducimos el límite de altura a 90 para garantizar que FPDF no salte a la siguiente hoja
+            pdf.image(url_imagen, w=190, h=90, keep_aspect_ratio=True, x="CENTER")
         except:
             pdf.set_font("helvetica", "I", 9); pdf.cell(0, 10, "(Imagen no disponible)", align="C", new_x="LMARGIN", new_y="NEXT")
             
@@ -354,12 +354,13 @@ def generar_comprobante_cliente(orden):
         
         if familia in ['UNIFORME COMPLETO', 'PRENDA SUPERIOR']:
             especificaciones.sort(key=lambda x: (orden_talla(x.get('talla_superior')), orden_talla(x.get('talla_inferior'))))
-        elif familia == 'PANTALONETA':
+        if familia == 'PANTALONETA':
             especificaciones.sort(key=lambda x: orden_talla(x.get('talla_inferior')))
 
-        pdf.set_font("helvetica", "B", 10); pdf.set_fill_color(230, 230, 230)
-        titulo_prod = f" PRODUCTO: {nombre_prod}   |   CANTIDAD TOTAL: {item.get('cantidad_total', 0)}\n TELA: {tela}"
-        pdf.multi_cell(0, 6, titulo_prod, border=1, fill=True, align="L")
+        # Letra más pequeña (8) y unimos todo en una sola línea horizontal
+        pdf.set_font("helvetica", "B", 8); pdf.set_fill_color(230, 230, 230)
+        titulo_prod = f" PRODUCTO: {nombre_prod}   |   CANTIDAD: {item.get('cantidad_total', 0)}   |   TELA: {tela}"
+        pdf.multi_cell(0, 5, titulo_prod, border=1, fill=True, align="L")
 
         if not especificaciones:
             pdf.set_font("helvetica", "I", 9); pdf.cell(0, 8, "  Sin lista de detalles para este producto.", border=1, new_x="LMARGIN", new_y="NEXT"); pdf.ln(5)
