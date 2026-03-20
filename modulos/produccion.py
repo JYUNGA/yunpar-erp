@@ -737,7 +737,7 @@ def render(supabase):
                 with st.expander(titulo_item, expanded=False):
                     df_resumen = pd.DataFrame(it['detalles'])
                     
-                    # 1. Renombrar TODAS las columnas para que se vean profesionales (sin guiones bajos)
+                    # 1. Renombrar columnas
                     renombres = {
                         "_cantidad_manual": "Cant.",
                         "talla_superior": "T. Sup",
@@ -757,7 +757,7 @@ def render(supabase):
                     }
                     df_resumen = df_resumen.rename(columns=renombres)
                     
-                    # 2. Filtrar columnas según familia (Forzamos mayúsculas exactas para evitar fallos)
+                    # 2. Filtrar columnas según familia
                     fam_resumen = str(it.get('familia', 'GENERICO')).strip().upper()
                     cols_permitidas = ["Cant."] 
                     
@@ -774,11 +774,17 @@ def render(supabase):
                         
                     cols_permitidas.append("Obs.")
                     
-                    # 3. Aplicar el filtro final (solo deja pasar las columnas que existen en el df)
+                    # 3. Aplicar el filtro base
                     cols_finales = [c for c in cols_permitidas if c in df_resumen.columns]
-                    df_resumen_filtrado = df_resumen[cols_finales]
+                    df_resumen_filtrado = df_resumen[cols_finales].copy()
                     
-                    # 4. Renderizamos el dataframe ya bonito y filtrado
+                    # 4. SUPER FILTRO: Eliminar columnas 100% vacías (Evita errores de UI en Streamlit)
+                    # Convertimos textos vacíos y cadenas 'None' a verdaderos nulos para que dropna los detecte
+                    df_resumen_filtrado = df_resumen_filtrado.replace(["", "None", "NaN", "nan", None], pd.NA)
+                    df_resumen_filtrado = df_resumen_filtrado.dropna(axis=1, how='all')
+                    df_resumen_filtrado = df_resumen_filtrado.fillna("") # Devolvemos a texto limpio
+                    
+                    # 5. Renderizamos el dataframe ya bonito, filtrado y pulido
                     st.dataframe(df_resumen_filtrado, use_container_width=True)
                     
                     col_edit, col_del = st.columns([1, 5])
