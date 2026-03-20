@@ -410,7 +410,27 @@ def generar_comprobante_cliente(orden):
         nombre_prod = str(item.get('nombre_producto', 'Producto')).replace('│', '|').replace('—', '-')
         tela = item.get('nombre_tela', 'Estándar')
         familia = item.get('familia_producto', 'GENERICO')
-        especificaciones = item.get('especificaciones_producto', [])
+        especificaciones_crudas = item.get('especificaciones_producto', [])
+        
+        # AGRUPACIÓN DE IDÉNTICOS PARA AHORRAR ESPACIO EN EL COMPROBANTE
+        agrupadas = {}
+        for esp in especificaciones_crudas:
+            key = (
+                str(esp.get('talla_superior') or '').strip(),
+                str(esp.get('talla_inferior') or '').strip(),
+                str(esp.get('nombre_jugador') or '').strip(),
+                str(esp.get('numero_dorsal') or '').strip(),
+                str(esp.get('tipo_cuello_texto') or '').strip(),
+                str(esp.get('talla_polines') or '').strip(),
+                str(esp.get('observacion_individual') or '').strip(),
+                str(esp.get('acabado') or '').strip() # Añadimos acabado por si es un producto genérico (Ej: Banderas)
+            )
+            if key not in agrupadas:
+                agrupadas[key] = {**esp, 'cant_fila': 1}
+            else:
+                agrupadas[key]['cant_fila'] += 1
+        
+        especificaciones = list(agrupadas.values())
         
         if familia in ['UNIFORME COMPLETO', 'PRENDA SUPERIOR']:
             especificaciones.sort(key=lambda x: (orden_talla(x.get('talla_superior')), orden_talla(x.get('talla_inferior'))))
@@ -445,7 +465,7 @@ def generar_comprobante_cliente(orden):
             for h in headers: row.cell(h)
             for esp in especificaciones:
                 row = t_anexo.row(style=estilo_datos_anexo)
-                cant = "1"
+                cant = str(esp.get('cant_fila', 1)) # <--- REEMPLAZAMOS EL "1" FIJO POR EL VALOR CALCULADO DINÁMICAMENTE
                 talla_s = str(esp.get('talla_superior') or '').strip() or '-'
                 talla_i = str(esp.get('talla_inferior') or '').strip() or '-'
                 nom = str(esp.get('nombre_jugador') or '').strip()
