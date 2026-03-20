@@ -84,13 +84,18 @@ if not df_todas.empty:
             if c_del.button(f"🗑️ Eliminar Orden {cod_on}", type="secondary", use_container_width=True):
                 try:
                     # 1. Devolución de dinero y protección de historial financiero
-                    abono = row_seleccionada.get('abono_inicial')
-                    abono = float(abono) if pd.notna(abono) and abono else 0.0
+                    try:
+                        abono = float(row_seleccionada.get('abono_inicial', 0))
+                    except:
+                        abono = 0.0
                     
                     if abono > 0:
-                        # Insertamos la devolución SIN amarrarla a la orden (para evitar error FK), 
-                        # pero la amarramos al cliente para que cuadren las cuentas.
-                        cliente_id_val = int(row_seleccionada['cliente_id']) if pd.notna(row_seleccionada.get('cliente_id')) else None
+                        # Insertamos la devolución SIN amarrarla a la orden (evita error FK), 
+                        # pero la amarramos al cliente.
+                        try:
+                            cliente_id_val = int(row_seleccionada['cliente_id'])
+                        except:
+                            cliente_id_val = None
                         
                         supabase.table('pagos').insert({
                             "orden_id": None, 
@@ -101,7 +106,7 @@ if not df_todas.empty:
                             "numero_referencia": f"Devolución Orden Eliminada {cod_on}"
                         }).execute()
                     
-                    # 2. Desvincular pagos históricos existentes para no perderlos en finanzas
+                    # 2. Desvincular pagos históricos existentes
                     supabase.table('pagos').update({"orden_id": None}).eq('orden_id', id_s).execute()
 
                     # 3. BORRAR IMÁGENES DE LA NUBE
@@ -109,15 +114,12 @@ if not df_todas.empty:
                     borrar_img(supabase, row_seleccionada.get('url_arte_final'))
                     
                     # 4. BORRAR DATOS EN CASCADA ESTRICTA
-                    # A) Identificar items
                     items_actuales = supabase.table('items_orden').select('id').eq('orden_id', id_s).execute().data
                     ids_items = [item['id'] for item in items_actuales]
                     
-                    # B) Borrar hijos (Especificaciones)
                     if ids_items:
                         supabase.table('especificaciones_producto').delete().in_('item_orden_id', ids_items).execute()
                     
-                    # C) Borrar padres (Items y Orden)
                     supabase.table('items_orden').delete().eq('orden_id', id_s).execute()
                     supabase.table('ordenes').delete().eq('id', id_s).execute()
                     
