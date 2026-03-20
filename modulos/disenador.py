@@ -334,8 +334,16 @@ def render(supabase):
                     'ID_Esp': lambda x: [i for i in x if pd.notna(i)]
                 }).rename(columns={'Producto': 'Cant.', 'ID_Esp': 'IDs'}).reset_index()
                 
-                # Reordenamos columnas (Checkbox 'Terminado' va primero)
-                cols = ['Terminado', 'Orden', 'Cliente', 'Cant.'] + [c for c in df_agrupado.columns if c not in ['Terminado', 'Orden', 'Cliente', 'Cant.', 'Tipo', 'ID_Esp', 'IDs']]
+                # Reordenamos columnas base
+                cols = ['Orden', 'Cliente', 'Cant.'] + [c for c in df_agrupado.columns if c not in ['Terminado', 'Orden', 'Cliente', 'Cant.', 'Tipo', 'ID_Esp', 'IDs']]
+                
+                # Ubicamos 'Dorsal' e insertamos 'Terminado' (el checkbox) justo a su derecha
+                if 'Dorsal' in cols:
+                    idx_dorsal = cols.index('Dorsal')
+                    cols.insert(idx_dorsal + 1, 'Terminado')
+                else:
+                    cols.append('Terminado')
+                    
                 df_mostrar = df_agrupado[cols]
                 df_mostrar['IDs'] = df_agrupado['IDs'] # Agregamos la columna oculta de IDs
                 
