@@ -785,7 +785,16 @@ def render(supabase):
                     df_resumen_filtrado = df_resumen_filtrado.fillna("") # Devolvemos a texto limpio
                     
                     # 5. Renderizamos el dataframe ya bonito, filtrado y pulido
-                    st.dataframe(df_resumen_filtrado, use_container_width=True)
+                    # --- NUEVO: RESALTADO AMARILLO PARA ARQUEROS ---
+                    def resaltar_arquero(row):
+                        # Si la columna existe y la casilla está marcada (True)
+                        if '¿Arq?' in row.index and row['¿Arq?'] == True:
+                            return ['background-color: #FFF2CC; color: black'] * len(row) # Amarillo suave
+                        return [''] * len(row)
+                        
+                    # Aplicamos el estilo al dataframe antes de renderizarlo
+                    df_estilizado = df_resumen_filtrado.style.apply(resaltar_arquero, axis=1)
+                    st.dataframe(df_estilizado, use_container_width=True)
                     
                     col_edit, col_del = st.columns([1, 5])
                     
@@ -843,30 +852,53 @@ def render(supabase):
                         st.rerun()
 
             
-            # Totales y Guardado Final
-            st.metric("Total Orden", f"${tot:.2f}")
+            # ==========================================
+            # SECCIÓN FINANZAS Y OBSERVACIONES
+            # ==========================================
+            st.divider()
+            c_fin, c_obs = st.columns([1.5, 2])
             
-            c_abo, c_obs = st.columns([1, 2])
-            
-            # Bloquear el input de abono si es una edición
             es_edicion_ui = True if st.session_state.get('editando_orden_id') else False
             
-            mnt = c_abo.number_input(
-                "Abono Inicial ($)", 
-                value=0.0, 
-                disabled=es_edicion_ui, 
-                help="Los pagos adicionales deben registrarse desde el módulo de Finanzas." if es_edicion_ui else ""
-            )
+            with c_fin:
+                st.markdown("### 💰 Finanzas de la Orden")
+                
+                mnt = st.number_input(
+                    "Abono Inicial ($)", 
+                    value=0.0, 
+                    max_value=float(tot),
+                    disabled=es_edicion_ui, 
+                    help="Los pagos adicionales deben registrarse desde el módulo de Finanzas." if es_edicion_ui else ""
+                )
+                
+                # Etiquetas de Total y Saldo dinámicas
+                saldo_restante = tot - mnt
+                col_t, col_s = st.columns(2)
+                col_t.metric("Total Orden", f"${tot:.2f}")
+                col_s.metric("Saldo Pendiente", f"${saldo_restante:.2f}")
 
-            # SOLUCIÓN ERROR CRÍTICO: Recuperamos observaciones del estado si existen
-            val_obs = st.session_state.get('editando_obs_g', "")
-            
-            obs_g = c_obs.text_area(
-                "Observaciones Generales de la Orden", 
-                value=val_obs, 
-                placeholder="Escriba aquí cualquier nota general para producción..."
-            )
+                # --- NUEVO: DETALLES DEL PAGO ---
+                metodo_pago = "Efectivo"
+                banco_destino = None
+                num_ref = None
+                
+                # Solo pedir datos bancarios si hay dinero de por medio y es una orden nueva
+                if mnt > 0 and not es_edicion_ui:
+                    metodo_pago = st.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Depósito", "Tarjeta"])
+                    if metodo_pago in ["Transferencia", "Depósito"]:
+                        b_col1, b_col2 = st.columns(2)
+                        banco_destino = b_col1.selectbox("Banco Destino", ["Pichincha", "Guayaquil", "Pacífico", "Produbanco", "Bolivariano", "Otro"])
+                        num_ref = b_col2.text_input("Núm. Comprobante / Ref.")
 
+            with c_obs:
+                st.markdown("### 📝 Notas")
+                val_obs = st.session_state.get('editando_obs_g', "")
+                obs_g = st.text_area(
+                    "Observaciones Generales de la Orden", 
+                    value=val_obs, 
+                    height=240, # Más alto para que cuadre con los inputs de la izquierda
+                    placeholder="Escriba aquí cualquier nota general para producción..."
+                )
             # Lógica de bloqueo si es domingo
             btn_disabled = True if (locals().get('es_domingo')) else False 
 
@@ -936,7 +968,9 @@ def render(supabase):
                             supabase.table('pagos').insert({
                                 "orden_id": id_o,
                                 "monto": mnt,
-                                "metodo_pago": "Efectivo", # Por defecto, o puedes agregar un selector en la UI
+                                "metodo_pago": metodo_pago, 
+                                "banco_destino": banco_destino,
+                                "numero_referencia": num_ref,
                                 "fecha_pago": fecha_final
                             }).execute()
 
