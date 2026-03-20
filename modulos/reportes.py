@@ -727,6 +727,9 @@ def generar_hoja_produccion(orden):
 
     estilo_cabecera_taller = FontFace(fill_color=(50, 50, 50), color=(255, 255, 255), emphasis="B")
     estilo_datos_taller = FontFace(fill_color=(255, 255, 255), color=(0, 0, 0), emphasis="")
+    
+    # NUEVO ESTILO: Resaltado amarillo soft para arqueros (fill amarillo, texto negro)
+    estilo_datos_arquero = FontFace(fill_color=(255, 255, 102), color=(0, 0, 0), emphasis="") 
 
     for item in items_taller:
         familia = item.get('familia_producto', 'GENERICO').upper()
@@ -790,7 +793,19 @@ def generar_hoja_produccion(orden):
             for h in headers: row.cell(h)
                 
             for esp in especificaciones:
-                row = table.row(style=estilo_datos_taller)
+                # LÓGICA CONDICIONAL: Detectar si es arquero para resaltar
+                # Verificamos si "ARQUERO" aparece en observaciones o en el texto del cuello
+                obs_limpia = str(esp.get('observacion_individual') or '').strip().upper()
+                cuello_limpia = str(esp.get('tipo_cuello_texto') or '').strip().upper()
+                
+                # Definimos qué estilo usar basándonos en la condición
+                if "ARQUERO" in obs_limpia or "ARQUERO" in cuello_limpia:
+                    estilo_fila_actual = estilo_datos_arquero
+                else:
+                    estilo_fila_actual = estilo_datos_taller
+                
+                # Aplicamos el estilo condicional a la fila entera
+                row = table.row(style=estilo_fila_actual)
                 c_fila = str(esp.get('cant_fila', 1))
                 
                 if familia == 'UNIFORME COMPLETO':
