@@ -132,7 +132,8 @@ def obtener_datos_orden(supabase_client, busqueda):
 
 def buscar_lista_ordenes(supabase_client, codigo="", cliente="", fechas=None):
     try:
-        query = supabase_client.table('ordenes').select('codigo_orden, estado, fecha_entrega, total_estimado, cliente_id, created_at')
+        # Añadimos saldo_pendiente a la consulta principal
+        query = supabase_client.table('ordenes').select('codigo_orden, estado, fecha_entrega, total_estimado, cliente_id, created_at, saldo_pendiente')
         if codigo: query = query.ilike('codigo_orden', f'%{codigo.strip()}%')
         if fechas and len(fechas) == 2:
             inicio = fechas[0].strftime("%Y-%m-%d")
@@ -157,9 +158,10 @@ def buscar_lista_ordenes(supabase_client, codigo="", cliente="", fechas=None):
             lista_limpia.append({
                 "Código": d.get('codigo_orden'),
                 "Cliente": nom_cli,
-                "Estado": d.get('estado'),
+                "Estado": d.get('estado', 'N/A'),
                 "Entrega": d.get('fecha_entrega'),
-                "Total": f"${d.get('total_estimado', 0):.2f}"
+                "Total": f"${d.get('total_estimado', 0):.2f}",
+                "Saldo_Num": float(d.get('saldo_pendiente', 0)) # Campo oculto que usaremos para la lógica
             })
         return lista_limpia
     except: return []
@@ -996,30 +998,64 @@ def render_modulo_reportes(supabase_client):
 
     st.subheader("📚 Repositorio de Órdenes")
     if st.session_state.lista_ordenes:
-        st.caption("📌 **Selecciona cualquier orden de la lista para ver su detalle y generar los PDFs:**")
-        df_resultados = pd.DataFrame(st.session_state.lista_ordenes)
+        df_todas = pd.DataFrame(st.session_state.lista_ordenes)
         
-        evento = st.dataframe(
-            df_resultados, use_container_width=True, hide_index=True,
-            on_select="rerun", selection_mode="single-row"  
-        )
+        # --- 1. LÓGICA DE DIVISION DE GRUPOS ---
+        # GRUPO 3 (Entregadas): Saldo es cero o menor
+        df_pagadas = df_todas[df_todas["Saldo_Num"] <= 0].copy()
         
-        if len(evento.selection.rows) > 0:
-            indice_seleccionado = evento.selection.rows[0]
-            codigo_seleccionado = df_resultados.iloc[indice_seleccionado]["Código"]
+        # GRUPO 1 (Nuevas): Saldo > 0 Y Estado es PENDIENTE DISEÑO o EN DISEÑO
+        estados_nuevas = ["PENDIENTE DISEÑO", "EN DISEÑO"]
+        df_nuevas = df_todas[(df_todas["Saldo_Num"] > 0) & (df_todas["Estado"].str.upper().isin(estados_nuevas))].copy()
+        
+        # GRUPO 2 (En Proceso): Saldo > 0 Y Estado ya fue tomado por alguien
+        df_proceso = df_todas[(df_todas["Saldo_Num"] > 0) & (~df_todas["Estado"].str.upper().isin(estados_nuevas))].copy()
+        
+        # Quitamos la columna oculta "Saldo_Num" para que no estorbe visualmente al usuario
+        df_nuevas = df_nuevas.drop(columns=["Saldo_Num"])
+        df_proceso = df_proceso.drop(columns=["Saldo_Num"])
+        df_pagadas = df_pagadas.drop(columns=["Saldo_Num"])
+
+        st.caption("📌 **Navega por las pestañas y selecciona cualquier orden para ver su detalle y generar PDFs:**")
+        
+        # --- 2. RENDER DE PESTAÑAS (TABS) ---
+        tab1, tab2, tab3 = st.tabs([
+            f"🆕 Nuevas ({len(df_nuevas)})", 
+            f"⚙️ En Proceso ({len(df_proceso)})", 
+            f"✅ Entregadas / Pagadas ({len(df_pagadas)})"
+        ])
+        
+        with tab1:
+            evt1 = st.dataframe(df_nuevas, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="evt_nuevas")
+        with tab2:
+            evt2 = st.dataframe(df_proceso, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="evt_proceso")
+        with tab3:
+            evt3 = st.dataframe(df_pagadas, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="evt_pagadas")
             
+        # --- 3. LÓGICA DE SELECCIÓN GLOBAL ---
+        codigo_seleccionado = None
+        
+        # Verificamos de cuál de las 3 tablas el usuario hizo clic
+        if len(evt1.selection.rows) > 0:
+            codigo_seleccionado = df_nuevas.iloc[evt1.selection.rows[0]]["Código"]
+        elif len(evt2.selection.rows) > 0:
+            codigo_seleccionado = df_proceso.iloc[evt2.selection.rows[0]]["Código"]
+        elif len(evt3.selection.rows) > 0:
+            codigo_seleccionado = df_pagadas.iloc[evt3.selection.rows[0]]["Código"]
+
+        if codigo_seleccionado:
             if not st.session_state.orden_actual or st.session_state.orden_actual['codigo_orden'] != codigo_seleccionado:
                 with st.spinner(f"Cargando detalle de {codigo_seleccionado}..."):
                     datos = obtener_datos_orden(supabase_client, codigo_seleccionado)
                     st.session_state.orden_actual = datos
                     st.rerun() 
         else:
-            # NUEVO: Si desmarcan la fila, limpiamos la vista previa
             if st.session_state.orden_actual is not None:
                 st.session_state.orden_actual = None
                 st.rerun()
                 
-    else: st.info("No hay órdenes registradas o no se encontraron coincidencias con los filtros.")
+    else: 
+        st.info("No hay órdenes registradas o no se encontraron coincidencias con los filtros.")
         
     st.divider()
 
