@@ -747,7 +747,30 @@ def render(supabase):
                     }
                     df_resumen = df_resumen.rename(columns=renombres)
                     
-                    st.dataframe(df_resumen, use_container_width=True)
+                    # --- NUEVO: FILTRO DINÁMICO DE COLUMNAS SEGÚN FAMILIA ---
+                    fam_resumen = it.get('familia', 'GENERICO')
+                    cols_permitidas = ["Cant."] # La cantidad siempre se muestra
+                    
+                    # Agregamos solo las columnas relevantes según la familia
+                    if fam_resumen == "UNIFORME COMPLETO":
+                        cols_permitidas.extend(["T. Sup", "T. Inf", "nombre_jugador", "numero_dorsal", "talla_polines", "color_polines", "es_arquero", "genero", "Cuello"])
+                    elif fam_resumen == "PRENDA SUPERIOR":
+                        cols_permitidas.extend(["T. Sup", "nombre_jugador", "numero_dorsal", "es_arquero", "genero", "Cuello"])
+                    elif fam_resumen == "PANTALONETA":
+                        cols_permitidas.extend(["T. Inf", "numero_dorsal"])
+                    elif fam_resumen == "IMPRESION":
+                        cols_permitidas.extend(["ancho_cm", "alto_cm", "acabado", "calandra_si_no"])
+                    elif fam_resumen == "GENERICO":
+                        cols_permitidas.extend(["acabado"])
+                        
+                    cols_permitidas.append("Obs.") # La observación siempre se muestra al final
+                    
+                    # Interceptar solo las columnas que realmente existen en el dataframe para evitar errores
+                    cols_finales = [c for c in cols_permitidas if c in df_resumen.columns]
+                    df_resumen_filtrado = df_resumen[cols_finales]
+                    
+                    # Renderizamos el dataframe ya filtrado
+                    st.dataframe(df_resumen_filtrado, use_container_width=True)
                     
                     col_edit, col_del = st.columns([1, 5])
                     
