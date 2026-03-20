@@ -1,168 +1,136 @@
-import streamlit as st
-import pandas as pd
-import datetime
-import time
-import uuid
-import requests
-import os
-
-
-# ==============================================================================
-# GRUPO A: FUNCIONES AUXILIARES Y UTILIDADES
-# ==============================================================================
-
-def subir_img(supabase, archivo_streamlit, carpeta="bocetos"):
-    try:
-        # CORRECCIÓN: Extraemos los bytes crudos del objeto de Streamlit
-        file_bytes = archivo_streamlit.getvalue()
-        
-        # Generamos un nombre único
-        nombre = f"{carpeta}/{int(time.time())}_{uuid.uuid4()}.jpg"
-        
-        # Subimos los BYTES, no el objeto
-        supabase.storage.from_("ordenes_produccion").upload(
-            path=nombre, 
-            file=file_bytes, 
-            file_options={"content-type": "image/jpeg"}
-        )
-        
-        return supabase.storage.from_("ordenes_produccion").get_public_url(nombre)
-    except Exception as e: 
-        st.error(f"Error subida imagen: {e}")
-        return None
-
-def cod_ord(supabase):
-    try:
-        # 1. Traemos todos los códigos existentes
-        res = supabase.table('ordenes').select("codigo_orden").execute()
-        codigos = [d['codigo_orden'] for d in res.data if d.get('codigo_orden')]
-        
-        # 2. DEFINIMOS TU NÚMERO BASE HISTÓRICO
-        max_num = 6404  # <--- CAMBIO AQUÍ: Ponemos 6404 para que la próxima sea 6405
-        
-        # 3. Buscamos cuál es el número más alto real en la base de datos
-        for c in codigos:
-            partes = c.split('-') # Separa "ORD" de "6405"
-            if len(partes) == 2 and partes[1].isdigit():
-                num = int(partes[1])
-                if num > max_num:
-                    max_num = num
-        
-        # 4. Sumamos 1 al máximo encontrado
-        return f"ORD-{str(max_num + 1).zfill(4)}"
-        
-    except Exception as e: 
-        return "ORD-6405" # <--- CAMBIO AQUÍ: Respaldo en caso de que falle la red
-
-def limpiar_texto_pdf(texto):
-    if not texto: return ""
-    reemplazos = {"│": "|", "–": "-", "“": '"', "”": '"', "’": "'", "‘": "'", "Ñ": "N", "ñ": "n", "°": " degrees", "á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u"}
-    t = str(texto)
-    for k, v in reemplazos.items(): t = t.replace(k, v)
-    return t.encode('latin-1', 'replace').decode('latin-1')
-
-def borrar_img(supabase, url_archivo):
-    """Borra un archivo del bucket de Supabase usando su URL pública"""
-    if not url_archivo: return
-    try:
-        # La URL suele ser: .../storage/v1/object/public/ordenes_produccion/carpeta/archivo.jpg
-        # Necesitamos extraer: carpeta/archivo.jpg
-        ruta_relativa = url_archivo.split("/ordenes_produccion/")[-1]
-        supabase.storage.from_("ordenes_produccion").remove([ruta_relativa])
-    except Exception as e:
-        print(f"No se pudo borrar imagen antigua: {e}")
-
-
-
-# ==============================================================================
-# GRUPO C: LÓGICA PRINCIPAL (RENDER)
-# ==============================================================================
-
-def render(supabase):
-    st.title("🏭 Producción y Órdenes")
-
-    # --- INICIALIZACIÓN DE ESTADOS ---
-    if 'vista_prod' not in st.session_state: st.session_state['vista_prod'] = "LISTA"
-    if 'prod_items' not in st.session_state: st.session_state['prod_items'] = []
-    if 'form_data_cache' not in st.session_state: st.session_state['form_data_cache'] = None
-    if 'reset_matrix_key' not in st.session_state: st.session_state['reset_matrix_key'] = 0
-    if 'url_boceto_view' not in st.session_state: st.session_state['url_boceto_view'] = None
-    if 'url_diseno_view' not in st.session_state: st.session_state['url_diseno_view'] = None
-    if 'editando_cliente_id' not in st.session_state: st.session_state['editando_cliente_id'] = None
-    if 'editando_orden_id' not in st.session_state: st.session_state['editando_orden_id'] = None
-    if 'editando_orden_cod' not in st.session_state: st.session_state['editando_orden_cod'] = None
-
-    # --------------------------------------------------------------------------
-    # C.1: VISTA 1 - TABLERO DE ÓRDENES (LISTA)
-    # --------------------------------------------------------------------------
-    if st.session_state['vista_prod'] == "LISTA":
-        st.subheader("Tablero de Producción")
-        c_new, c_fil = st.columns([1, 3])
-        
-        # --- BOTÓN NUEVA ORDEN (Inicializa fecha a Hoy) ---
-        if c_new.button("➕ NUEVA ORDEN", type="primary", use_container_width=True):
-            st.session_state['editando_orden_id'] = None
-            st.session_state['prod_items'] = []
-            st.session_state['url_boceto_view'] = None
-            st.session_state['url_diseno_view'] = None
-            st.session_state['editando_cliente_id'] = None
-            # Inicializamos fecha de entrega en Hoy
-            st.session_state['fecha_entrega_edit'] = datetime.date.today() 
-            st.session_state['vista_prod'] = "EDITOR"
-            st.rerun()
-
-        with st.container(border=True):
-            c1, c2, c3 = st.columns([2, 1, 1])
-            txt_bus = c1.text_input("Buscar", placeholder="Cliente / Código")
-            f_des = c2.date_input("Desde", value=datetime.date.today()-datetime.timedelta(days=30))
-            f_has = c3.date_input("Hasta", value=datetime.date.today())
-
-        q = supabase.table('ordenes').select("*, clientes(id, nombre_completo, cedula_ruc, telefono)").order('created_at', desc=True)
-        q = q.gte('created_at', str(f_des)).lte('created_at', str(f_has)+" 23:59:59")
-        res = q.execute()
-        df = pd.DataFrame(res.data)
-        
-        if not df.empty:
-            df['Cliente'] = df['clientes'].apply(lambda x: x['nombre_completo'] if x else 'S/N')
-            if txt_bus: df = df[df['codigo_orden'].str.contains(txt_bus, case=False) | df['Cliente'].str.contains(txt_bus, case=False)]
+if not df_todas.empty:
+            # --- 2. PROCESAMIENTO DE DATOS ---
+            df_todas['Cliente'] = df_todas['clientes'].apply(lambda x: x['nombre_completo'] if x else 'S/N')
             
-            st.dataframe(df[['codigo_orden', 'Cliente', 'fecha_entrega', 'estado', 'total_estimado', 'saldo_pendiente']], 
-                         use_container_width=True, selection_mode="single-row", on_select="rerun", key="grid_ordenes")
-            
-            if st.session_state.grid_ordenes.selection.rows:
-                idx = st.session_state.grid_ordenes.selection.rows[0]
-                row = df.iloc[idx]
-                id_s = int(row['id'])
-                
-                c_edit, c_del = st.columns(2)
+            # Sanitización de Estados (evitar nulos)
+            df_todas['estado'] = df_todas['estado'].fillna("PENDIENTE DISEÑO")
 
-                # --- ACCIÓN: ELIMINAR ORDEN (CON LIMPIEZA DE IMÁGENES) ---
-                if c_del.button("🗑️ Eliminar Orden", type="secondary", use_container_width=True):
-                    try:
-                        # 1. Devolución de dinero
-                        abono = float(row.get('abono_inicial', 0))
-                        if abono > 0:
-                            supabase.table('pagos').insert({
-                                "orden_id": id_s, "monto": -abono, "metodo_pago": "DEVOLUCION",
-                                "fecha_pago": str(datetime.date.today()), "numero_referencia": f"Devolución Orden {row['codigo_orden']}"
-                            }).execute()
+            # Aplicar filtro de texto global si existe
+            if txt_bus: 
+                df_todas = df_todas[
+                    df_todas['codigo_orden'].str.contains(txt_bus, case=False, na=False) | 
+                    df_todas['Cliente'].str.contains(txt_bus, case=False, na=False)
+                ]
+            
+            # Columnas a mostrar en los dataframes (quitamos ids técnicos)
+            cols_mostrar = ['codigo_orden', 'Cliente', 'fecha_entrega', 'estado', 'total_estimado', 'saldo_pendiente']
+            cfg_df = {"use_container_width": True, "hide_index": True, "on_select": "rerun", "selection_mode": "single-row"}
+
+            # --- 3. CLASIFICACIÓN LOGICA (Split) -> Copiado de Reportes ---
+            # Asegurar que los tipos de datos sean correctos para la comparación
+            df_todas["saldo_pendiente"] = df_todas["saldo_pendiente"].astype(float)
+
+            # GRUPO A: Nuevas (Saldo > 0 AND Estado Pendiente/En Diseño)
+            estados_nuevas = ["PENDIENTE DISEÑO", "EN DISEÑO"]
+            df_nuevas = df_todas[(df_todas["saldo_pendiente"] > 0) & (df_todas["estado"].str.upper().isin(estados_nuevas))].copy()
+            
+            # GRUPO B: En Proceso (Saldo > 0 AND Estado NO EN estados_nuevas)
+            df_proceso = df_todas[(df_todas["saldo_pendiente"] > 0) & (~df_todas["estado"].str.upper().isin(estados_nuevas))].copy()
+
+            # GRUPO C: Finalizadas/Pagadas (Saldo <= 0)
+            df_finalizadas = df_todas[df_todas["saldo_pendiente"] <= 0].copy()
+
+            st.write("") # Espaciador
+            
+            # --- 4. RENDER DE PESTAÑAS (TABS) ---
+            t_nue, t_pro, t_fin = st.tabs([
+                f"🆕 Nuevas ({len(df_nuevas)})", 
+                f"⚙️ En Proceso ({len(df_proceso)})", 
+                f"✅ Finalizadas ({len(df_finalizadas)})"
+            ])
+
+            with t_nue:
+                # Se asignan keys únicas a cada dataframe
+                sel_nue = st.dataframe(df_nuevas[cols_mostrar], key="grid_nuevas", **cfg_df)
+            
+            with t_pro:
+                sel_pro = st.dataframe(df_proceso[cols_mostrar], key="grid_proceso", **cfg_df)
+            
+            with t_fin:
+                sel_fin = st.dataframe(df_finalizadas[cols_mostrar], key="grid_finalizadas", **cfg_df)
+
+            # --- 5. LÓGICA DE SELECCIÓN UNIFICADA ---
+            # Verificamos cuál dataframe tiene una selección activa
+            df_origen = None
+            idx_sel = None
+
+            if sel_nue.selection.rows:
+                df_origen = df_nuevas
+                idx_sel = sel_nue.selection.rows[0]
+            elif sel_pro.selection.rows:
+                df_origen = df_proceso
+                idx_sel = sel_pro.selection.rows[0]
+            elif sel_fin.selection.rows:
+                df_origen = df_finalizadas
+                idx_sel = sel_fin.selection.rows[0]
+
+            # Si hay una selección en cualquier tab, extraemos la fila real
+            if df_origen is not None and idx_sel is not None:
+                row_seleccionada = df_origen.iloc[idx_sel]
+        
+        else:
+            st.info("No se encontraron órdenes en el rango de fechas seleccionado.")
+
+        # --- SECCIÓN DE ACCIONES (Botones) ---
+        # Solo se muestran si row_seleccionada tiene datos
+        if row_seleccionada is not None:
+            st.divider()
+            c_edit, c_del, c_sp = st.columns([2, 2, 4]) # Botones a la izquierda
+
+            id_s = int(row_seleccionada['id'])
+            cod_on = row_seleccionada['codigo_orden']
+
+            # --- ACCIÓN: ELIMINAR ORDEN ---
+            if c_del.button(f"🗑️ Eliminar Orden {cod_on}", type="secondary", use_container_width=True):
+                try:
+                    # 1. Devolución de dinero y protección de historial financiero
+                    abono = row_seleccionada.get('abono_inicial')
+                    abono = float(abono) if pd.notna(abono) and abono else 0.0
+                    
+                    if abono > 0:
+                        # Insertamos la devolución SIN amarrarla a la orden (para evitar error FK), 
+                        # pero la amarramos al cliente para que cuadren las cuentas.
+                        cliente_id_val = int(row_seleccionada['cliente_id']) if pd.notna(row_seleccionada.get('cliente_id')) else None
                         
-                        # 2. BORRAR IMÁGENES DE LA NUBE (NUEVO)
-                        borrar_img(supabase, row.get('url_boceto_vendedora'))
-                        borrar_img(supabase, row.get('url_arte_final'))
-                        
-                        # 3. Borrar datos
-                        supabase.table('items_orden').delete().eq('orden_id', id_s).execute()
-                        supabase.table('ordenes').delete().eq('id', id_s).execute()
-                        
-                        st.success(f"Orden {row['codigo_orden']} eliminada y almacenamiento liberado.")
-                        time.sleep(1)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error al eliminar: {e}")
-                
-                # CORRECCIÓN: Este bloque también debe estar alineado igual
-                if c_edit.button("📝 Editar Orden", use_container_width=True):
+                        supabase.table('pagos').insert({
+                            "orden_id": None, 
+                            "cliente_id": cliente_id_val,
+                            "monto": -abono, 
+                            "metodo_pago": "DEVOLUCION",
+                            "fecha_pago": str(datetime.date.today()), 
+                            "numero_referencia": f"Devolución Orden Eliminada {cod_on}"
+                        }).execute()
+                    
+                    # 2. Desvincular pagos históricos existentes para no perderlos en finanzas
+                    supabase.table('pagos').update({"orden_id": None}).eq('orden_id', id_s).execute()
+
+                    # 3. BORRAR IMÁGENES DE LA NUBE
+                    borrar_img(supabase, row_seleccionada.get('url_boceto_vendedora'))
+                    borrar_img(supabase, row_seleccionada.get('url_arte_final'))
+                    
+                    # 4. BORRAR DATOS EN CASCADA ESTRICTA
+                    # A) Identificar items
+                    items_actuales = supabase.table('items_orden').select('id').eq('orden_id', id_s).execute().data
+                    ids_items = [item['id'] for item in items_actuales]
+                    
+                    # B) Borrar hijos (Especificaciones)
+                    if ids_items:
+                        supabase.table('especificaciones_producto').delete().in_('item_orden_id', ids_items).execute()
+                    
+                    # C) Borrar padres (Items y Orden)
+                    supabase.table('items_orden').delete().eq('orden_id', id_s).execute()
+                    supabase.table('ordenes').delete().eq('id', id_s).execute()
+                    
+                    st.success(f"Orden {cod_on} eliminada correctamente.")
+                    time.sleep(1.5)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error crítico al eliminar: {e}")
+            
+            # --- ACCIÓN: EDITAR ORDEN ---
+            if c_edit.button(f"📝 Editar Orden {cod_on}", type="primary", use_container_width=True):
+                # ... (Lógica de carga para edición se mantiene igual)
+                with st.spinner("Cargando datos de la orden..."):
                     # 1. Cargar Items de la Orden
                     items_db = supabase.table('items_orden').select("*, productos_catalogo(*)").eq('orden_id', id_s).execute().data
                     recup = []
@@ -173,7 +141,6 @@ def render(supabase):
                         
                         det_f = []
                         for s in sp:
-                            # Mapeo de datos DB -> Visual (AHORA SÍ ESTÁ COMPLETO)
                             d = {
                                 "talla_superior": s.get('talla_superior'),
                                 "talla_inferior": s.get('talla_inferior'),
@@ -184,7 +151,6 @@ def render(supabase):
                                 "es_arquero": s.get('es_arquero'),
                                 "genero": s.get('genero'),
                                 "observacion_individual": s.get('observacion_individual'),
-                                # --- SOLUCIÓN: Agregamos los campos técnicos perdidos ---
                                 "tipo_cuello_texto": s.get('tipo_cuello_texto', ""),
                                 "ancho_cm": float(s.get('ancho_cm', 0.0) or 0.0),
                                 "alto_cm": float(s.get('alto_cm', 0.0) or 0.0),
@@ -204,16 +170,14 @@ def render(supabase):
                     # 3. Guardar en Sesión
                     st.session_state['prod_items'] = recup
                     st.session_state['editando_orden_id'] = id_s
-                    st.session_state['editando_orden_cod'] = row['codigo_orden']
-                    st.session_state['url_boceto_view'] = row['url_boceto_vendedora']
-                    st.session_state['url_diseno_view'] = row.get('url_arte_final')
-                    st.session_state['editando_cliente_id'] = row['cliente_id'] 
-                    # --- NUEVO: Cargar observaciones generales al estado ---
-                    st.session_state['editando_obs_g'] = row.get('observaciones_generales', "")
+                    st.session_state['editando_orden_cod'] = cod_on
+                    st.session_state['url_boceto_view'] = row_seleccionada['url_boceto_vendedora']
+                    st.session_state['url_diseno_view'] = row_seleccionada.get('url_arte_final')
+                    st.session_state['editando_cliente_id'] = row_seleccionada['cliente_id'] 
+                    st.session_state['editando_obs_g'] = row_seleccionada.get('observaciones_generales', "")
                     
-                    # NUEVO: Recuperar fecha de entrega de la BD
                     try:
-                        f_db = row.get('fecha_entrega')
+                        f_db = row_seleccionada.get('fecha_entrega')
                         if f_db:
                             st.session_state['fecha_entrega_edit'] = datetime.datetime.strptime(f_db, "%Y-%m-%d").date()
                         else:
