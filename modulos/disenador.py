@@ -328,11 +328,11 @@ def render(supabase):
                 
                 columnas_agrupar = ["Terminado", "Orden", "Cliente", "Producto", "Tipo", "Tela", "Género", "Cuello", "Acabado", "Talla Sup.", "Talla Inf.", "Jugador", "Dorsal", "Arquero", "Notas"]
                 
-                # Comprimimos filas repetidas, contamos, y EMPAQUETAMOS LOS IDs de cada grupo
-                df_agrupado = df_filtrado.groupby(columnas_agrupar, dropna=False).agg(
-                    Cant=('Producto', 'size'),
-                    IDs=('ID_Esp', lambda x: list(x) if x is not None else [])
-                ).reset_index()
+                # Comprimimos filas repetidas y empaquetamos los IDs usando un método universalmente compatible
+                df_agrupado = df_filtrado.groupby(columnas_agrupar, dropna=False).agg({
+                    'Producto': 'count',
+                    'ID_Esp': lambda x: [i for i in x if pd.notna(i)]
+                }).rename(columns={'Producto': 'Cant.', 'ID_Esp': 'IDs'}).reset_index()
                 
                 # Reordenamos columnas (Checkbox 'Terminado' va primero)
                 cols = ['Terminado', 'Orden', 'Cliente', 'Cant.'] + [c for c in df_agrupado.columns if c not in ['Terminado', 'Orden', 'Cliente', 'Cant.', 'Tipo', 'ID_Esp', 'IDs']]
