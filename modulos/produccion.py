@@ -735,41 +735,50 @@ def render(supabase):
                 titulo_item = f"📦 {it['obj_p']['descripcion']} ({cant:.2f} {unidad_txt}) - ${sub:.2f}"
                 
                 with st.expander(titulo_item, expanded=False):
-                    # --- CORRECCIÓN UI VENTAS: Mostrar Cantidad y Cuellos limpios ---
                     df_resumen = pd.DataFrame(it['detalles'])
                     
+                    # 1. Renombrar TODAS las columnas para que se vean profesionales (sin guiones bajos)
                     renombres = {
+                        "_cantidad_manual": "Cant.",
                         "talla_superior": "T. Sup",
                         "talla_inferior": "T. Inf",
+                        "nombre_jugador": "Nombre",
+                        "numero_dorsal": "Dorsal",
+                        "talla_polines": "Polín",
+                        "color_polines": "Color Polín",
+                        "es_arquero": "¿Arq?",
+                        "genero": "Género",
                         "tipo_cuello_texto": "Cuello",
-                        "_cantidad_manual": "Cant.",
+                        "ancho_cm": "Ancho (m)",
+                        "alto_cm": "Largo (m)",
+                        "acabado": "Acabado",
+                        "calandra_si_no": "¿Calandra?",
                         "observacion_individual": "Obs."
                     }
                     df_resumen = df_resumen.rename(columns=renombres)
                     
-                    # --- NUEVO: FILTRO DINÁMICO DE COLUMNAS SEGÚN FAMILIA ---
-                    fam_resumen = it.get('familia', 'GENERICO')
-                    cols_permitidas = ["Cant."] # La cantidad siempre se muestra
+                    # 2. Filtrar columnas según familia (Forzamos mayúsculas exactas para evitar fallos)
+                    fam_resumen = str(it.get('familia', 'GENERICO')).strip().upper()
+                    cols_permitidas = ["Cant."] 
                     
-                    # Agregamos solo las columnas relevantes según la familia
                     if fam_resumen == "UNIFORME COMPLETO":
-                        cols_permitidas.extend(["T. Sup", "T. Inf", "nombre_jugador", "numero_dorsal", "talla_polines", "color_polines", "es_arquero", "genero", "Cuello"])
+                        cols_permitidas.extend(["T. Sup", "T. Inf", "Nombre", "Dorsal", "Polín", "Color Polín", "¿Arq?", "Género", "Cuello"])
                     elif fam_resumen == "PRENDA SUPERIOR":
-                        cols_permitidas.extend(["T. Sup", "nombre_jugador", "numero_dorsal", "es_arquero", "genero", "Cuello"])
+                        cols_permitidas.extend(["T. Sup", "Nombre", "Dorsal", "¿Arq?", "Género", "Cuello"])
                     elif fam_resumen == "PANTALONETA":
-                        cols_permitidas.extend(["T. Inf", "numero_dorsal"])
+                        cols_permitidas.extend(["T. Inf", "Dorsal"])
                     elif fam_resumen == "IMPRESION":
-                        cols_permitidas.extend(["ancho_cm", "alto_cm", "acabado", "calandra_si_no"])
-                    elif fam_resumen == "GENERICO":
-                        cols_permitidas.extend(["acabado"])
+                        cols_permitidas.extend(["Ancho (m)", "Largo (m)", "Acabado", "¿Calandra?"])
+                    else: # GENERICO
+                        cols_permitidas.extend(["Acabado"])
                         
-                    cols_permitidas.append("Obs.") # La observación siempre se muestra al final
+                    cols_permitidas.append("Obs.")
                     
-                    # Interceptar solo las columnas que realmente existen en el dataframe para evitar errores
+                    # 3. Aplicar el filtro final (solo deja pasar las columnas que existen en el df)
                     cols_finales = [c for c in cols_permitidas if c in df_resumen.columns]
                     df_resumen_filtrado = df_resumen[cols_finales]
                     
-                    # Renderizamos el dataframe ya filtrado
+                    # 4. Renderizamos el dataframe ya bonito y filtrado
                     st.dataframe(df_resumen_filtrado, use_container_width=True)
                     
                     col_edit, col_del = st.columns([1, 5])
