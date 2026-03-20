@@ -280,6 +280,8 @@ def generar_comprobante_cliente(orden):
         
     pagos = orden.get('pagos', [])
     
+    necesita_nueva_hoja_anexo = True
+
     if url_imagen and pagos:
         pdf.set_font("helvetica", "B", 10)
         pdf.cell(0, 8, "Historial de Pagos y Notas Generales:", align="L", new_x="LMARGIN", new_y="NEXT")
@@ -303,70 +305,72 @@ def generar_comprobante_cliente(orden):
         
         y_after_table = pdf.get_y()
         
-        # 2. Dibujamos las OBSERVACIONES a la DERECHA de la tabla (Coordenadas Absolutas estrictas)
+        # 2. Dibujamos las OBSERVACIONES a la DERECHA de la tabla
         pdf.set_xy(110, start_y)
         pdf.set_font("helvetica", "B", 9)
-        pdf.cell(85, 6, "Observaciones de la Orden:", border=False) # Eliminamos new_x/new_y para no resetear el cursor
+        pdf.cell(85, 6, "Observaciones de la Orden:", border=False)
         
-        pdf.set_xy(110, start_y + 6) # Bajamos 6mm manualmente para escribir el texto
+        pdf.set_xy(110, start_y + 6)
         pdf.set_font("helvetica", "", 8)
         observaciones = str(orden.get('observaciones_generales') or 'Ninguna').strip()
         pdf.multi_cell(85, 4, observaciones)
-        
         y_after_obs = pdf.get_y()
         
-        # 3. Retomamos el flujo en el punto más bajo (sea la tabla o el texto de observaciones)
+        # 3. Retomamos el flujo en el punto más bajo
         pdf.set_y(max(y_after_table, y_after_obs) + 4)
         
-        # 4. LÓGICA INTELIGENTE DE ESPACIO PARA LA IMAGEN Y EL ANEXO
-        y_actual = pdf.get_y()
-        espacio_restante = 280 - y_actual
+        # 4. LÓGICA INFALIBLE PARA LA IMAGEN
+        pdf.set_font("helvetica", "B", 10)
+        pdf.cell(0, 8, "Referencia de Diseño:", align="L", new_x="LMARGIN", new_y="NEXT")
         
-        if espacio_restante >= 70:
-            # Opción A: Hay espacio suficiente en la Hoja 1
-            pdf.set_font("helvetica", "B", 10)
-            pdf.cell(0, 8, "Referencia de Diseño:", align="L", new_x="LMARGIN", new_y="NEXT")
+        y_actual = pdf.get_y()
+        espacio_restante = 282 - y_actual
+        
+        # Apagamos el salto automático momentáneamente para que FPDF no estorbe nuestros cálculos
+        pdf.set_auto_page_break(auto=False) 
+        
+        if espacio_restante >= 80:
+            # Opción A: Cabe en la hoja 1
             try:
-                # Ocupamos exactamente el espacio que sobra
-                pdf.image(url_imagen, x="CENTER", w=190, h=espacio_restante - 10, keep_aspect_ratio=True)
+                pdf.image(url_imagen, x="CENTER", w=190, h=espacio_restante - 5, keep_aspect_ratio=True)
             except:
-                pdf.set_font("helvetica", "I", 9); pdf.cell(0, 10, "(Imagen no disponible)", align="C", new_x="LMARGIN", new_y="NEXT")
-            
-            # Como la imagen cupo en la hoja 1, forzamos salto para que el Anexo empiece limpio en la 2
-            pdf.add_page()
-            
+                pdf.set_font("helvetica", "I", 9); pdf.cell(0, 10, "(Imagen no disponible)", align="C")
+            necesita_nueva_hoja_anexo = True # La hoja 1 se llenó con la imagen, el anexo va a la hoja 2
         else:
-            # Opción B: La tabla fue muy grande. Forzamos el salto a la nueva hoja AHORA.
+            # Opción B: No cabe en la hoja 1, forzamos la imagen a la hoja 2
             pdf.add_page()
-            
-            pdf.set_font("helvetica", "B", 10)
-            pdf.cell(0, 8, "Referencia de Diseño:", align="L", new_x="LMARGIN", new_y="NEXT")
             try:
-                # Le damos un tamaño generoso porque estamos a inicio de hoja
-                pdf.image(url_imagen, x="CENTER", w=190, h=100, keep_aspect_ratio=True)
+                # Dibujamos en grande ya que estamos en una hoja nueva
+                pdf.image(url_imagen, x="CENTER", w=190, h=120, keep_aspect_ratio=True)
+                pdf.set_y(pdf.get_y() + 5)
             except:
-                pdf.set_font("helvetica", "I", 9); pdf.cell(0, 10, "(Imagen no disponible)", align="C", new_x="LMARGIN", new_y="NEXT")
+                pass
+            necesita_nueva_hoja_anexo = False # El anexo va en esta MISMA hoja 2, debajo de la imagen
             
-            pdf.ln(5)
-            # IMPORTANTE: NO hacemos pdf.add_page() aquí. El Anexo se imprimirá en el espacio sobrante de esta hoja.
-            
+        # Volvemos a encender la normalidad
+        pdf.set_auto_page_break(auto=True, margin=15) 
+
     elif url_imagen and not pagos:
-        y_actual = pdf.get_y()
-        espacio_restante = 280 - y_actual
+        pdf.set_font("helvetica", "B", 10)
+        pdf.cell(0, 10, "Referencia de Diseño:", align="L", new_x="LMARGIN", new_y="NEXT")
         
-        if espacio_restante >= 70:
-            pdf.set_font("helvetica", "B", 10)
-            pdf.cell(0, 10, "Referencia de Diseño:", align="L", new_x="LMARGIN", new_y="NEXT")
-            try: pdf.image(url_imagen, x="CENTER", w=190, h=espacio_restante - 10, keep_aspect_ratio=True)
+        y_actual = pdf.get_y()
+        espacio_restante = 282 - y_actual
+        pdf.set_auto_page_break(auto=False)
+        
+        if espacio_restante >= 80:
+            try: pdf.image(url_imagen, x="CENTER", w=190, h=espacio_restante - 5, keep_aspect_ratio=True)
             except: pass
-            pdf.add_page()
+            necesita_nueva_hoja_anexo = True
         else:
             pdf.add_page()
-            pdf.set_font("helvetica", "B", 10)
-            pdf.cell(0, 10, "Referencia de Diseño:", align="L", new_x="LMARGIN", new_y="NEXT")
-            try: pdf.image(url_imagen, x="CENTER", w=190, h=100, keep_aspect_ratio=True)
+            try: 
+                pdf.image(url_imagen, x="CENTER", w=190, h=120, keep_aspect_ratio=True)
+                pdf.set_y(pdf.get_y() + 5)
             except: pass
-            pdf.ln(5)
+            necesita_nueva_hoja_anexo = False
+            
+        pdf.set_auto_page_break(auto=True, margin=15)
         
     elif not url_imagen and pagos:
         pdf.set_font("helvetica", "B", 10)
@@ -383,14 +387,14 @@ def generar_comprobante_cliente(orden):
                 if f_pago and len(f_pago) >= 10: f_pago = f"{f_pago[8:10]}/{f_pago[5:7]}/{f_pago[0:4]}"
                 banco = p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo'
                 row.cell(f_pago); row.cell(str(banco)); row.cell(f"${float(p.get('monto', 0)):.2f}")
-        
+        necesita_nueva_hoja_anexo = True
+
+    # --- ANEXO DE TÉRMINOS Y ESPECIFICACIONES ---
+    if necesita_nueva_hoja_anexo:
         pdf.add_page()
     else:
-        # Si no hay ni imagen ni pagos, igual pasamos a la siguiente hoja para el anexo
-        pdf.add_page()
-
-    # --- HOJA 2 (o continuación): ANEXO DE TÉRMINOS Y ESPECIFICACIONES ---
-    # Fíjate que eliminamos el pdf.add_page() que estaba aquí suelto
+        pdf.ln(5) # Un pequeño margen de separación visual si comparte hoja con la imagen
+        
     pdf.set_font("helvetica", "B", 16)
     pdf.set_text_color(0, 51, 153)
     pdf.cell(0, 10, "ANEXO: DETALLE TÉCNICO APROBADO", align="C", new_x="LMARGIN", new_y="NEXT")
