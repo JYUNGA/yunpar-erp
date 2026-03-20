@@ -828,8 +828,11 @@ def generar_hoja_produccion(orden):
                     row.cell(str(esp.get('observacion_individual') or '').strip())
                 elif familia == 'IMPRESION':
                     row.cell(c_fila)
-                    row.cell(f"{esp.get('ancho_cm', 0) / 100:.2f} m" if esp.get('ancho_cm') else "-")
-                    row.cell(f"{esp.get('alto_cm', 0) / 100:.2f} m" if esp.get('alto_cm') else "-")
+                    # Corregido: Ya no dividimos para 100 porque los datos ya entran como metros desde la UI
+                    ancho_val = esp.get('ancho_cm')
+                    alto_val = esp.get('alto_cm')
+                    row.cell(f"{float(ancho_val):.2f} m" if ancho_val else "-")
+                    row.cell(f"{float(alto_val):.2f} m" if alto_val else "-")
                     row.cell(str(esp.get('acabado') or '').strip()); row.cell(str(esp.get('observacion_individual') or '').strip())
                 else:
                     row.cell(c_fila); row.cell(str(esp.get('acabado') or '').strip()); row.cell(str(esp.get('observacion_individual') or '').strip())
