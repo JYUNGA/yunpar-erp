@@ -183,7 +183,9 @@ def render(supabase):
         except:
             items = []
 
+        # --- NUEVAS VARIABLES PARA ARQUEROS ---
         resumen_sup = {}; resumen_inf = {}; resumen_polines = {}
+        resumen_sup_arq = {}; resumen_inf_arq = {} 
         specs_list = []
 
         for item in items:
@@ -195,77 +197,101 @@ def render(supabase):
             for esp in item.get('especificaciones_producto', []):
                 t_sup = str(esp.get('talla_superior') or '').strip().upper()
                 t_inf = str(esp.get('talla_inferior') or '').strip().upper()
+                es_arq = bool(esp.get("es_arquero", False))
                 
+                # --- LÓGICA DE CONTEO SEPARADO PARA CORTE ---
                 if fam in ['UNIFORME COMPLETO', 'PRENDA SUPERIOR'] and t_sup not in ['-', 'NONE', '']: 
-                    resumen_sup[t_sup] = resumen_sup.get(t_sup, 0) + 1
+                    if es_arq: resumen_sup_arq[t_sup] = resumen_sup_arq.get(t_sup, 0) + 1
+                    else: resumen_sup[t_sup] = resumen_sup.get(t_sup, 0) + 1
+                        
                 if fam in ['UNIFORME COMPLETO', 'PANTALONETA'] and t_inf not in ['-', 'NONE', '']: 
-                    resumen_inf[t_inf] = resumen_inf.get(t_inf, 0) + 1
+                    if es_arq: resumen_inf_arq[t_inf] = resumen_inf_arq.get(t_inf, 0) + 1
+                    else: resumen_inf[t_inf] = resumen_inf.get(t_inf, 0) + 1
+                        
+                # Polines siempre van al general
                 if fam == 'UNIFORME COMPLETO':
                     t_pol = str(esp.get('talla_polines') or '').strip().upper()
                     if t_pol not in ['-', 'NONE', '']:
                         k = (t_pol, str(esp.get('color_polines') or 'Sin Color').strip())
                         resumen_polines[k] = resumen_polines.get(k, 0) + 1
                 
-                # Limpieza de Cuello
+                # Limpiezas de datos nulos
                 cuello_db = esp.get("tipo_cuello_texto", "-")
                 cuello_limpio = "-" if not cuello_db or str(cuello_db).upper() in ["EMPTY", "NONE"] else cuello_db
-                
-                # Limpieza de Dorsal (para que no salga 'None')
                 dorsal_db = esp.get("numero_dorsal", "-")
                 dorsal_limpio = "-" if not dorsal_db or str(dorsal_db).upper() == "NONE" else str(dorsal_db)
-                
-                # Extracción y limpieza del Acabado
                 acabado_db = esp.get("acabado", "-")
                 acabado_limpio = "-" if not acabado_db or str(acabado_db).upper() in ["EMPTY", "NONE"] else str(acabado_db)
 
                 specs_list.append({
+                    "Orden": orden['codigo_orden'], # <-- PARA PANTALLA COMPLETA
+                    "Cliente": orden['Cliente'],    # <-- PARA PANTALLA COMPLETA
                     "Producto": prod,
-                    "Tipo": tipo_prenda, # <-- Campo invisible necesario para filtrado
+                    "Tipo": tipo_prenda, 
                     "Tela": tela,
                     "Género": esp.get("genero", "-") or "-",
                     "Cuello": cuello_limpio,
-                    "Acabado": acabado_limpio, # <-- NUEVA COLUMNA DE ACABADO
+                    "Acabado": acabado_limpio, 
                     "Talla Sup.": t_sup if t_sup != 'NONE' else "-",
                     "Talla Inf.": t_inf if t_inf != 'NONE' else "-",
                     "Jugador": esp.get("nombre_jugador", "-") or "-",
                     "Dorsal": dorsal_limpio,
-                    "Arquero": bool(esp.get("es_arquero", False)), 
+                    "Arquero": es_arq, 
                     "Notas": esp.get("observacion_individual", "") or ""
                 })
-
+                
         # --- CÁLCULO DE TABLAS RESUMEN ---
         st.markdown("### 📊 Tablas de Resumen de Corte")
-        col_res1, col_res2, col_res3 = st.columns(3)
         
-        with col_res1:
+        hay_arqueros = bool(resumen_sup_arq or resumen_inf_arq)
+        num_columnas = 5 if hay_arqueros else 3
+        columnas_ui = st.columns(num_columnas)
+        
+        with columnas_ui[0]:
             if resumen_sup:
                 df_sup = pd.DataFrame(list(resumen_sup.items()), columns=['Talla', 'Cantidad'])
-                df_sup['Orden'] = df_sup['Talla'].apply(orden_talla)
-                df_sup = df_sup.sort_values('Orden').drop(columns=['Orden']).reset_index(drop=True)
-                total_sup = df_sup['Cantidad'].sum()
-                df_sup = pd.concat([df_sup, pd.DataFrame([{'Talla': 'TOTAL', 'Cantidad': total_sup}])], ignore_index=True)
+                df_sup['Orden_Talla'] = df_sup['Talla'].apply(orden_talla)
+                df_sup = df_sup.sort_values('Orden_Talla').drop(columns=['Orden_Talla']).reset_index(drop=True)
+                df_sup = pd.concat([df_sup, pd.DataFrame([{'Talla': 'TOTAL', 'Cantidad': df_sup['Cantidad'].sum()}])], ignore_index=True)
                 st.markdown("**👕 CAMISETAS**")
                 st.dataframe(df_sup, hide_index=True, use_container_width=True)
                 
-        with col_res2:
+        with columnas_ui[1]:
             if resumen_inf:
                 df_inf = pd.DataFrame(list(resumen_inf.items()), columns=['Talla', 'Cantidad'])
-                df_inf['Orden'] = df_inf['Talla'].apply(orden_talla)
-                df_inf = df_inf.sort_values('Orden').drop(columns=['Orden']).reset_index(drop=True)
-                total_inf = df_inf['Cantidad'].sum()
-                df_inf = pd.concat([df_inf, pd.DataFrame([{'Talla': 'TOTAL', 'Cantidad': total_inf}])], ignore_index=True)
+                df_inf['Orden_Talla'] = df_inf['Talla'].apply(orden_talla)
+                df_inf = df_inf.sort_values('Orden_Talla').drop(columns=['Orden_Talla']).reset_index(drop=True)
+                df_inf = pd.concat([df_inf, pd.DataFrame([{'Talla': 'TOTAL', 'Cantidad': df_inf['Cantidad'].sum()}])], ignore_index=True)
                 st.markdown("**🩳 PANTALONETAS**")
                 st.dataframe(df_inf, hide_index=True, use_container_width=True)
                 
-        with col_res3:
+        with columnas_ui[2]:
             if resumen_polines:
                 df_pol = pd.DataFrame([{'Talla': t, 'Color': c, 'Cantidad': cant} for (t, c), cant in resumen_polines.items()])
-                df_pol['Orden'] = df_pol['Talla'].apply(orden_talla)
-                df_pol = df_pol.sort_values('Orden').drop(columns=['Orden']).reset_index(drop=True)
-                total_pol = df_pol['Cantidad'].sum()
-                df_pol = pd.concat([df_pol, pd.DataFrame([{'Talla': 'TOTAL', 'Color': '-', 'Cantidad': total_pol}])], ignore_index=True)
+                df_pol['Orden_Talla'] = df_pol['Talla'].apply(orden_talla)
+                df_pol = df_pol.sort_values('Orden_Talla').drop(columns=['Orden_Talla']).reset_index(drop=True)
+                df_pol = pd.concat([df_pol, pd.DataFrame([{'Talla': 'TOTAL', 'Color': '-', 'Cantidad': df_pol['Cantidad'].sum()}])], ignore_index=True)
                 st.markdown("**🧦 POLINES**")
                 st.dataframe(df_pol, hide_index=True, use_container_width=True)
+
+        if hay_arqueros:
+            with columnas_ui[3]:
+                if resumen_sup_arq:
+                    df_sup_arq = pd.DataFrame(list(resumen_sup_arq.items()), columns=['Talla', 'Cantidad'])
+                    df_sup_arq['Orden_Talla'] = df_sup_arq['Talla'].apply(orden_talla)
+                    df_sup_arq = df_sup_arq.sort_values('Orden_Talla').drop(columns=['Orden_Talla']).reset_index(drop=True)
+                    df_sup_arq = pd.concat([df_sup_arq, pd.DataFrame([{'Talla': 'TOTAL', 'Cantidad': df_sup_arq['Cantidad'].sum()}])], ignore_index=True)
+                    st.markdown("🧤 **CAMISETAS (ARQ)**")
+                    st.dataframe(df_sup_arq.style.apply(lambda _: ['background-color: #FFF2CC; color: #000000;']*len(_), axis=1), hide_index=True, use_container_width=True)
+
+            with columnas_ui[4]:
+                if resumen_inf_arq:
+                    df_inf_arq = pd.DataFrame(list(resumen_inf_arq.items()), columns=['Talla', 'Cantidad'])
+                    df_inf_arq['Orden_Talla'] = df_inf_arq['Talla'].apply(orden_talla)
+                    df_inf_arq = df_inf_arq.sort_values('Orden_Talla').drop(columns=['Orden_Talla']).reset_index(drop=True)
+                    df_inf_arq = pd.concat([df_inf_arq, pd.DataFrame([{'Talla': 'TOTAL', 'Cantidad': df_inf_arq['Cantidad'].sum()}])], ignore_index=True)
+                    st.markdown("🧤 **PANTALON (ARQ)**")
+                    st.dataframe(df_inf_arq.style.apply(lambda _: ['background-color: #FFF2CC; color: #000000;']*len(_), axis=1), hide_index=True, use_container_width=True)
                 
         # --- TABLA DETALLADA CON FILTROS ---
         st.markdown("### 📋 Listado Detallado de Prendas")
@@ -300,14 +326,24 @@ def render(supabase):
             cols = ['Cant.'] + [c for c in df_agrupado.columns if c not in ['Cant.', 'Tipo']]
             df_mostrar = df_agrupado[cols]
             
-            # --- Exclusión dinámica de servicios para el contador ---
+            # --- Agrupar filas idénticas y sumar cantidad ---
+            columnas_agrupar = ["Orden", "Cliente", "Producto", "Tipo", "Tela", "Género", "Cuello", "Acabado", "Talla Sup.", "Talla Inf.", "Jugador", "Dorsal", "Arquero", "Notas"]
+            
+            # Comprimimos las filas repetidas y creamos la columna 'Cant.'
+            df_agrupado = df_filtrado.groupby(columnas_agrupar, dropna=False).size().reset_index(name='Cant.')
+            
+            # Reordenamos para que la Orden, Cliente y Cantidad salgan al principio
+            cols = ['Orden', 'Cliente', 'Cant.'] + [c for c in df_agrupado.columns if c not in ['Orden', 'Cliente', 'Cant.', 'Tipo']]
+            df_mostrar = df_agrupado[cols]
+            
+            # --- Exclusión dinámica y contador matemático ---
             if 'Tipo' in df_agrupado.columns:
-                # Sumamos la columna cantidad en lugar de contar las filas
+                # Sumamos la columna cantidad (no contamos filas) excluyendo los "DISEÑOS"
                 prendas_reales = df_agrupado[~df_agrupado['Tipo'].str.contains("DISEÑO", na=False, case=False)]['Cant.'].sum()
             else:
                 prendas_reales = df_agrupado['Cant.'].sum()
                 
-            col_f5.metric("👕 Prendas en vista:", prendas_reales)
+            col_f5.metric("👕 Prendas en vista:", int(prendas_reales))
             
             def resaltar_arqueros(row):
                 if row['Arquero'] == True:
