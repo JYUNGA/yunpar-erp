@@ -224,8 +224,10 @@ def render(supabase):
                 acabado_limpio = "-" if not acabado_db or str(acabado_db).upper() in ["EMPTY", "NONE"] else str(acabado_db)
 
                 specs_list.append({
-                    "Orden": orden['codigo_orden'], # <-- PARA PANTALLA COMPLETA
-                    "Cliente": orden['Cliente'],    # <-- PARA PANTALLA COMPLETA
+                    "ID_Esp": esp.get("id"), # <-- NUEVO: ID oculto para guardar en base de datos
+                    "Terminado": bool(esp.get("diseno_terminado", False)), # <-- NUEVO: Checkbox de progreso
+                    "Orden": orden['codigo_orden'], 
+                    "Cliente": orden['Cliente'],    
                     "Producto": prod,
                     "Tipo": tipo_prenda, 
                     "Tela": tela,
@@ -316,43 +318,80 @@ def render(supabase):
             if filtro_tsup != "Todos": df_filtrado = df_filtrado[df_filtrado['Talla Sup.'] == filtro_tsup]
             if filtro_tinf != "Todos": df_filtrado = df_filtrado[df_filtrado['Talla Inf.'] == filtro_tinf]
             
-            # --- NUEVO: Agrupar filas idénticas y sumar cantidad ---
-            columnas_agrupar = ["Producto", "Tipo", "Tela", "Género", "Cuello", "Acabado", "Talla Sup.", "Talla Inf.", "Jugador", "Dorsal", "Arquero", "Notas"]
+            # --- Agrupar filas idénticas, sumar cantidad y guardar IDs ---
+            columnas_agrupar = ["Terminado", "Orden", "Cliente", "Producto", "Tipo", "Tela", "Género", "Cuello", "Acabado", "Talla Sup.", "Talla Inf.", "Jugador", "Dorsal", "Arquero", "Notas"]
             
-            # Agrupamos y contamos cuántas veces se repite exactamente la misma fila
-            df_agrupado = df_filtrado.groupby(columnas_agrupar, dropna=False).size().reset_index(name='Cant.')
+            # Comprimimos filas repetidas, contamos, y EMPAQUETAMOS LOS IDs de cada grupo
+            df_agrupado = df_filtrado.groupby(columnas_agrupar, dropna=False).agg(
+                Cant=('Producto', 'size'),
+                IDs=('ID_Esp', lambda x: list(x))
+            ).reset_index()
             
-            # Reordenamos para que la 'Cant.' salga al principio (facilita la lectura)
-            cols = ['Cant.'] + [c for c in df_agrupado.columns if c not in ['Cant.', 'Tipo']]
+            # Reordenamos columnas (Checkbox 'Terminado' va primero)
+            cols = ['Terminado', 'Orden', 'Cliente', 'Cant.'] + [c for c in df_agrupado.columns if c not in ['Terminado', 'Orden', 'Cliente', 'Cant.', 'Tipo', 'ID_Esp', 'IDs']]
             df_mostrar = df_agrupado[cols]
-            
-            # --- Agrupar filas idénticas y sumar cantidad ---
-            columnas_agrupar = ["Orden", "Cliente", "Producto", "Tipo", "Tela", "Género", "Cuello", "Acabado", "Talla Sup.", "Talla Inf.", "Jugador", "Dorsal", "Arquero", "Notas"]
-            
-            # Comprimimos las filas repetidas y creamos la columna 'Cant.'
-            df_agrupado = df_filtrado.groupby(columnas_agrupar, dropna=False).size().reset_index(name='Cant.')
-            
-            # Reordenamos para que la Orden, Cliente y Cantidad salgan al principio
-            cols = ['Orden', 'Cliente', 'Cant.'] + [c for c in df_agrupado.columns if c not in ['Orden', 'Cliente', 'Cant.', 'Tipo']]
-            df_mostrar = df_agrupado[cols]
+            df_mostrar['IDs'] = df_agrupado['IDs'] # Agregamos la columna oculta de IDs
             
             # --- Exclusión dinámica y contador matemático ---
             if 'Tipo' in df_agrupado.columns:
-                # Sumamos la columna cantidad (no contamos filas) excluyendo los "DISEÑOS"
                 prendas_reales = df_agrupado[~df_agrupado['Tipo'].str.contains("DISEÑO", na=False, case=False)]['Cant.'].sum()
             else:
                 prendas_reales = df_agrupado['Cant.'].sum()
                 
             col_f5.metric("👕 Prendas en vista:", int(prendas_reales))
             
-            def resaltar_arqueros(row):
-                if row['Arquero'] == True:
+            # --- NUEVA LÓGICA DE COLORES DE 4 ESTADOS ---
+            def estilo_filas(row):
+                arq = row['Arquero']
+                term = row['Terminado']
+                
+                # Fila Terminada + Arquero = Naranja pastel + texto gris tachado
+                if term and arq:
+                    return ['background-color: #fce4d6; color: #a0a0a0; text-decoration: line-through;'] * len(row)
+                # Fila Terminada Normal = Verde pastel + texto gris tachado
+                elif term and not arq:
+                    return ['background-color: #e2efda; color: #a0a0a0; text-decoration: line-through;'] * len(row)
+                # Arquero Pendiente = Amarillo clásico
+                elif not term and arq:
                     return ['background-color: #FFF2CC; color: #000000;'] * len(row)
-                return [''] * len(row)
+                # Normal Pendiente = Sin color
+                else:
+                    return [''] * len(row)
 
-            df_estilizado = df_mostrar.style.apply(resaltar_arqueros, axis=1)
+            df_estilizado = df_mostrar.style.apply(estilo_filas, axis=1)
             
-            st.dataframe(df_estilizado, use_container_width=True, hide_index=True)
+            # Mostramos la tabla como un Editor para poder hacer clic en los Checkbox
+            edited_list = st.data_editor(
+                df_estilizado, 
+                column_config={
+                    "Terminado": st.column_config.CheckboxColumn("✅ Listo", default=False),
+                    "Arquero": None, # Ocultamos Arquero (ya tenemos los colores)
+                    "Tipo": None,    # Ocultamos Tipo
+                    "IDs": None      # Ocultamos la lista matemática de IDs
+                },
+                disabled=["Orden", "Cliente", "Cant.", "Producto", "Tela", "Género", "Cuello", "Acabado", "Talla Sup.", "Talla Inf.", "Jugador", "Dorsal", "Notas"],
+                use_container_width=True, 
+                hide_index=True
+            )
+            
+            # --- NUEVO: Botón para guardar progreso en la BD ---
+            if st.button("💾 Guardar Progreso de Lista", type="secondary"):
+                try:
+                    for idx, row in edited_list.iterrows():
+                        estado_original = df_agrupado.iloc[idx]['Terminado']
+                        estado_nuevo = row['Terminado']
+                        
+                        # Si el diseñador marcó o desmarcó una casilla, actualizamos la base de datos
+                        if estado_original != estado_nuevo:
+                            lista_ids = row['IDs']
+                            for id_esp in lista_ids: # Actualiza todos los IDs que pertenecen a ese grupo (ej. 12 camisetas)
+                                supabase.table("especificaciones_producto").update({"diseno_terminado": estado_nuevo}).eq("id", id_esp).execute()
+                    
+                    st.success("¡Progreso de diseño guardado exitosamente!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error al guardar progreso: {e}")
+                    
         else:
             st.info("No se encontraron especificaciones registradas para esta orden.")
 
