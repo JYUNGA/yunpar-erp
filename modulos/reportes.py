@@ -1000,13 +1000,34 @@ def render_modulo_reportes(supabase_client):
     if st.session_state.lista_ordenes:
         df_todas = pd.DataFrame(st.session_state.lista_ordenes)
         
+        # --- CORRECCIÓN DE CACHÉ: Si no existe Saldo_Num, forzamos la recarga ---
+        if "Saldo_Num" not in df_todas.columns:
+            with st.spinner("Actualizando estructura de datos..."):
+                # Forzamos a que traiga los datos frescos con la nueva estructura
+                st.session_state.lista_ordenes = buscar_lista_ordenes(supabase_client)
+                df_todas = pd.DataFrame(st.session_state.lista_ordenes)
+                
+        # Verificamos de nuevo por seguridad
+        if "Saldo_Num" not in df_todas.columns:
+             # Si por alguna razón extrema sigue sin existir, la creamos con valor 1 para que no crashee
+             df_todas["Saldo_Num"] = 1.0
+        
         # --- 1. LÓGICA DE DIVISION DE GRUPOS ---
         # GRUPO 3 (Entregadas): Saldo es cero o menor
         df_pagadas = df_todas[df_todas["Saldo_Num"] <= 0].copy()
         
         # GRUPO 1 (Nuevas): Saldo > 0 Y Estado es PENDIENTE DISEÑO o EN DISEÑO
         estados_nuevas = ["PENDIENTE DISEÑO", "EN DISEÑO"]
-        df_nuevas = df_todas[(df_todas["Saldo_Num"] > 0) & (df_todas["Estado"].str.upper().isin(estados_nuevas))].copy()
+        
+        # OJO: Validamos que la columna 'Estado' exista y no tenga nulos para evitar errores con .str.upper()
+        if "Estado" in df_todas.columns:
+            df_todas["Estado"] = df_todas["Estado"].fillna("N/A")
+            df_nuevas = df_todas[(df_todas["Saldo_Num"] > 0) & (df_todas["Estado"].str.upper().isin(estados_nuevas))].copy()
+            df_proceso = df_todas[(df_todas["Saldo_Num"] > 0) & (~df_todas["Estado"].str.upper().isin(estados_nuevas))].copy()
+        else:
+            # Plan B si no hay estado
+            df_nuevas = df_todas[df_todas["Saldo_Num"] > 0].copy()
+            df_proceso = pd.DataFrame(columns=df_todas.columns)
         
         # GRUPO 2 (En Proceso): Saldo > 0 Y Estado ya fue tomado por alguien
         df_proceso = df_todas[(df_todas["Saldo_Num"] > 0) & (~df_todas["Estado"].str.upper().isin(estados_nuevas))].copy()
