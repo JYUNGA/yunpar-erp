@@ -833,6 +833,25 @@ def generar_hoja_produccion(orden):
                     row.cell(c_fila); row.cell(str(esp.get('acabado') or '').strip()); row.cell(str(esp.get('observacion_individual') or '').strip())
         pdf.ln(5)
 
+    # --- 6. OBSERVACIONES GENERALES DE LA ORDEN ---
+    observaciones = str(orden.get('observaciones_generales') or '').strip()
+    if observaciones and observaciones.lower() not in ['none', 'null', '', 'ninguna']:
+        # Evaluamos si hay espacio suficiente al final de la hoja para que no quede cortado el cuadro
+        if pdf.get_y() > 240:
+            pdf.add_page()
+        else:
+            pdf.ln(5)
+            
+        # Dibujamos un cuadro llamativo para que el taller lo lea obligatoriamente
+        pdf.set_font("helvetica", "B", 12)
+        pdf.set_fill_color(255, 230, 150) # Un fondo amarillo cálido para llamar la atención
+        pdf.cell(0, 8, " NOTAS Y OBSERVACIONES GENERALES PARA PRODUCCIÓN", border=1, fill=True, align="L", new_x="LMARGIN", new_y="NEXT")
+        
+        pdf.set_font("helvetica", "B", 11) # Texto en negrita
+        # multi_cell permite que el texto baje de línea automáticamente si es muy largo
+        pdf.multi_cell(0, 8, f" {observaciones}", border=1, align="L")
+        pdf.ln(5)
+
     return bytes(pdf.output())
 
 
