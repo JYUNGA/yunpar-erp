@@ -282,9 +282,11 @@ def generar_comprobante_cliente(orden):
     
     if url_imagen and pagos:
         pdf.set_font("helvetica", "B", 10)
-        pdf.cell(0, 8, "Historial de Pagos y Referencia de Diseño:", align="L", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 8, "Historial de Pagos y Notas Generales:", align="L", new_x="LMARGIN", new_y="NEXT")
         
-        # 1. Dibujamos la tabla de pagos arriba, alineada a la izquierda (manteniendo el ancho compacto de 85)
+        start_y = pdf.get_y()
+        
+        # 1. Dibujamos la tabla de pagos a la IZQUIERDA
         pdf.set_font("helvetica", "", 8)
         estilo_cabecera_pagos = FontFace(fill_color=(0, 51, 153), color=(255, 255, 255), emphasis="B")
         estilo_datos_pagos = FontFace(fill_color=(255, 255, 255), color=(0, 0, 0), emphasis="")
@@ -298,13 +300,32 @@ def generar_comprobante_cliente(orden):
                 if f_pago and len(f_pago) >= 10: f_pago = f"{f_pago[8:10]}/{f_pago[5:7]}/{f_pago[2:4]}"
                 banco = p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo'
                 row.cell(f_pago); row.cell(str(banco)[:20]); row.cell(f"${float(p.get('monto', 0)):.2f}")
-                
-        pdf.ln(2) # Reducimos también este espacio de respiración
         
-        # 2. Dibujamos la imagen abajo, ocupando TODO el ancho de la hoja (w=190)
+        y_after_table = pdf.get_y()
+        
+        # 2. Dibujamos las OBSERVACIONES a la DERECHA de la tabla
+        pdf.set_xy(105, start_y) # Movemos el cursor a la derecha
+        pdf.set_font("helvetica", "B", 9)
+        pdf.cell(95, 6, "Observaciones de la Orden:", border=False, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_xy(105, pdf.get_y())
+        pdf.set_font("helvetica", "", 8)
+        
+        observaciones = str(orden.get('observaciones_generales') or 'Ninguna').strip()
+        # multi_cell hará que el texto baje si es muy largo
+        pdf.multi_cell(95, 4, observaciones) 
+        y_after_obs = pdf.get_y()
+        
+        # 3. Retomamos el flujo en el punto más bajo (sea la tabla o el texto de observaciones)
+        pdf.set_y(max(y_after_table, y_after_obs) + 2)
+        
+        # 4. Dibujamos la IMAGEN forzando su inicio desde el margen izquierdo (x=10)
+        pdf.set_font("helvetica", "B", 10)
+        pdf.cell(0, 8, "Referencia de Diseño:", align="L", new_x="LMARGIN", new_y="NEXT")
+        
         try:
-            # Reducimos el límite de altura a 90 para garantizar que FPDF no salte a la siguiente hoja
-            pdf.image(url_imagen, w=190, h=90, keep_aspect_ratio=True, x="CENTER")
+            # x=10 fuerza a que inicie bien a la izquierda, w=190 ocupa todo el ancho útil.
+            # Subimos la altura máxima a 105 para que tenga más libertad de escalar.
+            pdf.image(url_imagen, x=10, w=190, h=105, keep_aspect_ratio=True)
         except:
             pdf.set_font("helvetica", "I", 9); pdf.cell(0, 10, "(Imagen no disponible)", align="C", new_x="LMARGIN", new_y="NEXT")
             
