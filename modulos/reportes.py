@@ -897,36 +897,41 @@ def generar_etiquetas(orden):
     TAMANO_FUENTE = 14
     # -------------------------------------------------------------
 
-    # # Recopilar la data: Extraemos todos los nombres y tallas de la orden
+    # Recopilar la data: Extraemos todos los nombres y tallas de la orden
     datos_etiquetas = []
     for item in orden.get('items', []):
         fam = str(item.get('familia_producto', '')).strip().upper()
         
-        # RESTRICCIÓN: Solo creamos etiquetas si la familia es estrictamente "UNIFORME COMPLETO"
+        # PRIMER BLINDAJE: La familia debe ser "UNIFORME COMPLETO"
         if fam == 'UNIFORME COMPLETO':
             for esp in item.get('especificaciones_producto', []):
-                talla_s = str(esp.get('talla_superior') or '').strip()
-                talla_i = str(esp.get('talla_inferior') or '').strip()
+                talla_s = str(esp.get('talla_superior') or '').strip().upper()
+                talla_i = str(esp.get('talla_inferior') or '').strip().upper()
                 
-                # Inteligencia de Tallas (Para ahorrar espacio visual en la etiqueta)
+                # SEGUNDO BLINDAJE (PROGRAMACIÓN DEFENSIVA): 
+                # Evaluamos que realmente existan ambas tallas para considerarlo uniforme.
+                tiene_sup = bool(talla_s) and talla_s != '-' and talla_s != 'NONE'
+                tiene_inf = bool(talla_i) and talla_i != '-' and talla_i != 'NONE'
+                
+                if not (tiene_sup and tiene_inf):
+                    continue # Ignoramos este ítem; la vendedora lo clasificó mal. No se genera etiqueta.
+                
+                # Inteligencia de Tallas (Como ya sabemos que ambas existen, simplificamos la lógica)
                 talla = ""
-                if talla_s and talla_i and talla_s != '-' and talla_i != '-' and talla_s != talla_i:
+                if talla_s != talla_i:
                     talla = f"{talla_s}/{talla_i}"
                 else:
-                    talla = talla_s if talla_s != '-' else talla_i
-                    
-                if talla == '-': talla = ""
+                    talla = talla_s # Si son iguales (Ej: M y M), solo ponemos "M"
                 
                 numero = str(esp.get('numero_dorsal') or '').strip()
                 nombre = str(esp.get('nombre_jugador') or '').strip()
                 
-                # Si al menos tiene un dato, creamos su etiqueta
-                if talla or numero or nombre:
-                    datos_etiquetas.append({
-                        'talla': talla,
-                        'numero': numero,
-                        'nombre': nombre
-                    })
+                # Agregamos a la lista final para imprimir
+                datos_etiquetas.append({
+                    'talla': talla,
+                    'numero': numero,
+                    'nombre': nombre
+                })
 
     # Si no hay datos, creamos un PDF con un mensaje de aviso
     if not datos_etiquetas:
