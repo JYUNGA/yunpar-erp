@@ -870,91 +870,82 @@ def generar_etiquetas(orden):
     
     # -------------------------------------------------------------
     # 🛠️ ZONA DE AJUSTE MANUAL (COORDENADAS MILIMÉTRICAS) 🛠️
-    # Juega con estos valores hasta que el texto calce en tu diseño
     # -------------------------------------------------------------
-    
-    # 1. Distancias de la cuadrícula (El salto entre etiquetas)
-    # Si la A4 tiene 297mm de ancho, cada tercio mide aprox 99mm.
-    PASO_X = 98.0  # Cuántos milímetros hay que moverse a la derecha para la siguiente columna
-    PASO_Y = 70.0  # Cuántos milímetros hay que bajar para la siguiente fila (210mm / 3)
-    
-    # 2. Origen de la primera etiqueta (Arriba a la Izquierda)
-    ORIGEN_X = 0   # Punto de inicio X de toda la cuadrícula
-    ORIGEN_Y = 0   # Punto de inicio Y de toda la cuadrícula
-    
-    # 3. Posiciones internas relativas (Dentro de cada caja de etiqueta individual)
-    # Suma estos valores al ORIGEN para colocar el texto en las cajas blancas
-    OFFSET_X_TALLA  = 29.0    # Movimiento hacia la derecha para la Talla
-    OFFSET_Y_TALLA  = 40.0    # Movimiento hacia abajo para la Talla
-    
-    OFFSET_X_NUMERO = 75.0    # Movimiento hacia la derecha para el Número
-    OFFSET_Y_NUMERO = 40.0    # Movimiento hacia abajo para el Número
-    
-    OFFSET_X_NOMBRE = 38.0    # Movimiento hacia la derecha para el Nombre
-    OFFSET_Y_NOMBRE = 52.0    # Movimiento hacia abajo para el Nombre
-    
-    # Tamaño de la fuente
+    PASO_X = 98.0  
+    PASO_Y = 70.0  
+    ORIGEN_X = 0   
+    ORIGEN_Y = 0   
+    OFFSET_X_TALLA  = 29.0   
+    OFFSET_Y_TALLA  = 40.0   
+    OFFSET_X_NUMERO = 75.0   
+    OFFSET_Y_NUMERO = 40.0   
+    OFFSET_X_NOMBRE = 38.0   
+    OFFSET_Y_NOMBRE = 52.0   
     TAMANO_FUENTE = 14
     # -------------------------------------------------------------
+
+    # Función auxiliar agresiva para validar tallas y evadir basura de la BD
+    def es_talla_valida(t):
+        if not t: return False
+        t_str = str(t).strip().upper()
+        if t_str in ['', '-', 'NONE', 'NULL', 'N/A', 'NAN', '0']: return False
+        return True
 
     # Recopilar la data: Extraemos todos los nombres y tallas de la orden
     datos_etiquetas = []
     for item in orden.get('items', []):
         fam = str(item.get('familia_producto', '')).strip().upper()
         
-        # PRIMER BLINDAJE: La familia debe ser "UNIFORME COMPLETO"
+        # BLINDAJE 1: Exigir que la familia diga UNIFORME COMPLETO
         if fam == 'UNIFORME COMPLETO':
             for esp in item.get('especificaciones_producto', []):
-                talla_s = str(esp.get('talla_superior') or '').strip().upper()
-                talla_i = str(esp.get('talla_inferior') or '').strip().upper()
+                talla_s = esp.get('talla_superior')
+                talla_i = esp.get('talla_inferior')
                 
-                # SEGUNDO BLINDAJE (PROGRAMACIÓN DEFENSIVA): 
-                # Evaluamos que realmente existan ambas tallas para considerarlo uniforme.
-                tiene_sup = bool(talla_s) and talla_s != '-' and talla_s != 'NONE'
-                tiene_inf = bool(talla_i) and talla_i != '-' and talla_i != 'NONE'
+                # BLINDAJE 2 (EXTREMO): Validar rigurosamente que existan AMBAS tallas reales
+                if not (es_talla_valida(talla_s) and es_talla_valida(talla_i)):
+                    continue # Si falta una talla, es una prenda suelta. NO genera etiqueta y salta al siguiente.
                 
-                if not (tiene_sup and tiene_inf):
-                    continue # Ignoramos este ítem; la vendedora lo clasificó mal. No se genera etiqueta.
+                t_sup_str = str(talla_s).strip().upper()
+                t_inf_str = str(talla_i).strip().upper()
                 
-                # Inteligencia de Tallas (Como ya sabemos que ambas existen, simplificamos la lógica)
-                talla = ""
-                if talla_s != talla_i:
-                    talla = f"{talla_s}/{talla_i}"
+                # Inteligencia de Tallas (Si son iguales pone una. Si son distintas, pone las dos)
+                if t_sup_str != t_inf_str:
+                    talla = f"{t_sup_str}/{t_inf_str}"
                 else:
-                    talla = talla_s # Si son iguales (Ej: M y M), solo ponemos "M"
+                    talla = t_sup_str 
                 
                 numero = str(esp.get('numero_dorsal') or '').strip()
                 nombre = str(esp.get('nombre_jugador') or '').strip()
                 
-                # Agregamos a la lista final para imprimir
-                datos_etiquetas.append({
-                    'talla': talla,
-                    'numero': numero,
-                    'nombre': nombre
-                })
+                if talla or numero or nombre:
+                    datos_etiquetas.append({
+                        'talla': talla,
+                        'numero': numero,
+                        'nombre': nombre
+                    })
 
-    # Si no hay datos, creamos un PDF con un mensaje de aviso
+    # Si luego de los filtros agresivos no hay datos, creamos un PDF con aviso
     if not datos_etiquetas:
         pdf.add_page()
         pdf.set_font("helvetica", "B", 16)
-        pdf.cell(0, 20, "NO HAY DATOS DE PERSONALIZACIÓN PARA GENERAR ETIQUETAS", align="C")
+        pdf.cell(0, 20, "NO HAY UNIFORMES COMPLETOS VALIDOS PARA ETIQUETAR", align="C")
         return bytes(pdf.output())
 
     # Motor de dibujo de la cuadrícula (3x3)
     for i, data in enumerate(datos_etiquetas):
-        # Cada 9 etiquetas (0, 9, 18...) creamos una nueva página y ponemos el fondo
+        # Cada 9 etiquetas creamos una nueva página y ponemos el fondo
         if i % 9 == 0:
             pdf.add_page()
             try:
-                # Fondo estirado a todo el A4 Horizontal (w=297, h=210)
                 pdf.image("ETIQUETAS-UNIFORMES.png", x=0, y=0, w=297, h=210)
             except Exception:
-                pass # Si no encuentra la imagen, dibujará sobre blanco para poder depurar
+                pass 
 
         # Matemáticas de la Matriz (0 a 8)
         posicion_en_hoja = i % 9
-        columna = posicion_en_hoja % 3   # Resultados: 0, 1, 2
-        fila = posicion_en_hoja // 3     # Resultados: 0, 1, 2
+        columna = posicion_en_hoja % 3   
+        fila = posicion_en_hoja // 3     
         
         # Calcular la esquina superior izquierda de LA etiqueta actual
         base_x = ORIGEN_X + (columna * PASO_X)
@@ -963,7 +954,6 @@ def generar_etiquetas(orden):
         # Dibujar los Textos
         pdf.set_font("helvetica", "B", TAMANO_FUENTE)
         
-        # (Se usa pdf.text porque permite coordenadas absolutas libres sin crear celdas rígidas)
         if data['talla']:
             pdf.text(x=base_x + OFFSET_X_TALLA, y=base_y + OFFSET_Y_TALLA, txt=data['talla'])
             
