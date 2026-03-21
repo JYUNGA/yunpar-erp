@@ -925,12 +925,9 @@ def generar_etiquetas(orden):
                         'nombre': nombre
                     })
 
-    # Si luego de los filtros agresivos no hay datos, creamos un PDF con aviso
+    # Si luego de los filtros agresivos no hay datos, devolvemos None para que la UI lance una alerta
     if not datos_etiquetas:
-        pdf.add_page()
-        pdf.set_font("helvetica", "B", 16)
-        pdf.cell(0, 20, "NO HAY UNIFORMES COMPLETOS VALIDOS PARA ETIQUETAR", align="C")
-        return bytes(pdf.output())
+        return None
 
     # Motor de dibujo de la cuadrícula (3x3)
     for i, data in enumerate(datos_etiquetas):
@@ -1117,8 +1114,14 @@ def render_modulo_reportes(supabase_client):
             # BOTÓN NUEVO DE ETIQUETAS
             if st.button("🏷️ Generar Etiquetas", type="secondary", use_container_width=True):
                 pdf_bytes = generar_etiquetas(orden)
-                st.download_button(
-                    label="⬇️ Descargar Etiquetas",
-                    data=pdf_bytes, file_name=f"Etiquetas_{orden['codigo_orden']}.pdf",
-                    mime="application/pdf", use_container_width=True
-                )
+                
+                # Evaluamos si la función devolvió un PDF real o un aviso de "vacío" (None)
+                if pdf_bytes:
+                    st.download_button(
+                        label="⬇️ Descargar Etiquetas",
+                        data=pdf_bytes, file_name=f"Etiquetas_{orden['codigo_orden']}.pdf",
+                        mime="application/pdf", use_container_width=True
+                    )
+                else:
+                    # Mostramos una alerta nativa de Streamlit en pantalla
+                    st.warning("⚠️ Esta orden no contiene uniformes completos válidos para etiquetar.")
