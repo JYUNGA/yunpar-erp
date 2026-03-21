@@ -897,27 +897,23 @@ def generar_etiquetas(orden):
     TAMANO_FUENTE = 14
     # -------------------------------------------------------------
 
-    # Recopilar la data: Extraemos todos los nombres y tallas de la orden
+    # # Recopilar la data: Extraemos todos los nombres y tallas de la orden
     datos_etiquetas = []
     for item in orden.get('items', []):
         fam = str(item.get('familia_producto', '')).strip().upper()
-        # Solo sacamos etiquetas para prendas personalizadas
-        if fam in ['UNIFORME COMPLETO', 'PRENDA SUPERIOR', 'PANTALONETA']:
+        
+        # RESTRICCIÓN: Solo creamos etiquetas si la familia es estrictamente "UNIFORME COMPLETO"
+        if fam == 'UNIFORME COMPLETO':
             for esp in item.get('especificaciones_producto', []):
                 talla_s = str(esp.get('talla_superior') or '').strip()
                 talla_i = str(esp.get('talla_inferior') or '').strip()
                 
                 # Inteligencia de Tallas (Para ahorrar espacio visual en la etiqueta)
                 talla = ""
-                if fam == 'UNIFORME COMPLETO':
-                    if talla_s and talla_i and talla_s != '-' and talla_i != '-' and talla_s != talla_i:
-                        talla = f"{talla_s}/{talla_i}"
-                    else:
-                        talla = talla_s if talla_s != '-' else talla_i
-                elif fam == 'PRENDA SUPERIOR':
-                    talla = talla_s
-                elif fam == 'PANTALONETA':
-                    talla = talla_i
+                if talla_s and talla_i and talla_s != '-' and talla_i != '-' and talla_s != talla_i:
+                    talla = f"{talla_s}/{talla_i}"
+                else:
+                    talla = talla_s if talla_s != '-' else talla_i
                     
                 if talla == '-': talla = ""
                 
