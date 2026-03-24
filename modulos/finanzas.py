@@ -13,15 +13,15 @@ def render(supabase):
     # Capturamos el rol real desde la sesión de tu Login.
     # Asegúrate de que el nombre de la variable coincida con la que usas en tu Login.
     
-    # Opción 1: Si guardas el rol directo así -> st.session_state['rol'] = "VENDEDOR"
-    rol_actual = st.session_state.get('rol', 'VENDEDOR').upper() 
+    # Opción 1: Si guardas el rol directo así -> st.session_state['rol'] = "VENDEDORA"
+    rol_actual = st.session_state.get('rol', 'VENDEDORA').upper() 
     
     # Opción 2: Si guardas todo el usuario en un diccionario -> st.session_state['usuario'] = {"nombre": "Ana", "rol": "Vendedora"}
-    # rol_actual = st.session_state.get('usuario', {}).get('rol', 'VENDEDOR').upper()
+    # rol_actual = st.session_state.get('usuario', {}).get('rol', 'VENDEDORA').upper()
         st.session_state['rol_usuario'] = rol_simulado
 
     # Aquí leemos el rol activo en la sesión
-    rol_actual = st.session_state.get('rol_usuario', 'VENDEDOR')
+    rol_actual = st.session_state.get('rol_usuario', 'VENDEDORA')
 
     st.title("💸 Finanzas y Control de Caja")
     st.markdown("Gestión de ingresos (Abonos/Pagos), egresos operativos y cuentas por cobrar.")
@@ -30,7 +30,7 @@ def render(supabase):
     # 🏗️ CONSTRUCCIÓN DINÁMICA DE PESTAÑAS
     # ==========================================
     # 1. Definimos qué pestañas ve cada rol
-    if rol_actual == "ADMIN":
+    if rol_actual == "GERENTE":
         nombres_tabs = ["📊 Flujo de Caja", "⏳ Cuentas por Cobrar", "📤 Registrar Gasto", "📖 Libro Diario"]
     else:
         # El VENDEDOR solo ve estas dos
