@@ -7,21 +7,9 @@ def render(supabase):
     # ==========================================
     # 🔐 SISTEMA DE ROLES (RBAC)
     # ==========================================
-    # Para pruebas: Un selector en la barra lateral para cambiar de rol al instante.
-    # Cuando conectes tu Login real, borra este bloque del sidebar y usa tu variable de st.session_state
-    # ✅ PEGA ESTO EN SU LUGAR
-    # Capturamos el rol real desde la sesión de tu Login.
-    # Asegúrate de que el nombre de la variable coincida con la que usas en tu Login.
-    
-    # Opción 1: Si guardas el rol directo así -> st.session_state['rol'] = "VENDEDORA"
+    # Leemos el rol real desde la sesión de tu Login (app.py)
+    # Si por algún motivo falla, asume "VENDEDORA" por seguridad extrema.
     rol_actual = st.session_state.get('rol', 'VENDEDORA').upper() 
-    
-    # Opción 2: Si guardas todo el usuario en un diccionario -> st.session_state['usuario'] = {"nombre": "Ana", "rol": "Vendedora"}
-    # rol_actual = st.session_state.get('usuario', {}).get('rol', 'VENDEDORA').upper()
-        st.session_state['rol_usuario'] = rol_simulado
-
-    # Aquí leemos el rol activo en la sesión
-    rol_actual = st.session_state.get('rol_usuario', 'VENDEDORA')
 
     st.title("💸 Finanzas y Control de Caja")
     st.markdown("Gestión de ingresos (Abonos/Pagos), egresos operativos y cuentas por cobrar.")
@@ -29,25 +17,24 @@ def render(supabase):
     # ==========================================
     # 🏗️ CONSTRUCCIÓN DINÁMICA DE PESTAÑAS
     # ==========================================
-    # 1. Definimos qué pestañas ve cada rol
+    # 1. Definimos qué pestañas ve cada rol según tu base de datos
     if rol_actual == "GERENTE":
         nombres_tabs = ["📊 Flujo de Caja", "⏳ Cuentas por Cobrar", "📤 Registrar Gasto", "📖 Libro Diario"]
     else:
-        # El VENDEDOR solo ve estas dos
+        # La VENDEDORA solo ve estas dos
         nombres_tabs = ["⏳ Cuentas por Cobrar", "📤 Registrar Gasto"]
 
     # 2. Creamos las pestañas en la interfaz
     tabs_creados = st.tabs(nombres_tabs)
     
-    # 3. Emparejamos los nombres con los objetos usando un diccionario (Truco de Python)
-    # Esto nos permite llamar a cada pestaña por su nombre sin importar el orden
+    # 3. Emparejamos los nombres con los objetos usando un diccionario
     mis_tabs = dict(zip(nombres_tabs, tabs_creados))
 
     hoy = date.today()
     primer_dia_mes = hoy.replace(day=1)
     
     # ==========================================
-    # TAB 1: FLUJO DE CAJA (Solo Admin)
+    # TAB 1: FLUJO DE CAJA (Solo Gerente)
     # ==========================================
     if "📊 Flujo de Caja" in mis_tabs:
         with mis_tabs["📊 Flujo de Caja"]:
@@ -85,7 +72,7 @@ def render(supabase):
                 st.info("No hay movimientos registrados en este rango de fechas.")
 
     # ==========================================
-    # TAB 2: CUENTAS POR COBRAR (Admin y Vendedor)
+    # TAB 2: CUENTAS POR COBRAR (Gerente y Vendedora)
     # ==========================================
     if "⏳ Cuentas por Cobrar" in mis_tabs:
         with mis_tabs["⏳ Cuentas por Cobrar"]:
@@ -190,7 +177,7 @@ def render(supabase):
                 st.success("¡Excelente! Todas las órdenes están pagadas.")
 
     # ==========================================
-    # TAB 3: REGISTRAR GASTO (Admin y Vendedor)
+    # TAB 3: REGISTRAR GASTO (Gerente y Vendedora)
     # ==========================================
     if "📤 Registrar Gasto" in mis_tabs:
         with mis_tabs["📤 Registrar Gasto"]:
@@ -241,8 +228,8 @@ def render(supabase):
                                 
             with c_cat:
                 st.subheader("Gestión")
-                # Solo el administrador puede crear nuevas categorías de gasto
-                if rol_actual == "ADMIN":
+                # Solo el gerente puede crear nuevas categorías de gasto
+                if rol_actual == "GERENTE":
                     with st.expander("➕ Crear Nueva Categoría"):
                         nueva_cat = st.text_input("Nombre de categoría")
                         if st.button("Guardar Categoría", use_container_width=True):
@@ -254,10 +241,10 @@ def render(supabase):
                                 except:
                                     st.error("Error al crear. Quizá ya existe.")
                 else:
-                    st.info("ℹ️ Las categorías de gasto son gestionadas por el Administrador.")
+                    st.info("ℹ️ Las categorías de gasto son gestionadas por el Gerente.")
 
     # ==========================================
-    # TAB 4: LIBRO DIARIO (Solo Admin)
+    # TAB 4: LIBRO DIARIO (Solo Gerente)
     # ==========================================
     if "📖 Libro Diario" in mis_tabs:
         with mis_tabs["📖 Libro Diario"]:
