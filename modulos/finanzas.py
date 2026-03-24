@@ -9,9 +9,15 @@ def render(supabase):
     # ==========================================
     # Para pruebas: Un selector en la barra lateral para cambiar de rol al instante.
     # Cuando conectes tu Login real, borra este bloque del sidebar y usa tu variable de st.session_state
-    with st.sidebar:
-        st.markdown("### 🛠️ Modo Desarrollador")
-        rol_simulado = st.radio("Simular vista como:", ["ADMIN", "VENDEDOR"])
+    # ✅ PEGA ESTO EN SU LUGAR
+    # Capturamos el rol real desde la sesión de tu Login.
+    # Asegúrate de que el nombre de la variable coincida con la que usas en tu Login.
+    
+    # Opción 1: Si guardas el rol directo así -> st.session_state['rol'] = "VENDEDOR"
+    rol_actual = st.session_state.get('rol', 'VENDEDOR').upper() 
+    
+    # Opción 2: Si guardas todo el usuario en un diccionario -> st.session_state['usuario'] = {"nombre": "Ana", "rol": "Vendedora"}
+    # rol_actual = st.session_state.get('usuario', {}).get('rol', 'VENDEDOR').upper()
         st.session_state['rol_usuario'] = rol_simulado
 
     # Aquí leemos el rol activo en la sesión
