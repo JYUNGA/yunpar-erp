@@ -485,9 +485,16 @@ def render(supabase):
                     elif float(restore_price) == float(prod_obj.get('precio_mayorista', 0)): tarifa_sel_def = 2
                     else: tarifa_sel_def = 3 # Manual
                 
+                # --- NUEVO: Agregamos la opción de Obsequio ---
+                opciones_tarifa = ["Unitario", "Docena", "Mayorista", "Manual", "Obsequio / Cortesía"]
+                
+                # Para que al editar reconozca si era obsequio
+                if restore_price is not None and float(restore_price) == 0.0 and tarifa_sel_def == 3:
+                    tarifa_sel_def = 4 # Índice de "Obsequio"
+                
                 tarifa_sel = c1.selectbox(
                     "Tarifa", 
-                    ["Unitario", "Docena", "Mayorista", "Manual"], 
+                    opciones_tarifa, 
                     index=tarifa_sel_def, 
                     key=f"tar_sel_{prod_obj['id']}"
                 )
@@ -496,16 +503,17 @@ def render(supabase):
                 precio_base = 0.0
                 es_manual = False
                 
-                # Si estamos restaurando, usamos el precio guardado
                 restore_price = st.session_state.get('restore_price')
                 
                 if tarifa_sel == "Unitario": precio_base = float(prod_obj.get('precio_unitario', 0))
                 elif tarifa_sel == "Docena": precio_base = float(prod_obj.get('precio_docena', 0))
                 elif tarifa_sel == "Mayorista": precio_base = float(prod_obj.get('precio_mayorista', 0))
+                elif tarifa_sel == "Obsequio / Cortesía": 
+                    precio_base = 0.0
+                    es_manual = False # Se bloquea en $0.00 automáticamente
                 else: 
                     es_manual = True
-                    # CORRECCIÓN: Si estamos restaurando un precio manual, obligamos a usar ese valor
-                    if restore_price is not None:
+                    if restore_price is not None and tarifa_sel_def != 4:
                         precio_base = float(restore_price)
                     else:
                         precio_base = st.session_state.get(f'p_man_val_{prod_obj["id"]}', float(prod_obj.get('precio_unitario', 0)))
