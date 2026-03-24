@@ -102,10 +102,20 @@ def obtener_datos_orden(supabase_client, busqueda):
         for item in items:
             if item.get('producto_id'):
                 try:
-                    res_prod = supabase_client.table('productos_catalogo').select('descripcion').eq('id', item['producto_id']).execute()
-                    item['nombre_producto'] = res_prod.data[0]['descripcion'] if res_prod.data else item.get('familia_producto')
-                except: item['nombre_producto'] = item.get('familia_producto')
-            else: item['nombre_producto'] = item.get('familia_producto')
+                    # NUEVO: Traemos también el tipo_prenda
+                    res_prod = supabase_client.table('productos_catalogo').select('descripcion, tipo_prenda').eq('id', item['producto_id']).execute()
+                    if res_prod.data:
+                        item['nombre_producto'] = res_prod.data[0]['descripcion']
+                        item['tipo_prenda'] = res_prod.data[0].get('tipo_prenda', '')
+                    else:
+                        item['nombre_producto'] = item.get('familia_producto')
+                        item['tipo_prenda'] = ''
+                except: 
+                    item['nombre_producto'] = item.get('familia_producto')
+                    item['tipo_prenda'] = ''
+            else: 
+                item['nombre_producto'] = item.get('familia_producto')
+                item['tipo_prenda'] = ''
                 
             id_tela = item.get('insumo_base_id')
             if id_tela:
@@ -258,8 +268,12 @@ def generar_comprobante_cliente(orden):
             row = table.row(style=estilo_datos)
             nombre_prod = str(item.get('nombre_producto', 'Producto no definido')).replace('│', '|').replace('—', '-') 
             row.cell(nombre_prod); row.cell(str(item.get('cantidad_total', 0)))
-            precio = item.get('precio_aplicado', 0)
-            row.cell(f"${precio:.2f}"); row.cell(f"${item.get('cantidad_total', 0) * precio:.2f}")
+            
+            precio = float(item.get('precio_aplicado', 0))
+            if precio <= 0:
+                row.cell("OBSEQUIO"); row.cell("$0.00")
+            else:
+                row.cell(f"${precio:.2f}"); row.cell(f"${item.get('cantidad_total', 0) * precio:.2f}")
 
     pdf.ln(2); pdf.set_font("helvetica", "B", 10) # Letra más pequeña y menos salto
     x_offset = 150 
@@ -549,31 +563,38 @@ def generar_hoja_produccion(orden):
         pdf.cell(0, 10, " ¡ATENCIÓN: ESTA ORDEN HA TENIDO CAMBIOS RECIENTES!", fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(5)
 
-    # --- 2. CÁLCULO DEL RESUMEN GLOBAL ---
-    resumen_sup = {}
-    resumen_inf = {}
+    # --- 2. CÁLCULO DEL RESUMEN GLOBAL DINÁMICO ---
+    resumenes_dinamicos = {}
     resumen_polines = {}
     
     for item in items_taller:
         fam = str(item.get('familia_producto', '')).strip().upper() 
+        tipo_prenda = str(item.get('tipo_prenda') or '').strip().upper()
+        if not tipo_prenda: tipo_prenda = fam
+        
         for esp in item.get('especificaciones_producto', []):
+            t_sup = str(esp.get('talla_superior') or '').strip().upper()
+            t_inf = str(esp.get('talla_inferior') or '').strip().upper()
+            es_arq = bool(esp.get("es_arquero", False))
             
-            # Conteo de Camisetas
-            if fam in ['UNIFORME COMPLETO', 'PRENDA SUPERIOR']:
-                t_sup = str(esp.get('talla_superior') or '').strip().upper()
-                if t_sup and t_sup != '-' and t_sup != 'NONE': 
-                    resumen_sup[t_sup] = resumen_sup.get(t_sup, 0) + 1
+            # Conteo Superior Dinámico
+            if fam in ['UNIFORME COMPLETO', 'PRENDA SUPERIOR'] and t_sup not in ['-', 'NONE', '']: 
+                titulo_sup = f"{tipo_prenda} (SUPERIOR)" if fam == 'UNIFORME COMPLETO' else f"{tipo_prenda}"
+                if es_arq: titulo_sup += " (ARQ)"
+                if titulo_sup not in resumenes_dinamicos: resumenes_dinamicos[titulo_sup] = {}
+                resumenes_dinamicos[titulo_sup][t_sup] = resumenes_dinamicos[titulo_sup].get(t_sup, 0) + 1
             
-            # Conteo de Pantalonetas
-            if fam in ['UNIFORME COMPLETO', 'PANTALONETA']:
-                t_inf = str(esp.get('talla_inferior') or '').strip().upper()
-                if t_inf and t_inf != '-' and t_inf != 'NONE': 
-                    resumen_inf[t_inf] = resumen_inf.get(t_inf, 0) + 1
+            # Conteo Inferior Dinámico
+            if fam in ['UNIFORME COMPLETO', 'PANTALONETA'] and t_inf not in ['-', 'NONE', '']: 
+                titulo_inf = f"{tipo_prenda}" if fam == 'PANTALONETA' else f"{tipo_prenda} (INFERIOR)"
+                if es_arq: titulo_inf += " (ARQ)"
+                if titulo_inf not in resumenes_dinamicos: resumenes_dinamicos[titulo_inf] = {}
+                resumenes_dinamicos[titulo_inf][t_inf] = resumenes_dinamicos[titulo_inf].get(t_inf, 0) + 1
             
-            # Conteo de Polines
+            # Conteo Polines
             if fam == 'UNIFORME COMPLETO':
                 t_pol = str(esp.get('talla_polines') or '').strip().upper()
-                if t_pol and t_pol != '-' and t_pol != 'NONE':
+                if t_pol not in ['-', 'NONE', '']:
                     c_pol = str(esp.get('color_polines') or 'Sin Color').strip()
                     k = (t_pol, c_pol)
                     resumen_polines[k] = resumen_polines.get(k, 0) + 1
@@ -601,8 +622,8 @@ def generar_hoja_produccion(orden):
             pdf.cell(0, 10, "(La imagen no pudo ser cargada)", align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(5)
 
-    # --- 4. LAS 3 TABLAS DE RESUMEN AISLADAS Y CON BORDES EXACTOS ---
-    if resumen_sup or resumen_inf or resumen_polines:
+    # --- 4. MOTOR DINÁMICO DE TABLAS DE RESUMEN FPDF ---
+    if resumenes_dinamicos or resumen_polines:
         pdf.set_font("helvetica", "B", 12)
         pdf.cell(0, 8, "RESUMEN GLOBAL DE CORTE", align="C", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(2)
@@ -610,109 +631,96 @@ def generar_hoja_produccion(orden):
         start_y = pdf.get_y()
         max_y = start_y
         
-        # Colores RGB
         fill_cab = (150, 150, 150)
         fill_tot = (220, 220, 220)
-
-        # TABLA 1: CAMISETAS (Izquierda Absoluta X=20)
-        if resumen_sup:
-            pdf.set_y(start_y)
-            pdf.set_x(20)
-            pdf.set_font("helvetica", "B", 9)
-            pdf.cell(30, 6, "CAMISETAS", align="C", new_x="LMARGIN", new_y="NEXT")
-            
-            # Cabecera
-            pdf.set_x(20)
-            pdf.set_fill_color(*fill_cab)
-            pdf.set_text_color(255, 255, 255)
-            pdf.cell(15, 6, "Talla", border=1, align="C", fill=True)
-            pdf.cell(15, 6, "Cant", border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
-            
-            # Datos
-            pdf.set_text_color(0, 0, 0)
-            pdf.set_font("helvetica", "", 9)
-            tot_cam = 0
-            for t, cant in sorted(resumen_sup.items(), key=lambda x: orden_talla(x[0])):
-                pdf.set_x(20)
-                pdf.cell(15, 6, str(t), border=1, align="C")
-                pdf.cell(15, 6, str(cant), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
-                tot_cam += cant
-                
-            # Fila Total
-            pdf.set_x(20)
-            pdf.set_font("helvetica", "B", 9)
-            pdf.set_fill_color(*fill_tot)
-            pdf.cell(15, 6, "TOTAL", border=1, align="C", fill=True)
-            pdf.cell(15, 6, str(tot_cam), border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
-            max_y = max(max_y, pdf.get_y())
-
-        # TABLA 2: PANTALONETAS (Centro Absoluto X=90)
-        if resumen_inf:
-            pdf.set_y(start_y)
-            pdf.set_x(90)
-            pdf.set_font("helvetica", "B", 9)
-            pdf.cell(30, 6, "PANTALONETAS", align="C", new_x="LMARGIN", new_y="NEXT")
-            
-            # Cabecera
-            pdf.set_x(90)
-            pdf.set_fill_color(*fill_cab)
-            pdf.set_text_color(255, 255, 255)
-            pdf.cell(15, 6, "Talla", border=1, align="C", fill=True)
-            pdf.cell(15, 6, "Cant", border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
-            
-            # Datos
-            pdf.set_text_color(0, 0, 0)
-            pdf.set_font("helvetica", "", 9)
-            tot_pan = 0
-            for t, cant in sorted(resumen_inf.items(), key=lambda x: orden_talla(x[0])):
-                pdf.set_x(90)
-                pdf.cell(15, 6, str(t), border=1, align="C")
-                pdf.cell(15, 6, str(cant), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
-                tot_pan += cant
-                
-            # Fila Total
-            pdf.set_x(90)
-            pdf.set_font("helvetica", "B", 9)
-            pdf.set_fill_color(*fill_tot)
-            pdf.cell(15, 6, "TOTAL", border=1, align="C", fill=True)
-            pdf.cell(15, 6, str(tot_pan), border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
-            max_y = max(max_y, pdf.get_y())
-
-        # TABLA 3: POLINES (Derecha Absoluta X=140)
+        
+        # 1. Empaquetar todas las tablas a dibujar
+        tablas_a_dibujar = []
+        for titulo, tallas_dict in resumenes_dinamicos.items():
+            if tallas_dict: tablas_a_dibujar.append({"titulo": titulo[:20], "datos": tallas_dict, "tipo": "normal"})
         if resumen_polines:
-            pdf.set_y(start_y)
-            pdf.set_x(140) # Movido un poquito a la izquierda
-            pdf.set_font("helvetica", "B", 9)
-            pdf.cell(55, 6, "POLINES", align="C", new_x="LMARGIN", new_y="NEXT")
+            tablas_a_dibujar.append({"titulo": "POLINES", "datos": resumen_polines, "tipo": "polin"})
             
-            # Cabecera
-            pdf.set_x(140)
+        # 2. Coordenadas X para 4 tablas por fila (repartidas equitativamente)
+        posiciones_x = [15, 60, 105, 150] 
+        col_actual = 0
+        y_actual = start_y
+        
+        # 3. Dibujar cada tabla iterativamente
+        for tabla in tablas_a_dibujar:
+            # Si pasamos de 4 columnas, bajamos de línea
+            if col_actual >= 4: 
+                col_actual = 0
+                y_actual = max_y + 8 # Bajamos un poco respecto al final de la tabla más larga
+                pdf.set_y(y_actual)
+            
+            x = posiciones_x[col_actual]
+            pdf.set_xy(x, y_actual)
+            
+            # Prevención de salto de página
+            if y_actual > 250:
+                pdf.add_page()
+                y_actual = pdf.get_y()
+                max_y = y_actual
+                pdf.set_xy(x, y_actual)
+            
+            # DIBUJAR TÍTULO
+            pdf.set_font("helvetica", "B", 8)
+            ancho_tabla = 50 if tabla["tipo"] == "polin" else 40
+            
+            # Cortar titulo si es muy largo para que no rompa el cuadro
+            tit_limpio = tabla["titulo"][:22]
+            pdf.cell(ancho_tabla, 6, tit_limpio, align="C", new_x="LMARGIN", new_y="NEXT")
+            
+            # DIBUJAR CABECERA GRIS
+            pdf.set_x(x)
             pdf.set_fill_color(*fill_cab)
             pdf.set_text_color(255, 255, 255)
-            pdf.cell(15, 6, "Talla", border=1, align="C", fill=True)
-            pdf.cell(25, 6, "Color", border=1, align="C", fill=True) # Aumentado de 20 a 25
-            pdf.cell(15, 6, "Cant", border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
             
-            # Datos
-            pdf.set_text_color(0, 0, 0)
-            pdf.set_font("helvetica", "", 8) # Letra 8 para que entre color largo
-            tot_pol = 0
-            for (t, c), cant in sorted(resumen_polines.items(), key=lambda x: (orden_talla(x[0][0]), x[0][1])):
-                pdf.set_x(140)
-                pdf.cell(15, 6, str(t), border=1, align="C")
-                # Acortamos string si es muy largo
-                color_str = str(c)[:15] + "." if len(str(c)) > 15 else str(c)
-                pdf.cell(25, 6, color_str, border=1, align="C")
-                pdf.cell(15, 6, str(cant), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
-                tot_pol += cant
+            if tabla["tipo"] == "normal":
+                pdf.cell(20, 6, "Talla", border=1, align="C", fill=True)
+                pdf.cell(20, 6, "Cant", border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
+            else:
+                pdf.cell(15, 6, "Talla", border=1, align="C", fill=True)
+                pdf.cell(20, 6, "Color", border=1, align="C", fill=True)
+                pdf.cell(15, 6, "Cant", border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
                 
-            # Fila Total
-            pdf.set_x(140)
-            pdf.set_font("helvetica", "B", 9)
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_font("helvetica", "", 8)
+            
+            # DIBUJAR DATOS Y FILAS
+            tot_cant = 0
+            if tabla["tipo"] == "normal":
+                datos_ord = sorted(tabla["datos"].items(), key=lambda x: orden_talla(x[0]))
+                for t, cant in datos_ord:
+                    pdf.set_x(x)
+                    pdf.cell(20, 6, str(t), border=1, align="C")
+                    pdf.cell(20, 6, str(cant), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+                    tot_cant += cant
+            else:
+                datos_ord = sorted(tabla["datos"].items(), key=lambda x: (orden_talla(x[0][0]), x[0][1]))
+                for (t, c), cant in datos_ord:
+                    pdf.set_x(x)
+                    pdf.cell(15, 6, str(t), border=1, align="C")
+                    color_str = str(c)[:10] + "." if len(str(c)) > 10 else str(c)
+                    pdf.cell(20, 6, color_str, border=1, align="C")
+                    pdf.cell(15, 6, str(cant), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+                    tot_cant += cant
+                    
+            # DIBUJAR FILA TOTAL
+            pdf.set_x(x)
+            pdf.set_font("helvetica", "B", 8)
             pdf.set_fill_color(*fill_tot)
-            pdf.cell(40, 6, "TOTAL", border=1, align="C", fill=True) # Suma (15+25)
-            pdf.cell(15, 6, str(tot_pol), border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
+            if tabla["tipo"] == "normal":
+                pdf.cell(20, 6, "TOTAL", border=1, align="C", fill=True)
+                pdf.cell(20, 6, str(tot_cant), border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
+            else:
+                pdf.cell(35, 6, "TOTAL", border=1, align="C", fill=True)
+                pdf.cell(15, 6, str(tot_cant), border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
+                
+            # Registrar el punto más bajo al que llegó esta tabla
             max_y = max(max_y, pdf.get_y())
+            col_actual += 1
 
         # RESTAURAR VARIABLES GLOBALES
         pdf.set_y(max_y + 8)
