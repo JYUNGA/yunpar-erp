@@ -779,10 +779,9 @@ def render(supabase):
                     df_resumen_filtrado = df_resumen[cols_finales].copy()
                     
                     # 4. SUPER FILTRO: Eliminar columnas 100% vacías (Evita errores de UI en Streamlit)
-                    # Convertimos textos vacíos y cadenas 'None' a verdaderos nulos para que dropna los detecte
                     df_resumen_filtrado = df_resumen_filtrado.replace(["", "None", "NaN", "nan", None], pd.NA)
                     df_resumen_filtrado = df_resumen_filtrado.dropna(axis=1, how='all')
-                    df_resumen_filtrado = df_resumen_filtrado.fillna("") # Devolvemos a texto limpio
+                    df_resumen_filtrado = df_resumen_filtrado.fillna("") 
                     
                     # 5. Renderizamos el dataframe ya bonito, filtrado y pulido
                     # --- NUEVO: RESALTADO AMARILLO PARA ARQUEROS ---
@@ -856,10 +855,17 @@ def render(supabase):
             # SECCIÓN FINANZAS Y OBSERVACIONES
             # ==========================================
             st.divider()
-            c_fin, c_obs = st.columns([1.5, 2])
             
             es_edicion_ui = True if st.session_state.get('editando_orden_id') else False
             
+            c_fin, c_obs = st.columns([1.5, 2])
+            
+            # --- VARIABLES POR DEFECTO PARA LA BASE DE DATOS ---
+            metodo_pago = "Efectivo"
+            banco_destino = None
+            num_ref = None
+            detalle_cambios_txt = ""
+
             with c_fin:
                 st.markdown("### 💰 Finanzas de la Orden")
                 
@@ -868,39 +874,48 @@ def render(supabase):
                     value=0.0, 
                     max_value=float(tot),
                     disabled=es_edicion_ui, 
-                    help="Los pagos adicionales deben registrarse desde el módulo de Finanzas." if es_edicion_ui else ""
+                    help="Los pagos adicionales se registran en Finanzas." if es_edicion_ui else ""
                 )
                 
-                # Etiquetas de Total y Saldo dinámicas
+                # Total y Saldo dinámicos
                 saldo_restante = tot - mnt
                 col_t, col_s = st.columns(2)
                 col_t.metric("Total Orden", f"${tot:.2f}")
                 col_s.metric("Saldo Pendiente", f"${saldo_restante:.2f}")
 
-                # --- NUEVO: DETALLES DEL PAGO ---
-                metodo_pago = "Efectivo"
-                banco_destino = None
-                num_ref = None
-                
-                # Solo pedir datos bancarios si hay dinero de por medio y es una orden nueva
+                # --- NUEVO: DETALLES DEL PAGO (Solo en creacion y con dinero) ---
                 if mnt > 0 and not es_edicion_ui:
-                    metodo_pago = st.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Depósito", "Tarjeta"])
+                    metodo_pago = st.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Depósito", "Tarjeta", "Otro"])
                     if metodo_pago in ["Transferencia", "Depósito"]:
                         b_col1, b_col2 = st.columns(2)
                         banco_destino = b_col1.selectbox("Banco Destino", ["Pichincha", "Guayaquil", "Pacífico", "Produbanco", "Bolivariano", "Otro"])
-                        num_ref = b_col2.text_input("Núm. Comprobante / Ref.")
+                        num_ref = b_col2.text_input("Núm. Comprobante")
 
             with c_obs:
-                st.markdown("### 📝 Notas")
+                st.markdown("### 📝 Notas y Actualizaciones")
                 val_obs = st.session_state.get('editando_obs_g', "")
                 obs_g = st.text_area(
                     "Observaciones Generales de la Orden", 
                     value=val_obs, 
-                    height=240, # Más alto para que cuadre con los inputs de la izquierda
-                    placeholder="Escriba aquí cualquier nota general para producción..."
+                    height=100,
+                    placeholder="Escriba aquí notas de confección o instrucciones generales..."
                 )
-            # Lógica de bloqueo si es domingo
-            btn_disabled = True if (locals().get('es_domingo')) else False 
+                
+                # --- NUEVO: MOTIVO DE EDICIÓN ---
+                if es_edicion_ui:
+                    st.warning("⚠️ Estás editando una orden existente.")
+                    detalle_cambios_txt = st.text_area(
+                        "¿Qué cambios realizaste? (Obligatorio para notificar a diseño)",
+                        placeholder="Ej: Se cambió la talla del jugador X, o se cambió el cuello...",
+                        height=100
+                    )
+
+            # Lógica de bloqueo (Domingo o falta justificar cambio)
+            btn_disabled = False
+            if locals().get('es_domingo'): 
+                btn_disabled = True
+            if es_edicion_ui and not detalle_cambios_txt.strip():
+                btn_disabled = True # Obliga a la vendedora a escribir algo si está editando
 
             if st.button("💾 GUARDAR ORDEN", type="primary", use_container_width=True, disabled=btn_disabled):
                 try:
@@ -928,49 +943,45 @@ def render(supabase):
                     if es_edicion:
                         id_o = st.session_state['editando_orden_id']
                         cab["alerta_cambios"] = True 
+                        cab["detalle_cambios"] = detalle_cambios_txt.strip() # --- NUEVO: GUARDAR DETALLE ---
                         
                         # --- NUEVO: RECALCULAR SALDO PENDIENTE REAL ---
-                        # 1. Sumamos todos los pagos que el cliente ya tiene registrados
                         res_pagos = supabase.table('pagos').select('monto').eq('orden_id', id_o).execute()
                         total_pagado = sum([float(p['monto']) for p in res_pagos.data]) if res_pagos.data else 0.0
                         
-                        # 2. El nuevo saldo es el nuevo total estimado menos lo que ya pagó
                         cab["saldo_pendiente"] = tot - total_pagado
-                        
-                        # 3. Quitamos el abono_inicial para no sobrescribir el registro histórico de creación
                         cab.pop("abono_inicial", None)
                         
                         supabase.table('ordenes').update(cab).eq('id', id_o).execute()
                         
                         # --- CORRECCIÓN ERROR 400: Borrar en cascada manual ---
-                        # 1. Obtener los IDs de los items actuales
                         items_actuales = supabase.table('items_orden').select('id').eq('orden_id', id_o).execute().data
                         ids_items = [item['id'] for item in items_actuales]
                         
-                        # 2. Borrar especificaciones (hijos) primero
                         if ids_items:
                             supabase.table('especificaciones_producto').delete().in_('item_orden_id', ids_items).execute()
                         
-                        # 3. Borrar los items (padres) después
                         supabase.table('items_orden').delete().eq('orden_id', id_o).execute()
                     else:
-                        id_o = st.session_state.get('id_usuario', 1) # Asegurar un fallback
+                        id_o = st.session_state.get('id_usuario', 1) 
                         
                         cab["estado"] = "Pendiente"
                         cab["alerta_cambios"] = False
+                        cab["detalle_cambios"] = ""
                         cab["creado_por_id"] = id_o
                         
                         res_o = supabase.table('ordenes').insert(cab).execute()
                         id_o = res_o.data[0]['id']
 
-                        # 🟢 INTEGRACIÓN FINANZAS: Registrar el Abono en la tabla de Pagos
+                        # 🟢 INTEGRACIÓN FINANZAS: Registrar el Abono completo en Pagos
                         if mnt > 0:
                             supabase.table('pagos').insert({
                                 "orden_id": id_o,
+                                "cliente_id": st.session_state['editando_cliente_id'],
                                 "monto": mnt,
-                                "metodo_pago": metodo_pago, 
-                                "banco_destino": banco_destino,
-                                "numero_referencia": num_ref,
+                                "metodo_pago": metodo_pago, # Guardamos Transferencia, Tarjeta, etc
+                                "banco_destino": banco_destino, # Guardamos Banco
+                                "numero_referencia": num_ref, # Guardamos Referencia
                                 "fecha_pago": fecha_final
                             }).execute()
 
