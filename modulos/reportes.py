@@ -668,12 +668,16 @@ def generar_hoja_produccion(orden):
             pdf.set_font("helvetica", "B", 8)
             ancho_tabla = 50 if tabla["tipo"] == "polin" else 40
             
-            # Cortar titulo si es muy largo para que no rompa el cuadro
-            tit_limpio = tabla["titulo"][:22]
-            pdf.cell(ancho_tabla, 6, tit_limpio, align="C", new_x="LMARGIN", new_y="NEXT")
+            # Guardamos la posición Y inicial
+            y_antes_titulo = pdf.get_y()
+            
+            # multi_cell permite que el texto haga salto de línea automático si no cabe
+            pdf.multi_cell(ancho_tabla, 3.5, tabla["titulo"], align="C")
+            
+            # Forzamos la posición Y de la cabecera para que todas las tablas de la fila queden perfectamente alineadas, tome 1 o 2 líneas el título
+            pdf.set_xy(x, y_antes_titulo + 8)
             
             # DIBUJAR CABECERA GRIS
-            pdf.set_x(x)
             pdf.set_fill_color(*fill_cab)
             pdf.set_text_color(255, 255, 255)
             
