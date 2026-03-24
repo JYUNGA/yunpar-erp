@@ -664,20 +664,27 @@ def generar_hoja_produccion(orden):
                 max_y = y_actual
                 pdf.set_xy(x, y_actual)
             
-            # DIBUJAR TÍTULO
+            # DIBUJAR TÍTULO (CORREGIDO: CÁLCULO DE LÍNEAS DINÁMICO)
             pdf.set_font("helvetica", "B", 8)
             ancho_tabla = 50 if tabla["tipo"] == "polin" else 40
             
-            # Guardamos la posición Y inicial
-            y_antes_titulo = pdf.get_y()
+            # Guardamos la posición Y de la fila para alinear cabeceras gris después
+            y_base_fila = y_actual
             
-            # multi_cell permite que el texto haga salto de línea automático si no cabe
-            pdf.multi_cell(ancho_tabla, 3.5, tabla["titulo"], align="C")
+            # 1. Obtenemos el texto del título sin recortar
+            tit_completo = tabla["titulo"]
             
-            # Forzamos la posición Y de la cabecera para que todas las tablas de la fila queden perfectamente alineadas, tome 1 o 2 líneas el título
-            pdf.set_xy(x, y_antes_titulo + 8)
+            # 2. Matemáticas: Calculamos cuánto espacio Y ocupa el título con multi_cell
+            # 'h' es la altura de cada línea (3.5mm)
+            altura_linea = 3.5
+            pdf.set_xy(x, y_base_fila)
+            pdf.multi_cell(ancho_tabla, altura_linea, tit_completo, align="C")
             
-            # DIBUJAR CABECERA GRIS
+            # 3. Forzamos la Y de la cabecera gris:
+            # y_base_fila (origen) + 8mm de margen de seguridad para los títulos más largos (2 líneas)
+            pdf.set_xy(x, y_base_fila + 8)
+            
+            # DIBUJAR CABECERA GRIS (Sigue igual)
             pdf.set_fill_color(*fill_cab)
             pdf.set_text_color(255, 255, 255)
             
