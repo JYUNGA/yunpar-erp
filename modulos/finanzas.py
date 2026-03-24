@@ -65,7 +65,6 @@ def render(supabase):
         if res_cxc.data:
             df_cxc = pd.DataFrame(res_cxc.data)
             
-            # Mapeo de clientes
             cliente_ids = df_cxc['cliente_id'].dropna().unique().tolist()
             mapa_clientes = {}
             if cliente_ids:
@@ -76,8 +75,8 @@ def render(supabase):
             
             with st.expander("🔍 Buscador Avanzado (Filtros)", expanded=False):
                 col_b1, col_b2, col_b3 = st.columns([2, 2, 2])
-                busqueda_cod = col_b1.text_input("Código de Orden", placeholder="Ej: 001", key="bus_cod_cxc")
-                busqueda_cli = col_b2.text_input("Nombre del Cliente", placeholder="Ej: Juan", key="bus_cli_cxc")
+                busqueda_cod = col_b1.text_input("Código de Orden", placeholder="Ej: 6429", key="bus_cod_cxc")
+                busqueda_cli = col_b2.text_input("Nombre del Cliente", placeholder="Ej: Wilmer", key="bus_cli_cxc")
                 busqueda_fechas = col_b3.date_input("Rango de Fechas (Creación)", value=[], format="DD/MM/YYYY", key="bus_fec_cxc")
             
             df_filtrado = df_cxc.copy()
@@ -89,44 +88,55 @@ def render(supabase):
                 fechas_creacion = pd.to_datetime(df_filtrado['created_at'])
                 df_filtrado = df_filtrado[(fechas_creacion >= inicio) & (fechas_creacion <= fin)]
             
-            st.markdown("👇 **Selecciona una fila en la tabla para liquidar o abonar al saldo:**")
+            st.markdown("👇 **Haz clic en una orden de la tabla para registrar su pago:**")
             
-            # TABLA INTERACTIVA (Requiere Streamlit >= 1.35)
+            # TABLA INTERACTIVA
             evento_tabla = st.dataframe(
                 df_filtrado[["id", "codigo_orden", "Cliente", "total_estimado", "abono_inicial", "saldo_pendiente", "estado"]], 
                 use_container_width=True, 
                 hide_index=True,
                 selection_mode="single_row",
-                on_select="rerun",
+                on_select="rerun", # Clave para que Streamlit detecte el clic
                 column_config={
-                    "id": None, # Oculta la columna ID pero la mantiene accesible en los datos
+                    "id": None, # Ocultamos el ID de base de datos
                     "total_estimado": st.column_config.NumberColumn("Total", format="$ %.2f"),
                     "abono_inicial": st.column_config.NumberColumn("Abono", format="$ %.2f"),
                     "saldo_pendiente": st.column_config.NumberColumn("Saldo", format="$ %.2f")
                 }
             )
             
-            st.divider()
-            
-            # FLUJO DE PAGO MEJORADO BASADO EN SELECCIÓN
+            # ==========================================
+            # PANEL DE PAGO DINÁMICO (Adiós redundancia)
+            # ==========================================
             filas_seleccionadas = evento_tabla.selection.rows
             
-            if filas_seleccionadas:
-                # Obtener los datos de la fila seleccionada
+            if not filas_seleccionadas:
+                # Mensaje sutil si no hay nada seleccionado
+                st.info("ℹ️ Selecciona una fila arriba para habilitar el panel de pago.")
+            else:
+                # Obtenemos los datos exactos de la fila que el usuario clicó
                 indice_fila = filas_seleccionadas[0]
                 fila_datos = df_filtrado.iloc[indice_fila]
                 orden_seleccionada_id = int(fila_datos["id"])
                 saldo_actual = float(fila_datos["saldo_pendiente"])
                 
-                st.markdown(f"### 💰 Registrar Pago para: **{fila_datos['codigo_orden']} - {fila_datos['Cliente']}**")
+                st.divider()
+                st.markdown("### 💰 Registrar Pago")
                 
+                # Mostramos un resumen limpio usando métricas en lugar de un selector
+                col_res1, col_res2, col_res3 = st.columns(3)
+                col_res1.metric("Orden Seleccionada", fila_datos['codigo_orden'])
+                col_res2.metric("Cliente", fila_datos['Cliente'])
+                col_res3.metric("Saldo Pendiente", f"${saldo_actual:.2f}")
+
+                # Formulario compacto
                 with st.form(key="form_pago"):
                     col_monto, col_metodo, col_banco = st.columns(3)
                     monto_a_pagar = col_monto.number_input("Monto a Pagar ($)", min_value=0.01, max_value=saldo_actual, value=saldo_actual)
                     metodo_pago = col_metodo.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Tarjeta", "Otro"])
                     banco_destino = col_banco.selectbox("Banco Destino", ["Seleccionar...", "JEP", "Pichincha", "Pacifico", "Austro"])
                     
-                    submit_pago = st.form_submit_button("💾 Guardar Pago", type="primary", use_container_width=True)
+                    submit_pago = st.form_submit_button("💾 Confirmar y Guardar Pago", type="primary", use_container_width=True)
                     
                     if submit_pago:
                         if metodo_pago == "Transferencia" and banco_destino == "Seleccionar...":
@@ -135,7 +145,7 @@ def render(supabase):
                             try:
                                 data_pago = {
                                     "orden_id": orden_seleccionada_id,
-                                    "cliente_id": int(fila_datos["cliente_id"]), # Recuperado de la fila original
+                                    "cliente_id": int(fila_datos["cliente_id"]),
                                     "monto": monto_a_pagar,
                                     "metodo_pago": metodo_pago,
                                     "fecha_pago": hoy.isoformat()
@@ -152,12 +162,10 @@ def render(supabase):
 
                                 supabase.table("ordenes").update(update_data).eq("id", orden_seleccionada_id).execute()
                                 
-                                st.toast(f"✅ Pago de ${monto_a_pagar} registrado con éxito.", icon="💸")
-                                st.rerun() # Esto limpiará la selección automáticamente
+                                st.toast(f"✅ Pago de ${monto_a_pagar} registrado con éxito a la orden {fila_datos['codigo_orden']}.", icon="💸")
+                                st.rerun() # Limpia la vista automáticamente
                             except Exception as e:
                                 st.error(f"Error al registrar el pago: {e}")
-            else:
-                st.info("ℹ️ Haz clic en una orden en la tabla de arriba para registrar un pago. La selección se limpiará sola al terminar.")
         else:
             st.success("¡Excelente! Todas las órdenes están pagadas.")
 
