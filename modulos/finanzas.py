@@ -91,52 +91,45 @@ def render(supabase):
             st.markdown("👇 **Haz clic en una orden de la tabla para registrar su pago:**")
             
             # TABLA INTERACTIVA
+            evento_tabla = # ✨ PEGA ESTO EN EL LUGAR QUE DEJASTE VACÍO ✨
+            st.markdown("👇 **Haz clic en la fila de la orden para registrar su pago:**")
+            
+            # TABLA INTERACTIVA (Reemplaza al st.dataframe anterior y al st.selectbox)
             evento_tabla = st.dataframe(
                 df_filtrado[["id", "codigo_orden", "Cliente", "total_estimado", "abono_inicial", "saldo_pendiente", "estado"]], 
                 use_container_width=True, 
                 hide_index=True,
                 selection_mode="single_row",
-                on_select="rerun", # Clave para que Streamlit detecte el clic
+                on_select="rerun",
                 column_config={
-                    "id": None, # Ocultamos el ID de base de datos
+                    "id": None, 
                     "total_estimado": st.column_config.NumberColumn("Total", format="$ %.2f"),
                     "abono_inicial": st.column_config.NumberColumn("Abono", format="$ %.2f"),
                     "saldo_pendiente": st.column_config.NumberColumn("Saldo", format="$ %.2f")
                 }
             )
             
-            # ==========================================
-            # PANEL DE PAGO DINÁMICO (Adiós redundancia)
-            # ==========================================
+            # PANEL DE PAGO DINÁMICO
             filas_seleccionadas = evento_tabla.selection.rows
             
-            if not filas_seleccionadas:
-                # Mensaje sutil si no hay nada seleccionado
-                st.info("ℹ️ Selecciona una fila arriba para habilitar el panel de pago.")
+            if len(filas_seleccionadas) == 0:
+                st.info("👆 Selecciona una orden en la tabla para habilitar las opciones de pago.")
             else:
-                # Obtenemos los datos exactos de la fila que el usuario clicó
                 indice_fila = filas_seleccionadas[0]
                 fila_datos = df_filtrado.iloc[indice_fila]
                 orden_seleccionada_id = int(fila_datos["id"])
                 saldo_actual = float(fila_datos["saldo_pendiente"])
                 
                 st.divider()
-                st.markdown("### 💰 Registrar Pago")
-                
-                # Mostramos un resumen limpio usando métricas en lugar de un selector
-                col_res1, col_res2, col_res3 = st.columns(3)
-                col_res1.metric("Orden Seleccionada", fila_datos['codigo_orden'])
-                col_res2.metric("Cliente", fila_datos['Cliente'])
-                col_res3.metric("Saldo Pendiente", f"${saldo_actual:.2f}")
+                st.markdown(f"### 💰 Liquidar Orden: **{fila_datos['codigo_orden']}** ({fila_datos['Cliente']})")
 
-                # Formulario compacto
                 with st.form(key="form_pago"):
                     col_monto, col_metodo, col_banco = st.columns(3)
                     monto_a_pagar = col_monto.number_input("Monto a Pagar ($)", min_value=0.01, max_value=saldo_actual, value=saldo_actual)
                     metodo_pago = col_metodo.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Tarjeta", "Otro"])
                     banco_destino = col_banco.selectbox("Banco Destino", ["Seleccionar...", "JEP", "Pichincha", "Pacifico", "Austro"])
                     
-                    submit_pago = st.form_submit_button("💾 Confirmar y Guardar Pago", type="primary", use_container_width=True)
+                    submit_pago = st.form_submit_button("💾 Confirmar Pago", type="primary", use_container_width=True)
                     
                     if submit_pago:
                         if metodo_pago == "Transferencia" and banco_destino == "Seleccionar...":
@@ -162,8 +155,8 @@ def render(supabase):
 
                                 supabase.table("ordenes").update(update_data).eq("id", orden_seleccionada_id).execute()
                                 
-                                st.toast(f"✅ Pago de ${monto_a_pagar} registrado con éxito a la orden {fila_datos['codigo_orden']}.", icon="💸")
-                                st.rerun() # Limpia la vista automáticamente
+                                st.success(f"✅ Pago registrado con éxito. Nuevo saldo: ${nuevo_saldo:.2f}")
+                                st.rerun() 
                             except Exception as e:
                                 st.error(f"Error al registrar el pago: {e}")
         else:
