@@ -504,7 +504,11 @@ def render(supabase):
                 elif tarifa_sel == "Mayorista": precio_base = float(prod_obj.get('precio_mayorista', 0))
                 else: 
                     es_manual = True
-                    precio_base = st.session_state.get(f'p_man_val_{prod_obj["id"]}', float(prod_obj.get('precio_unitario', 0)))
+                    # CORRECCIÓN: Si estamos restaurando un precio manual, obligamos a usar ese valor
+                    if restore_price is not None:
+                        precio_base = float(restore_price)
+                    else:
+                        precio_base = st.session_state.get(f'p_man_val_{prod_obj["id"]}', float(prod_obj.get('precio_unitario', 0)))
 
                 # 3. Input de Precio
                 if not es_manual:
