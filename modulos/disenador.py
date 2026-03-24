@@ -205,7 +205,10 @@ def render(supabase):
                 # --- LÓGICA DE CONTEO DINÁMICO ---
                 # Prenda Superior (Aplica a Uniformes, Camisetas, Chalecos, Chompas...)
                 if fam in ['UNIFORME COMPLETO', 'PRENDA SUPERIOR'] and t_sup not in ['-', 'NONE', '']: 
-                    titulo_sup = f"{tipo_prenda}" if not es_arq else f"{tipo_prenda} (ARQ)"
+                    # Agregamos "(SUPERIOR)" si pertenece a un conjunto completo para evitar confusiones en corte
+                    titulo_sup = f"{tipo_prenda} (SUPERIOR)" if fam == 'UNIFORME COMPLETO' else f"{tipo_prenda}"
+                    if es_arq: titulo_sup += " (ARQ)"
+                    
                     if titulo_sup not in resumenes_dinamicos: resumenes_dinamicos[titulo_sup] = {"is_arq": es_arq, "tallas": {}}
                     resumenes_dinamicos[titulo_sup]["tallas"][t_sup] = resumenes_dinamicos[titulo_sup]["tallas"].get(t_sup, 0) + 1
                         
