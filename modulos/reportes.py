@@ -637,7 +637,7 @@ def generar_hoja_produccion(orden):
         # 1. Empaquetar todas las tablas a dibujar
         tablas_a_dibujar = []
         for titulo, tallas_dict in resumenes_dinamicos.items():
-            if tallas_dict: tablas_a_dibujar.append({"titulo": titulo[:20], "datos": tallas_dict, "tipo": "normal"})
+            if tallas_dict: tablas_a_dibujar.append({"titulo": titulo, "datos": tallas_dict, "tipo": "normal"})
         if resumen_polines:
             tablas_a_dibujar.append({"titulo": "POLINES", "datos": resumen_polines, "tipo": "polin"})
             
@@ -681,10 +681,10 @@ def generar_hoja_produccion(orden):
             pdf.multi_cell(ancho_tabla, altura_linea, tit_completo, align="C")
             
             # 3. Forzamos la Y de la cabecera gris:
-            # y_base_fila (origen) + 8mm de margen de seguridad para los títulos más largos (2 líneas)
-            pdf.set_xy(x, y_base_fila + 8)
+            # Damos 9.5 mm para que las dos líneas entren perfectas sin chocar con lo gris
+            pdf.set_xy(x, y_base_fila + 9.5)
             
-            # DIBUJAR CABECERA GRIS (Sigue igual)
+            # DIBUJAR CABECERA GRIS
             pdf.set_fill_color(*fill_cab)
             pdf.set_text_color(255, 255, 255)
             
