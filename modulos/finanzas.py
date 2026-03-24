@@ -95,7 +95,7 @@ def render(supabase):
                 df_filtrado[["id", "codigo_orden", "Cliente", "total_estimado", "abono_inicial", "saldo_pendiente", "estado"]], 
                 use_container_width=True, 
                 hide_index=True,
-                selection_mode="single_row",
+                selection_mode="single-row",
                 on_select="rerun",
                 column_config={
                     "id": None, 
