@@ -3,7 +3,8 @@ from supabase import create_client
 import time
 
 # --- IMPORTACIÓN DE MÓDULOS ---
-from modulos import clientes, productos, insumos, cotizaciones, produccion, finanzas, reportes, disenador, impresion, usuarios
+# 1. AGREGAMOS 'ventas' a la lista de importaciones
+from modulos import clientes, productos, insumos, cotizaciones, produccion, finanzas, reportes, disenador, impresion, usuarios, ventas 
 
 # --- CONFIGURACIÓN GLOBAL ---
 st.set_page_config(page_title="YUNPAR ERP", page_icon="👕", layout="wide", initial_sidebar_state="expanded")
@@ -22,15 +23,15 @@ def init_connection():
 supabase = init_connection()
 
 # --- DICCIONARIO DE ROLES Y PERMISOS (RBAC) ---
-# Aquí controlamos qué ve cada usuario en el menú lateral.
+# 2. AGREGAMOS "Ventas y Mostrador" a los roles de GERENTE y VENDEDORA
 PERMISOS = {
     "GERENTE": [
-        "Inicio", "Cotizaciones", "Producción", "Reportes", 
+        "Inicio", "Ventas y Mostrador", "Cotizaciones", "Producción", "Reportes", 
         "Diseño", "Impresión", "Caja y Finanzas", 
         "Clientes", "Productos", "Insumos", "Usuarios"
     ],
     "VENDEDORA": [
-        "Inicio", "Cotizaciones", "Producción", "Caja y Finanzas", "Clientes", "Reportes"
+        "Inicio", "Ventas y Mostrador", "Cotizaciones", "Producción", "Caja y Finanzas", "Clientes", "Reportes"
     ],
     "IMPRESION": [
         "Inicio", "Impresión"
@@ -84,6 +85,7 @@ def enrutador(opcion):
     if opcion == "Inicio":
         st.title("📊 Tablero Principal")
         st.info(f"Bienvenido al sistema ERP YUNPAR. Tu rol es: **{st.session_state['rol']}**")
+    elif opcion == "Ventas y Mostrador": ventas.render(supabase) # 3. AGREGAMOS LA RUTA AL ENRUTADOR
     elif opcion == "Cotizaciones": cotizaciones.render(supabase)
     elif opcion == "Producción": produccion.render(supabase)
     elif opcion == "Reportes": reportes.render_modulo_reportes(supabase)
