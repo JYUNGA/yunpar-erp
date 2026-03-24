@@ -88,13 +88,9 @@ def render(supabase):
                 fechas_creacion = pd.to_datetime(df_filtrado['created_at'])
                 df_filtrado = df_filtrado[(fechas_creacion >= inicio) & (fechas_creacion <= fin)]
             
-            st.markdown("👇 **Haz clic en una orden de la tabla para registrar su pago:**")
+            st.markdown("👇 **Haz clic en la fila de la orden en la tabla para registrar su pago:**")
             
             # TABLA INTERACTIVA
-            evento_tabla = # ✨ PEGA ESTO EN EL LUGAR QUE DEJASTE VACÍO ✨
-            st.markdown("👇 **Haz clic en la fila de la orden para registrar su pago:**")
-            
-            # TABLA INTERACTIVA (Reemplaza al st.dataframe anterior y al st.selectbox)
             evento_tabla = st.dataframe(
                 df_filtrado[["id", "codigo_orden", "Cliente", "total_estimado", "abono_inicial", "saldo_pendiente", "estado"]], 
                 use_container_width=True, 
@@ -250,7 +246,7 @@ def render(supabase):
 
         col_ing_diario, col_egr_diario = st.columns(2)
         
-        # CAMBIO CLAVE: Usar .gte y .lte soluciona el problema de que no aparecían los egresos
+        # Usar .gte y .lte soluciona el problema de que no aparecían los egresos
         res_pagos_dia = supabase.table("pagos").select("orden_id, monto, metodo_pago, banco_destino").gte("fecha_pago", f_ini_diario.isoformat()).lte("fecha_pago", f_fin_diario.isoformat()).execute()
         res_egresos_dia = supabase.table("egresos").select("categoria, descripcion, monto, metodo_pago, banco").gte("fecha", f_ini_diario.isoformat()).lte("fecha", f_fin_diario.isoformat()).execute()
         
@@ -276,7 +272,7 @@ def render(supabase):
                 total_ing_dia = df_ingresos_dia['monto'].astype(float).sum()
                 st.success(f"**Total Ingresos: ${total_ing_dia:,.2f}**")
             else:
-                st.info("No hay ingresos en esta fecha.")
+                st.info("No hay ingresos en este periodo.")
                 total_ing_dia = 0.0
 
         with col_egr_diario:
@@ -293,7 +289,7 @@ def render(supabase):
                 total_egr_dia = df_egresos_dia['monto'].astype(float).sum()
                 st.error(f"**Total Egresos: ${total_egr_dia:,.2f}**")
             else:
-                st.info("No hay egresos en esta fecha.")
+                st.info("No hay egresos en este periodo.")
                 total_egr_dia = 0.0
                 
         st.divider()
