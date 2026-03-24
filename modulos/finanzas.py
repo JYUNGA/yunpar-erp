@@ -26,6 +26,7 @@ def render(supabase):
         f_inicio = col_f1.date_input("🗓️ Desde", value=primer_dia_mes)
         f_fin = col_f2.date_input("🗓️ Hasta", value=hoy)
         
+        # Consultas
         res_pagos = supabase.table("pagos").select("monto").gte("fecha_pago", f_inicio.isoformat()).lte("fecha_pago", f_fin.isoformat()).execute()
         ingresos_rango = sum([float(p["monto"]) for p in res_pagos.data]) if res_pagos.data else 0.0
         
@@ -64,6 +65,7 @@ def render(supabase):
         if res_cxc.data:
             df_cxc = pd.DataFrame(res_cxc.data)
             
+            # Mapeo de clientes
             cliente_ids = df_cxc['cliente_id'].dropna().unique().tolist()
             mapa_clientes = {}
             if cliente_ids:
@@ -72,7 +74,7 @@ def render(supabase):
             
             df_cxc['Cliente'] = df_cxc['cliente_id'].map(lambda x: mapa_clientes.get(x, 'Consumidor Final'))
             
-            with st.expander("🔍 Buscador Avanzado (Filtros)", expanded=True):
+            with st.expander("🔍 Buscador Avanzado (Filtros)", expanded=False):
                 col_b1, col_b2, col_b3 = st.columns([2, 2, 2])
                 busqueda_cod = col_b1.text_input("Código de Orden", placeholder="Ej: 001", key="bus_cod_cxc")
                 busqueda_cli = col_b2.text_input("Nombre del Cliente", placeholder="Ej: Juan", key="bus_cli_cxc")
@@ -87,60 +89,75 @@ def render(supabase):
                 fechas_creacion = pd.to_datetime(df_filtrado['created_at'])
                 df_filtrado = df_filtrado[(fechas_creacion >= inicio) & (fechas_creacion <= fin)]
             
-            st.dataframe(
-                df_filtrado[["codigo_orden", "Cliente", "total_estimado", "abono_inicial", "saldo_pendiente", "estado"]], 
-                use_container_width=True, hide_index=True
+            st.markdown("👇 **Selecciona una fila en la tabla para liquidar o abonar al saldo:**")
+            
+            # TABLA INTERACTIVA (Requiere Streamlit >= 1.35)
+            evento_tabla = st.dataframe(
+                df_filtrado[["id", "codigo_orden", "Cliente", "total_estimado", "abono_inicial", "saldo_pendiente", "estado"]], 
+                use_container_width=True, 
+                hide_index=True,
+                selection_mode="single_row",
+                on_select="rerun",
+                column_config={
+                    "id": None, # Oculta la columna ID pero la mantiene accesible en los datos
+                    "total_estimado": st.column_config.NumberColumn("Total", format="$ %.2f"),
+                    "abono_inicial": st.column_config.NumberColumn("Abono", format="$ %.2f"),
+                    "saldo_pendiente": st.column_config.NumberColumn("Saldo", format="$ %.2f")
+                }
             )
             
             st.divider()
-            st.markdown("### 💰 Registrar Abono o Pago Final")
             
-            if not df_filtrado.empty:
-                opciones_ordenes = {row["id"]: f"{row['codigo_orden']} - Cliente: {row['Cliente']} - Saldo: ${row['saldo_pendiente']}" for _, row in df_filtrado.iterrows()}
-                orden_seleccionada_id = st.selectbox("1. Selecciona la Orden a Pagar", options=list(opciones_ordenes.keys()), format_func=lambda x: opciones_ordenes[x])
+            # FLUJO DE PAGO MEJORADO BASADO EN SELECCIÓN
+            filas_seleccionadas = evento_tabla.selection.rows
+            
+            if filas_seleccionadas:
+                # Obtener los datos de la fila seleccionada
+                indice_fila = filas_seleccionadas[0]
+                fila_datos = df_filtrado.iloc[indice_fila]
+                orden_seleccionada_id = int(fila_datos["id"])
+                saldo_actual = float(fila_datos["saldo_pendiente"])
                 
-                orden_data = next((item for item in res_cxc.data if item["id"] == orden_seleccionada_id), None)
-                saldo_actual = float(orden_data["saldo_pendiente"]) if orden_data else 0.0
-
-                col_monto, col_metodo, col_banco = st.columns(3)
-                monto_a_pagar = col_monto.number_input("2. Monto a Pagar ($)", min_value=0.01, max_value=saldo_actual, value=saldo_actual)
-                metodo_pago = col_metodo.selectbox("3. Método de Pago", ["Efectivo", "Transferencia", "Tarjeta", "Otro"])
+                st.markdown(f"### 💰 Registrar Pago para: **{fila_datos['codigo_orden']} - {fila_datos['Cliente']}**")
                 
-                banco_destino = None
-                if metodo_pago == "Transferencia":
-                    # Agregamos "Seleccionar..." para obligar al usuario a interactuar
-                    banco_destino = col_banco.selectbox("4. Banco Destino", ["Seleccionar...", "JEP", "Pichincha", "Pacifico", "Austro"])
-                
-                if st.button("💾 Guardar Pago", type="primary", use_container_width=True):
-                    # VALIDACIÓN ESTRICTA DEL BANCO
-                    if metodo_pago == "Transferencia" and (not banco_destino or banco_destino == "Seleccionar..."):
-                        st.error("⚠️ Operación cancelada: Debes seleccionar a qué banco ingresó la transferencia.")
-                    else:
-                        try:
-                            data_pago = {
-                                "orden_id": orden_seleccionada_id,
-                                "cliente_id": orden_data["cliente_id"],
-                                "monto": monto_a_pagar,
-                                "metodo_pago": metodo_pago,
-                                "fecha_pago": hoy.isoformat()
-                            }
-                            # Solo guardamos el banco si no es "Seleccionar..."
-                            if banco_destino and banco_destino != "Seleccionar...":
-                                data_pago["banco_destino"] = banco_destino
+                with st.form(key="form_pago"):
+                    col_monto, col_metodo, col_banco = st.columns(3)
+                    monto_a_pagar = col_monto.number_input("Monto a Pagar ($)", min_value=0.01, max_value=saldo_actual, value=saldo_actual)
+                    metodo_pago = col_metodo.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Tarjeta", "Otro"])
+                    banco_destino = col_banco.selectbox("Banco Destino", ["Seleccionar...", "JEP", "Pichincha", "Pacifico", "Austro"])
+                    
+                    submit_pago = st.form_submit_button("💾 Guardar Pago", type="primary", use_container_width=True)
+                    
+                    if submit_pago:
+                        if metodo_pago == "Transferencia" and banco_destino == "Seleccionar...":
+                            st.error("⚠️ Debes seleccionar a qué banco ingresó la transferencia.")
+                        else:
+                            try:
+                                data_pago = {
+                                    "orden_id": orden_seleccionada_id,
+                                    "cliente_id": int(fila_datos["cliente_id"]), # Recuperado de la fila original
+                                    "monto": monto_a_pagar,
+                                    "metodo_pago": metodo_pago,
+                                    "fecha_pago": hoy.isoformat()
+                                }
+                                if banco_destino != "Seleccionar...":
+                                    data_pago["banco_destino"] = banco_destino
 
-                            supabase.table("pagos").insert(data_pago).execute()
-                            
-                            nuevo_saldo = saldo_actual - monto_a_pagar
-                            update_data = {"saldo_pendiente": nuevo_saldo}
-                            if nuevo_saldo <= 0: update_data["estado"] = "Lista para Entrega"
+                                supabase.table("pagos").insert(data_pago).execute()
+                                
+                                nuevo_saldo = saldo_actual - monto_a_pagar
+                                update_data = {"saldo_pendiente": nuevo_saldo}
+                                if nuevo_saldo <= 0: 
+                                    update_data["estado"] = "Lista para Entrega"
 
-                            supabase.table("ordenes").update(update_data).eq("id", orden_seleccionada_id).execute()
-                            st.success(f"Pago registrado con éxito. Nuevo saldo: ${nuevo_saldo:.2f}")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error al registrar el pago: {e}")
+                                supabase.table("ordenes").update(update_data).eq("id", orden_seleccionada_id).execute()
+                                
+                                st.toast(f"✅ Pago de ${monto_a_pagar} registrado con éxito.", icon="💸")
+                                st.rerun() # Esto limpiará la selección automáticamente
+                            except Exception as e:
+                                st.error(f"Error al registrar el pago: {e}")
             else:
-                st.info("No hay resultados para tu búsqueda.")
+                st.info("ℹ️ Haz clic en una orden en la tabla de arriba para registrar un pago. La selección se limpiará sola al terminar.")
         else:
             st.success("¡Excelente! Todas las órdenes están pagadas.")
 
@@ -156,46 +173,43 @@ def render(supabase):
             res_categorias = supabase.table("categorias_egreso").select("nombre").execute()
             lista_categorias = [c["nombre"] for c in res_categorias.data] if res_categorias.data else ["Otros"]
 
-            col1, col2 = st.columns(2)
-            fecha_gasto = col1.date_input("Fecha del Gasto", value=hoy)
-            categoria_gasto = col2.selectbox("Categoría", lista_categorias)
-            
-            descripcion_gasto = st.text_input("Descripción breve (Ej. Compra de hilos)")
-            
-            col3, col4, col5 = st.columns(3)
-            monto_gasto = col3.number_input("Monto ($)", min_value=0.01, step=1.00, format="%.2f")
-            metodo_gasto = col4.selectbox("Medio de Pago", ["Efectivo", "Transferencia", "Tarjeta"])
-            
-            banco_origen = None
-            if metodo_gasto == "Transferencia":
-                # Agregamos "Seleccionar..." para obligar a interactuar
-                banco_origen = col5.selectbox("Banco Origen (De dónde sale)", ["Seleccionar...", "JEP", "Pichincha", "Pacifico", "Austro"])
-            
-            st.write("") 
-            if st.button("📤 Guardar Egreso", type="primary", use_container_width=True):
-                # VALIDACIÓN ESTRICTA (Descripción y Banco)
-                if not descripcion_gasto.strip():
-                    st.warning("⚠️ Por favor, ingresa una descripción.")
-                elif metodo_gasto == "Transferencia" and (not banco_origen or banco_origen == "Seleccionar..."):
-                    st.error("⚠️ Operación cancelada: Debes seleccionar de qué banco salió el dinero para la transferencia.")
-                else:
-                    try:
-                        data_egreso = {
-                            "fecha": fecha_gasto.isoformat(),
-                            "categoria": categoria_gasto,
-                            "descripcion": descripcion_gasto,
-                            "monto": monto_gasto,
-                            "metodo_pago": metodo_gasto
-                        }
-                        if banco_origen and banco_origen != "Seleccionar...":
-                            data_egreso["banco"] = banco_origen
+            with st.form("form_egreso"):
+                col1, col2 = st.columns(2)
+                fecha_gasto = col1.date_input("Fecha del Gasto", value=hoy)
+                categoria_gasto = col2.selectbox("Categoría", lista_categorias)
+                
+                descripcion_gasto = st.text_input("Descripción breve (Ej. Compra de hilos)")
+                
+                col3, col4, col5 = st.columns(3)
+                monto_gasto = col3.number_input("Monto ($)", min_value=0.01, step=1.00, format="%.2f")
+                metodo_gasto = col4.selectbox("Medio de Pago", ["Efectivo", "Transferencia", "Tarjeta"])
+                banco_origen = col5.selectbox("Banco Origen", ["Seleccionar...", "JEP", "Pichincha", "Pacifico", "Austro"])
+                
+                submit_gasto = st.form_submit_button("📤 Guardar Egreso", type="primary", use_container_width=True)
+                
+                if submit_gasto:
+                    if not descripcion_gasto.strip():
+                        st.warning("⚠️ Por favor, ingresa una descripción.")
+                    elif metodo_gasto == "Transferencia" and banco_origen == "Seleccionar...":
+                        st.error("⚠️ Debes seleccionar de qué banco salió el dinero.")
+                    else:
+                        try:
+                            data_egreso = {
+                                "fecha": fecha_gasto.isoformat(),
+                                "categoria": categoria_gasto,
+                                "descripcion": descripcion_gasto,
+                                "monto": monto_gasto,
+                                "metodo_pago": metodo_gasto
+                            }
+                            if banco_origen != "Seleccionar...":
+                                data_egreso["banco"] = banco_origen
 
-                        supabase.table("egresos").insert(data_egreso).execute()
-                        st.success("Gasto registrado exitosamente.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error al registrar: ¿Ejecutaste el comando SQL para añadir la columna 'banco'? Detalles: {e}")
-                        
+                            supabase.table("egresos").insert(data_egreso).execute()
+                            st.toast("✅ Gasto registrado exitosamente.", icon="📉")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al registrar: {e}")
+                            
         with c_cat:
             st.subheader("Gestión")
             with st.expander("➕ Crear Nueva Categoría"):
@@ -204,7 +218,7 @@ def render(supabase):
                     if nueva_cat:
                         try:
                             supabase.table("categorias_egreso").insert({"nombre": nueva_cat.strip()}).execute()
-                            st.success("Categoría añadida")
+                            st.toast("Categoría añadida", icon="✅")
                             st.rerun()
                         except:
                             st.error("Error al crear. Quizá ya existe.")
@@ -215,11 +229,29 @@ def render(supabase):
     with tab_diario:
         st.subheader("Libro Diario y Cuadre de Caja")
         
-        fecha_diario = st.date_input("Selecciona la fecha para revisar transacciones:", value=hoy, key="fecha_diario_filtro")
+        # AHORA ACEPTA RANGO O FECHA ÚNICA
+        fecha_input = st.date_input(
+            "🗓️ Selecciona fecha única o un rango de fechas:", 
+            value=(hoy, hoy), 
+            key="fecha_diario_filtro"
+        )
+        
+        # Procesar si es una fecha única o un rango
+        if isinstance(fecha_input, tuple):
+            if len(fecha_input) == 2:
+                f_ini_diario, f_fin_diario = fecha_input
+            elif len(fecha_input) == 1:
+                f_ini_diario = f_fin_diario = fecha_input[0]
+            else:
+                f_ini_diario = f_fin_diario = hoy
+        else:
+            f_ini_diario = f_fin_diario = fecha_input
+
         col_ing_diario, col_egr_diario = st.columns(2)
         
-        res_pagos_dia = supabase.table("pagos").select("orden_id, monto, metodo_pago, banco_destino").eq("fecha_pago", fecha_diario.isoformat()).execute()
-        res_egresos_dia = supabase.table("egresos").select("categoria, descripcion, monto, metodo_pago, banco").eq("fecha", fecha_diario.isoformat()).execute()
+        # CAMBIO CLAVE: Usar .gte y .lte soluciona el problema de que no aparecían los egresos
+        res_pagos_dia = supabase.table("pagos").select("orden_id, monto, metodo_pago, banco_destino").gte("fecha_pago", f_ini_diario.isoformat()).lte("fecha_pago", f_fin_diario.isoformat()).execute()
+        res_egresos_dia = supabase.table("egresos").select("categoria, descripcion, monto, metodo_pago, banco").gte("fecha", f_ini_diario.isoformat()).lte("fecha", f_fin_diario.isoformat()).execute()
         
         with col_ing_diario:
             st.markdown("#### 🟢 Ingresos")
@@ -243,7 +275,7 @@ def render(supabase):
                 total_ing_dia = df_ingresos_dia['monto'].astype(float).sum()
                 st.success(f"**Total Ingresos: ${total_ing_dia:,.2f}**")
             else:
-                st.info("No hay ingresos.")
+                st.info("No hay ingresos en esta fecha.")
                 total_ing_dia = 0.0
 
         with col_egr_diario:
@@ -255,14 +287,14 @@ def render(supabase):
                     lambda x: f"{x['metodo_pago']} ({x['banco']})" if pd.notna(x.get('banco')) and x.get('banco') else x['metodo_pago'], axis=1
                 )
                 
-                st.dataframe(df_egresos_dia[['categoria', 'monto', 'Medio']], use_container_width=True, hide_index=True)
+                st.dataframe(df_egresos_dia[['categoria', 'descripcion', 'monto', 'Medio']], use_container_width=True, hide_index=True)
                 
                 total_egr_dia = df_egresos_dia['monto'].astype(float).sum()
                 st.error(f"**Total Egresos: ${total_egr_dia:,.2f}**")
             else:
-                st.info("No hay egresos.")
+                st.info("No hay egresos en esta fecha.")
                 total_egr_dia = 0.0
                 
         st.divider()
         cierre_caja = total_ing_dia - total_egr_dia
-        st.metric("Cierre de Caja del Día", f"${cierre_caja:,.2f}")
+        st.metric("Cierre de Caja del Periodo", f"${cierre_caja:,.2f}", delta=f"${cierre_caja:,.2f}", delta_color="normal" if cierre_caja >= 0 else "inverse")
