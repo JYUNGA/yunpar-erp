@@ -258,22 +258,30 @@ def render(supabase):
 
                 # --- FINALIZAR ORDEN ---
                 st.warning("Asegúrate de haber impreso y guardado todos los archivos antes de continuar.")
-                if st.button("🚀 Completar Impresión y Enviar a Sublimación", type="primary", use_container_width=True):
+                
+                # --- CAMBIO: Lógica inteligente según el prefijo (Venta Directa vs Producción Normal) ---
+                es_venta_directa = str(orden_actual['codigo_orden']).startswith('VD-')
+                
+                texto_boton = "🚀 Completar Impresión y Enviar a Mostrador" if es_venta_directa else "🚀 Completar Impresión y Enviar a Sublimación"
+                nuevo_estado_final = "Lista para Entrega" if es_venta_directa else "En Sublimación"
+                mensaje_exito = "🎉 ¡Impresión lista! La orden pasó a mostrador para su entrega." if es_venta_directa else "🎉 ¡Orden completada! Enviada a Sublimación."
+
+                if st.button(texto_boton, type="primary", use_container_width=True):
                     if not df_editado['chk_impreso'].all():
                         st.error("❌ Error: Debes marcar todos los archivos como 'Impresos' en la tabla superior y Guardar Avances primero.")
                     else:
                         try:
-                            with st.spinner("Enviando a sublimación..."):
+                            with st.spinner("Procesando cierre de impresión..."):
                                 supabase.table('ordenes').update({
-                                    "estado": "En Sublimación",
+                                    "estado": nuevo_estado_final,
                                     "alerta_cambios": False
                                 }).eq('id', order_id).execute()
                                 
-                                st.success("🎉 ¡Orden completada con éxito! Ha sido enviada al área de Sublimación.")
+                                st.success(mensaje_exito)
                                 st.session_state['orden_impresion_actual'] = None
                                 st.rerun()
                         except Exception as e:
-                            st.error(f"Error al enviar la orden a sublimación: {str(e)}")
+                            st.error(f"Error al finalizar la orden: {str(e)}")
 
         except Exception as e:
             st.error(f"Error crítico en el panel de archivos: {str(e)}")
