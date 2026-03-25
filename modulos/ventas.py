@@ -49,7 +49,11 @@ def render(supabase):
     if 'carrito_vd' not in st.session_state: 
         st.session_state['carrito_vd'] = []
 
-    st.title("🛍️ Ventas Directas y Mostrador")
+    st.title("🛍️ Ventas")
+    
+    # Inicializamos la variable en memoria para el cliente
+    if 'vd_cliente_id' not in st.session_state: 
+        st.session_state['vd_cliente_id'] = None
     
     tab1, tab2 = st.tabs(["🛒 Nueva Venta", "🧾 Historial de Ventas del Día"])
 
@@ -61,10 +65,56 @@ def render(supabase):
 
         with col_busqueda:
             st.subheader("1. Selección de Cliente")
-            clis = supabase.table('clientes').select("id, nombre_completo, cedula_ruc").execute().data
-            mapa_cli = {f"{c['nombre_completo']} | {c['cedula_ruc']}": c['id'] for c in clis}
-            cliente_sel = st.selectbox("Buscar Cliente", ["Consumidor Final"] + list(mapa_cli.keys()))
-            cliente_id = mapa_cli.get(cliente_sel, None)
+            
+            # Contenedor visual idéntico al de Producción
+            with st.container(border=True):
+                c1, c2 = st.columns([3, 1])
+                clis = supabase.table('clientes').select("id, nombre_completo, cedula_ruc").execute().data
+                mapa_cli = {f"{c['nombre_completo']} | {c['cedula_ruc']}": c['id'] for c in clis}
+                
+                # Lógica para restaurar el cliente seleccionado tras recargar
+                idx_sel = 0
+                if st.session_state.get('vd_cliente_id'):
+                    found = next((k for k, v in mapa_cli.items() if v == st.session_state['vd_cliente_id']), None)
+                    if found in list(mapa_cli.keys()): 
+                        idx_sel = list(mapa_cli.keys()).index(found) + 1 # +1 por "Consumidor Final"
+
+                sel_cli = c1.selectbox("Cliente", ["Consumidor Final"] + list(mapa_cli.keys()), index=idx_sel, label_visibility="collapsed")
+                
+                # Asignar ID según selección
+                if sel_cli != "Consumidor Final" and sel_cli:
+                    st.session_state['vd_cliente_id'] = mapa_cli[sel_cli]
+                    cliente_id = mapa_cli[sel_cli]
+                else:
+                    st.session_state['vd_cliente_id'] = None
+                    cliente_id = None
+
+                # Botón Nuevo Cliente (Popover)
+                with c2.popover("➕ Crear Cliente Nuevo", use_container_width=True):
+                    with st.form("vd_nc_full", clear_on_submit=True):
+                        st.markdown("##### Nuevo Cliente")
+                        f_ruc = st.text_input("RUC/CI *", key="vd_new_cli_ruc")
+                        f_nom = st.text_input("Nombre *", key="vd_new_cli_nom")
+                        f_tel = st.text_input("Telf", key="vd_new_cli_tel")
+                        f_ema = st.text_input("Email", key="vd_new_cli_ema")
+                        f_ciu = st.text_input("Ciudad", key="vd_new_cli_ciu")
+                        f_tip = st.selectbox("Tipo", ["Cliente Final", "Escuela", "Empresa", "Fiscal"], key="vd_new_cli_tip")
+                        f_gen = st.selectbox("Género", ["Masculino", "Femenino", "Otro"], key="vd_new_cli_gen")
+                        
+                        import time
+                        if st.form_submit_button("Guardar Cliente"):
+                            if f_ruc and f_nom:
+                                res_c = supabase.table('clientes').insert({
+                                    "cedula_ruc": f_ruc, "nombre_completo": f_nom.upper(), "telefono": f_tel,
+                                    "email": f_ema, "ciudad": f_ciu, "tipo_institucion": f_tip, "genero": f_gen
+                                }).execute()
+                                if res_c.data:
+                                    st.session_state['vd_cliente_id'] = res_c.data[0]['id']
+                                    st.success("Cliente guardado")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                            else: 
+                                st.error("RUC y Nombre obligatorios")
 
             st.write("---")
             st.subheader("2. Agregar Productos")
