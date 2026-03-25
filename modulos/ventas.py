@@ -48,6 +48,11 @@ def render(supabase):
 
     if 'carrito_vd' not in st.session_state: 
         st.session_state['carrito_vd'] = []
+    # Memoria para el gestor de archivos de la vendedora
+    if 'temp_archivos_impresion' not in st.session_state:
+        st.session_state['temp_archivos_impresion'] = []
+    if 'last_prod_sel' not in st.session_state:
+        st.session_state['last_prod_sel'] = None
 
     st.title("🛍️ Ventas")
     
@@ -149,6 +154,11 @@ def render(supabase):
 
             # --- LÓGICA DE TARIFAS E IMPRESIÓN ---
             if prod_obj:
+                # Si la vendedora cambia de producto, limpiamos los archivos temporales
+                if st.session_state['last_prod_sel'] != prod_obj['id']:
+                    st.session_state['last_prod_sel'] = prod_obj['id']
+                    st.session_state['temp_archivos_impresion'] = []
+
                 c1, c2 = st.columns(2)
                 tarifa_sel = c1.selectbox("Tarifa", ["Unitario", "Docena", "Mayorista", "Manual"])
                 
@@ -158,49 +168,130 @@ def render(supabase):
                 
                 precio_final = c2.number_input("Precio Final ($)", value=precio_base, format="%.2f", disabled=(tarifa_sel != "Manual"))
 
-                # Detectar si es de la familia de impresión
                 es_impresion = "IMPRESI" in str(prod_obj.get('linea_categoria','')).upper() or "IMPRESI" in str(prod_obj.get('tipo_prenda','')).upper()
-
-                cantidad_cobro = 1.0
                 archivos_metadata = []
+                edited_archivos = pd.DataFrame()
 
                 if es_impresion:
-                    st.info("🖨️ **Servicio de Impresión Detectado.** Sube los archivos para calcular los metros automáticamente.")
-                    archivos = st.file_uploader("Subir PDFs o Excel", type=["pdf", "xlsx", "csv"], accept_multiple_files=True)
+                    st.info("🖨️ **Servicio de Impresión.** Configura los archivos para calcular el cobro.")
                     
-                    largo_total_calculado = 0.0
-                    if archivos:
-                        for archivo in archivos:
-                            nombre_archivo = archivo.name.lower()
-                            if nombre_archivo.endswith('.pdf'):
-                                nom, anc, lar = extraer_metadata_pdf(archivo)
-                                largo_total_calculado += lar
-                                archivos_metadata.append({"nombre": nom, "ancho": anc, "largo": lar})
-                            elif nombre_archivo.endswith('.csv') or nombre_archivo.endswith('.xlsx'):
-                                try:
-                                    df_local = pd.read_csv(archivo) if nombre_archivo.endswith('.csv') else pd.read_excel(archivo)
-                                    for _, row in df_local.iterrows():
-                                        lar = float(row.get('Largo en metros', 0.0))
-                                        anc = float(row.get('Ancho en metros', 0.0))
-                                        largo_total_calculado += lar
-                                        archivos_metadata.append({"nombre": str(row.get('Nombre', 'Desconocido')), "ancho": anc, "largo": lar})
-                                except Exception as e:
-                                    st.warning(f"Error leyendo Excel: {e}")
-                                    
-                    cantidad_cobro = st.number_input("Total Metros (Calculado o Manual)", value=float(largo_total_calculado), min_value=0.01)
+                    try:
+                        res_telas_bd = supabase.table("insumos").select("nombre").execute()
+                        lista_telas_db = [t['nombre'] for t in res_telas_bd.data] if res_telas_bd.data else ["Estándar"]
+                    except:
+                        lista_telas_db = ["Estándar"]
+                    lista_perfiles = ["Plotter 1", "Plotter 2", "DTF"]
+
+                    # 1. Subida Automática
+                    st.markdown("**1. Subir PDFs, Excel o CSV en lote**")
+                    archivos = st.file_uploader("Arrastra aquí los archivos:", type=["pdf", "xlsx", "csv"], accept_multiple_files=True, key=f"up_{prod_obj['id']}")
+                    
+                    if st.button("📥 Procesar Archivos Subidos", use_container_width=True):
+                        if archivos:
+                            for archivo in archivos:
+                                nombre_archivo = archivo.name.lower()
+                                if nombre_archivo.endswith('.pdf'):
+                                    nom, anc, lar = extraer_metadata_pdf(archivo)
+                                    st.session_state['temp_archivos_impresion'].append({
+                                        "Nombre": nom, "Perfil": "Plotter 1", "Tela": lista_telas_db[0],
+                                        "Ancho (m)": anc, "Largo (m)": lar, "Cantidad": 1, "Notas": ""
+                                    })
+                                elif nombre_archivo.endswith('.csv') or nombre_archivo.endswith('.xlsx'):
+                                    try:
+                                        df_local = pd.read_csv(archivo) if nombre_archivo.endswith('.csv') else pd.read_excel(archivo)
+                                        for _, row in df_local.iterrows():
+                                            st.session_state['temp_archivos_impresion'].append({
+                                                "Nombre": str(row.get('Nombre', 'Desconocido')),
+                                                "Perfil": "Plotter 1", "Tela": lista_telas_db[0],
+                                                "Ancho (m)": float(row.get('Ancho en metros', 0.0)),
+                                                "Largo (m)": float(row.get('Largo en metros', 0.0)),
+                                                "Cantidad": 1, "Notas": "Vía Excel/CSV"
+                                            })
+                                    except Exception as e:
+                                        st.warning(f"Error leyendo Excel: {e}")
+                            st.rerun()
+
+                    # 2. Carga Manual
+                    with st.expander("➕ 2. Cargar datos de archivo manualmente"):
+                        with st.form("form_manual_ventas", clear_on_submit=True):
+                            col_m1, col_m2, col_m_tela = st.columns(3)
+                            col_m3, col_m4, col_m5 = st.columns([1, 1, 1]) 
+                            
+                            n_in = col_m1.text_input("Nombre del Archivo")
+                            p_in = col_m2.selectbox("Perfil", lista_perfiles)
+                            t_in = col_m_tela.selectbox("Tela a Usar", lista_telas_db)
+                            
+                            a_in = col_m3.number_input("Ancho (m)", min_value=0.0, step=0.01)
+                            l_in = col_m4.number_input("Largo (m)", min_value=0.0, step=0.01)
+                            c_in = col_m5.number_input("Cant", min_value=1, step=1, value=1)
+                            no_in = st.text_input("Notas")
+                            
+                            if st.form_submit_button("Guardar Manualmente"):
+                                if n_in and l_in > 0:
+                                    st.session_state['temp_archivos_impresion'].append({
+                                        "Nombre": n_in.strip(), "Perfil": p_in, "Tela": t_in,
+                                        "Ancho (m)": a_in, "Largo (m)": l_in, "Cantidad": c_in, "Notas": no_in.strip()
+                                    })
+                                    st.rerun()
+                                else:
+                                    st.warning("Nombre y Largo requeridos.")
+
+                    # 3. Editor Visual Dinámico
+                    st.markdown("**3. Revisa y edita los archivos:**")
+                    df_archivos_vd = pd.DataFrame(st.session_state['temp_archivos_impresion'])
+                    
+                    if not df_archivos_vd.empty:
+                        df_archivos_vd['Eliminar'] = False # Agregamos columna para borrar
+                        
+                        edited_archivos = st.data_editor(
+                            df_archivos_vd,
+                            column_config={
+                                "Nombre": "Nombre",
+                                "Perfil": st.column_config.SelectboxColumn("Perfil", options=lista_perfiles),
+                                "Tela": st.column_config.SelectboxColumn("Tela", options=lista_telas_db),
+                                "Ancho (m)": st.column_config.NumberColumn("Ancho (m)", format="%.2f"),
+                                "Largo (m)": st.column_config.NumberColumn("Largo (m)", format="%.2f"),
+                                "Cantidad": st.column_config.NumberColumn("Cant.", min_value=1, step=1),
+                                "Notas": "Notas",
+                                "Eliminar": st.column_config.CheckboxColumn("🗑️ Eliminar", default=False)
+                            },
+                            use_container_width=True, hide_index=True, key=f"editor_vd_{prod_obj['id']}"
+                        )
+                        
+                        # Sincronizador de borrado
+                        if st.button("🔄 Borrar Seleccionados y Actualizar", use_container_width=True):
+                            df_kept = edited_archivos[~edited_archivos['Eliminar']].copy().drop(columns=['Eliminar'])
+                            st.session_state['temp_archivos_impresion'] = df_kept.to_dict('records')
+                            st.rerun()
+                            
+                        # El cálculo de metros ahora es automático leyendo la tabla editable
+                        largo_total_calculado = (edited_archivos['Largo (m)'] * edited_archivos['Cantidad']).sum()
+                    else:
+                        st.info("No hay archivos en la lista.")
+                        largo_total_calculado = 0.0
+
+                    cantidad_cobro = st.number_input("Total Metros a Cobrar", value=float(largo_total_calculado), min_value=0.01)
                 else:
                     cantidad_cobro = st.number_input("Cantidad", min_value=1.0, value=1.0, step=1.0)
 
+                st.write("")
                 if st.button("➕ Agregar al Carrito", type="primary"):
+                    # Si es impresión, extraemos los datos limpios de la tabla editable para guardarlos
+                    if es_impresion and not edited_archivos.empty:
+                        df_final = edited_archivos[~edited_archivos['Eliminar']] if 'Eliminar' in edited_archivos.columns else edited_archivos
+                        for _, r in df_final.iterrows():
+                            archivos_metadata.append({
+                                "nombre": r["Nombre"], "perfil": r["Perfil"], "tela": r["Tela"],
+                                "ancho": r["Ancho (m)"], "largo": r["Largo (m)"], "cantidad": r["Cantidad"], "notas": r["Notas"]
+                            })
+
                     st.session_state['carrito_vd'].append({
-                        "id_prod": prod_obj['id'],
-                        "descripcion": prod_obj['descripcion'],
-                        "precio": precio_final,
-                        "cantidad": cantidad_cobro,
-                        "es_impresion": es_impresion,
-                        "archivos": archivos_metadata,
-                        "subtotal": cantidad_cobro * precio_final
+                        "id_prod": prod_obj['id'], "descripcion": prod_obj['descripcion'],
+                        "precio": precio_final, "cantidad": cantidad_cobro, "es_impresion": es_impresion,
+                        "archivos": archivos_metadata, "subtotal": cantidad_cobro * precio_final
                     })
+                    # Vaciamos la memoria para el siguiente producto
+                    st.session_state['temp_archivos_impresion'] = []
                     st.rerun()
 
         # ==============================
@@ -289,9 +380,10 @@ def render(supabase):
                                                 "ancho_metros": arch['ancho'],
                                                 "longitud_metros": arch['largo'],
                                                 "estado_impresion": "Pendiente",
-                                                "cantidad": 1,
-                                                "perfil_color": "Plotter 1",
-                                                "tela": "Estándar"
+                                                "cantidad": arch.get('cantidad', 1),
+                                                "perfil_color": arch.get('perfil', 'Plotter 1'),
+                                                "tela": arch.get('tela', 'Estándar'),
+                                                "notas_disenador": arch.get('notas', '')
                                             })
                                         supabase.table('archivos_impresion').insert(payloads_plotter).execute()
 
