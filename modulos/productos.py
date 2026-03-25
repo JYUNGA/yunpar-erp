@@ -114,32 +114,35 @@ def render(supabase):
 
                 c_izq, c_der = st.columns([1, 1])
                 
+                # Creamos una variable con el código actual para hacer dinámicos los Keys
+                cod_actual = item['codigo_referencia']
+                
                 with c_izq:
                     # TIPO
-                    sel_t = st.selectbox("Tipo", list_tipo, index=get_idx(list_tipo, item['tipo_prenda']), key="e_t")
-                    val_t = st.text_input("Nuevo Tipo", key="e_t_n").upper() if sel_t == "➕ Crear Nuevo..." else sel_t
+                    sel_t = st.selectbox("Tipo", list_tipo, index=get_idx(list_tipo, item['tipo_prenda']), key=f"e_t_{cod_actual}")
+                    val_t = st.text_input("Nuevo Tipo", key=f"e_t_n_{cod_actual}").upper() if sel_t == "➕ Crear Nuevo..." else sel_t
                     
                     # CATEGORIA
-                    sel_c = st.selectbox("Categoría", list_cat, index=get_idx(list_cat, item['linea_categoria']), key="e_c")
-                    val_c = st.text_input("Nueva Cat.", key="e_c_n").upper() if sel_c == "➕ Crear Nuevo..." else sel_c
+                    sel_c = st.selectbox("Categoría", list_cat, index=get_idx(list_cat, item['linea_categoria']), key=f"e_c_{cod_actual}")
+                    val_c = st.text_input("Nueva Cat.", key=f"e_c_n_{cod_actual}").upper() if sel_c == "➕ Crear Nuevo..." else sel_c
 
                     # EDAD
-                    sel_e = st.selectbox("Edad", list_edad, index=get_idx(list_edad, item['grupo_edad']), key="e_e")
-                    val_e = st.text_input("Nueva Edad", key="e_e_n").upper() if sel_e == "➕ Crear Nuevo..." else sel_e
+                    sel_e = st.selectbox("Edad", list_edad, index=get_idx(list_edad, item['grupo_edad']), key=f"e_e_{cod_actual}")
+                    val_e = st.text_input("Nueva Edad", key=f"e_e_n_{cod_actual}").upper() if sel_e == "➕ Crear Nuevo..." else sel_e
 
-                    desc = st.text_input("Descripción", value=item['descripcion'], key="e_desc")
+                    desc = st.text_input("Descripción", value=item['descripcion'], key=f"e_desc_{cod_actual}")
 
                 with c_der:
                     c1, c2, c3 = st.columns(3)
-                    p1 = c1.number_input("Unitario", value=float(item['precio_unitario'] or 0))
-                    p2 = c2.number_input("Docena", value=float(item['precio_docena'] or 0))
-                    p3 = c3.number_input("Mayorista", value=float(item['precio_mayorista'] or 0))
+                    p1 = c1.number_input("Unitario", value=float(item['precio_unitario'] or 0), key=f"p1_{cod_actual}")
+                    p2 = c2.number_input("Docena", value=float(item['precio_docena'] or 0), key=f"p2_{cod_actual}")
+                    p3 = c3.number_input("Mayorista", value=float(item['precio_mayorista'] or 0), key=f"p3_{cod_actual}")
                     
                     b1, b2, b3, b4 = st.columns(4)
-                    ck_s = b1.checkbox("Sublim", value=item['requiere_sublimado'])
-                    ck_d = b2.checkbox("DTF", value=item['requiere_dtf'])
-                    ck_b = b3.checkbox("Bordado", value=item['requiere_bordado'])
-                    ck_t = b4.checkbox("Ticket", value=item['requiere_ticket'])
+                    ck_s = b1.checkbox("Sublim", value=item['requiere_sublimado'], key=f"cks_{cod_actual}")
+                    ck_d = b2.checkbox("DTF", value=item['requiere_dtf'], key=f"ckd_{cod_actual}")
+                    ck_b = b3.checkbox("Bordado", value=item['requiere_bordado'], key=f"ckb_{cod_actual}")
+                    ck_t = b4.checkbox("Ticket", value=item['requiere_ticket'], key=f"ckt_{cod_actual}")
 
                 st.markdown("---")
                 btn_save, btn_del = st.columns([2, 1])
@@ -270,6 +273,10 @@ def render(supabase):
                             val = pd.to_numeric(valor, errors='coerce')
                             return 0.0 if pd.isna(val) else float(val)
 
+                        def limpiar_texto(valor):
+                            if pd.isna(valor): return ""
+                            return str(valor).strip()
+
                         batch_productos = []
 
                         for i, row in df.iterrows():
@@ -291,10 +298,10 @@ def render(supabase):
                             # 3. Construir el producto leyendo TUS columnas exactas
                             item = {
                                 "codigo_referencia": cod_final,
-                                "descripcion": str(row.get('DESCRIPCION', '')).strip(),
-                                "tipo_prenda": str(row.get('PRENDA', '')).strip().upper(),
-                                "linea_categoria": str(row.get('TIPO', '')).strip().upper(), # <-- CORREGIDO: Tu excel dice TIPO
-                                "grupo_edad": str(row.get('EDAD', '')).strip().upper(),
+                                "descripcion": limpiar_texto(row.get('DESCRIPCION')),
+                                "tipo_prenda": limpiar_texto(row.get('PRENDA')).upper(),
+                                "linea_categoria": limpiar_texto(row.get('TIPO')).upper(), 
+                                "grupo_edad": limpiar_texto(row.get('EDAD')).upper(),
                                 "precio_unitario": limpiar_precio(row.get('UNI')),
                                 "precio_docena": limpiar_precio(row.get('>12')),
                                 "precio_mayorista": limpiar_precio(row.get('>25')),
