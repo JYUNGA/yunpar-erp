@@ -233,11 +233,23 @@ def render(supabase):
                     st.markdown("💰 **Finanzas**")
                     tipo_flujo = st.radio("Destino de la Orden", ["Entrega Inmediata", "Pasa a Cola de Producción/Impresión"])
                     
-                    abono = st.number_input("Monto Recibido ($)", value=total_venta, max_value=total_venta)
-                    metodo_pago = st.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Tarjeta", "Otro"])
-                    banco = st.text_input("Banco / Ref.") if metodo_pago in ["Transferencia", "Otro"] else None
+                    abono = st.number_input("Monto Recibido ($)", value=total_venta, max_value=float(total_venta))
+                    
+                    # --- CAMBIO: Selectores de Pago estilo Finanzas ---
+                    col_metodo, col_banco = st.columns(2)
+                    metodo_pago = col_metodo.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Tarjeta", "Otro"])
+                    
+                    banco = None
+                    if metodo_pago != "Efectivo":
+                        banco = col_banco.selectbox("Banco Destino", ["Seleccionar...", "JEP", "Pichincha", "Pacifico", "Austro"])
 
                     if st.button("✅ Procesar Venta", use_container_width=True, type="primary"):
+                        
+                        # --- NUEVO: Validación estricta del banco ---
+                        if metodo_pago != "Efectivo" and banco == "Seleccionar...":
+                            st.error("⚠️ Debes seleccionar a qué banco ingresó el dinero.")
+                            st.stop()
+                            
                         codigo_vd = generar_codigo_vd(supabase)
                         estado_orden = "Entregado" if tipo_flujo == "Entrega Inmediata" else "Pendiente Impresión"
                         
@@ -290,7 +302,7 @@ def render(supabase):
                                         "cliente_id": cliente_id,
                                         "monto": abono,
                                         "metodo_pago": metodo_pago,
-                                        "banco_destino": banco,
+                                        "banco_destino": banco, # <--- Ahora pasará "JEP", "Pichincha", etc.
                                         "fecha_pago": obtener_fecha_actual().isoformat()
                                     }).execute()
 
