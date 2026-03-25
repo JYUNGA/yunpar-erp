@@ -187,15 +187,54 @@ def render(supabase):
                         lista_telas_db = ["Estándar"]
                     lista_perfiles = ["Plotter 1", "Plotter 2", "DTF"]
 
+                    # Generamos una llave dinámica en memoria si no existe
+                    if 'uploader_key_vd' not in st.session_state:
+                        st.session_state['uploader_key_vd'] = str(datetime.now().timestamp())
+
                     # 1. Subida Automática
                     st.markdown("**1. Subir PDFs, Excel o CSV en lote**")
-                    archivos = st.file_uploader("Arrastra aquí los archivos:", type=["pdf", "xlsx", "csv"], accept_multiple_files=True, key=f"up_{prod_obj['id']}")
+                    st.info("💡 **Tip:** Límite 200MB. Para archivos más pesados, usa el script local y sube aquí solo el archivo Excel/CSV.")
+                    
+                    # Usamos la llave dinámica para forzar la limpieza
+                    archivos = st.file_uploader("Arrastra aquí los archivos:", type=["pdf", "xlsx", "csv"], accept_multiple_files=True, key=st.session_state['uploader_key_vd'])
                     
                     if st.button("📥 Procesar Archivos Subidos", use_container_width=True):
                         if archivos:
-                            for archivo in archivos:
-                                nombre_archivo = archivo.name.lower()
-                                if nombre_archivo.endswith('.pdf'):
+                            # --- ESCUDO DE MEMORIA ---
+                            peso_total_mb = sum([f.size for f in archivos]) / (1024 * 1024)
+                            
+                            if peso_total_mb > 200.0:
+                                st.error(f"🛑 **¡ALERTA DE SOBRECARGA!** Peso total: {peso_total_mb:.1f} MB. Máximo permitido: 200 MB.")
+                                st.warning("Por favor, usa el script local de Python para extraer las medidas y arrastra únicamente el archivo `.xlsx` o `.csv`.")
+                            else:
+                                for archivo in archivos:
+                                    nombre_archivo = archivo.name.lower()
+                                    if nombre_archivo.endswith('.pdf'):
+                                        nom, anc, lar = extraer_metadata_pdf(archivo)
+                                        st.session_state['temp_archivos_impresion'].append({
+                                            "Nombre": nom, "Perfil": "Plotter 1", "Tela": lista_telas_db[0],
+                                            "Ancho (m)": anc, "Largo (m)": lar, "Cantidad": 1, "Notas": ""
+                                        })
+                                    elif nombre_archivo.endswith('.csv') or nombre_archivo.endswith('.xlsx'):
+                                        try:
+                                            df_local = pd.read_csv(archivo) if nombre_archivo.endswith('.csv') else pd.read_excel(archivo)
+                                            for _, row in df_local.iterrows():
+                                                st.session_state['temp_archivos_impresion'].append({
+                                                    "Nombre": str(row.get('Nombre', 'Desconocido')),
+                                                    "Perfil": "Plotter 1", "Tela": lista_telas_db[0],
+                                                    "Ancho (m)": float(row.get('Ancho en metros', 0.0)),
+                                                    "Largo (m)": float(row.get('Largo en metros', 0.0)),
+                                                    "Cantidad": 1, "Notas": "Vía Excel/CSV"
+                                                })
+                                        except Exception as e:
+                                            st.warning(f"Error leyendo Excel: {e}")
+                                
+                                # --- MAGIA PARA LIMPIAR EL UPLOADER ---
+                                # Cambiamos la llave; al hacer rerun, Streamlit crea un uploader nuevo y vacío
+                                st.session_state['uploader_key_vd'] = str(datetime.now().timestamp())
+                                st.rerun()
+                        else:
+                            st.warning("⚠️ No has seleccionado ningún archivo para procesar.")
                                     nom, anc, lar = extraer_metadata_pdf(archivo)
                                     st.session_state['temp_archivos_impresion'].append({
                                         "Nombre": nom, "Perfil": "Plotter 1", "Tela": lista_telas_db[0],
