@@ -23,7 +23,7 @@ def init_connection():
 supabase = init_connection()
 
 # --- DICCIONARIO DE ROLES Y PERMISOS (RBAC) ---
-# 2. AGREGAMOS "Ventas y Mostrador" a los roles de GERENTE y VENDEDORA
+# 2. AGREGAMOS "Ventas" a los roles de GERENTE y VENDEDORA
 PERMISOS = {
     "GERENTE": [
         "Inicio", "Ventas y Mostrador", "Cotizaciones", "Producción", "Reportes", 
