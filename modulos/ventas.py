@@ -3,12 +3,12 @@ import pandas as pd
 from datetime import datetime
 import pytz
 import PyPDF2
-import io
+import time
 
 LOCAL_TZ = pytz.timezone('America/Guayaquil')
 
 # ==========================================
-# UTILIDADES Y LECTORES (Adaptados de tu Diseñador)
+# UTILIDADES Y LECTORES
 # ==========================================
 def obtener_fecha_actual():
     return datetime.now(LOCAL_TZ).date()
@@ -46,19 +46,19 @@ def render(supabase):
         st.error("🔒 Acceso denegado.")
         st.stop()
 
+    # Inicialización de variables en memoria
     if 'carrito_vd' not in st.session_state: 
         st.session_state['carrito_vd'] = []
-    # Memoria para el gestor de archivos de la vendedora
     if 'temp_archivos_impresion' not in st.session_state:
         st.session_state['temp_archivos_impresion'] = []
     if 'last_prod_sel' not in st.session_state:
         st.session_state['last_prod_sel'] = None
-
-    st.title("🛍️ Ventas")
-    
-    # Inicializamos la variable en memoria para el cliente
     if 'vd_cliente_id' not in st.session_state: 
         st.session_state['vd_cliente_id'] = None
+    if 'uploader_key_vd' not in st.session_state:
+        st.session_state['uploader_key_vd'] = str(datetime.now().timestamp())
+
+    st.title("🛍️ Ventas")
     
     tab1, tab2 = st.tabs(["🛒 Nueva Venta", "🧾 Historial de Ventas del Día"])
 
@@ -71,22 +71,19 @@ def render(supabase):
         with col_busqueda:
             st.subheader("1. Selección de Cliente")
             
-            # Contenedor visual idéntico al de Producción
             with st.container(border=True):
                 c1, c2 = st.columns([3, 1])
                 clis = supabase.table('clientes').select("id, nombre_completo, cedula_ruc").execute().data
                 mapa_cli = {f"{c['nombre_completo']} | {c['cedula_ruc']}": c['id'] for c in clis}
                 
-                # Lógica para restaurar el cliente seleccionado tras recargar
                 idx_sel = 0
                 if st.session_state.get('vd_cliente_id'):
                     found = next((k for k, v in mapa_cli.items() if v == st.session_state['vd_cliente_id']), None)
                     if found in list(mapa_cli.keys()): 
-                        idx_sel = list(mapa_cli.keys()).index(found) + 1 # +1 por "Consumidor Final"
+                        idx_sel = list(mapa_cli.keys()).index(found) + 1 
 
                 sel_cli = c1.selectbox("Cliente", ["Consumidor Final"] + list(mapa_cli.keys()), index=idx_sel, label_visibility="collapsed")
                 
-                # Asignar ID según selección
                 if sel_cli != "Consumidor Final" and sel_cli:
                     st.session_state['vd_cliente_id'] = mapa_cli[sel_cli]
                     cliente_id = mapa_cli[sel_cli]
@@ -94,7 +91,6 @@ def render(supabase):
                     st.session_state['vd_cliente_id'] = None
                     cliente_id = None
 
-                # Botón Nuevo Cliente (Popover)
                 with c2.popover("➕ Crear Cliente Nuevo", use_container_width=True):
                     with st.form("vd_nc_full", clear_on_submit=True):
                         st.markdown("##### Nuevo Cliente")
@@ -106,7 +102,6 @@ def render(supabase):
                         f_tip = st.selectbox("Tipo", ["Cliente Final", "Escuela", "Empresa", "Fiscal"], key="vd_new_cli_tip")
                         f_gen = st.selectbox("Género", ["Masculino", "Femenino", "Otro"], key="vd_new_cli_gen")
                         
-                        import time
                         if st.form_submit_button("Guardar Cliente"):
                             if f_ruc and f_nom:
                                 res_c = supabase.table('clientes').insert({
@@ -124,7 +119,6 @@ def render(supabase):
             st.write("---")
             st.subheader("2. Agregar Productos")
             
-            # --- MISMO BUSCADOR DE PRODUCCIÓN ---
             with st.expander("🔍 Filtros de Búsqueda (Catálogo)", expanded=True):
                 prods_raw = supabase.table('productos_catalogo').select("*").eq('activo', True).execute().data
                 df_p = pd.DataFrame(prods_raw)
@@ -154,7 +148,6 @@ def render(supabase):
 
             # --- LÓGICA DE TARIFAS E IMPRESIÓN ---
             if prod_obj:
-                # Si la vendedora cambia de producto, limpiamos los archivos temporales
                 if st.session_state['last_prod_sel'] != prod_obj['id']:
                     st.session_state['last_prod_sel'] = prod_obj['id']
                     st.session_state['temp_archivos_impresion'] = []
@@ -168,12 +161,10 @@ def render(supabase):
                 
                 precio_final = c2.number_input("Precio Final ($)", value=precio_base, format="%.2f", disabled=(tarifa_sel != "Manual"))
 
-                # Guardamos las variables en mayúsculas para comparar más fácil
                 cat_upper = str(prod_obj.get('linea_categoria','')).upper()
                 tipo_upper = str(prod_obj.get('tipo_prenda','')).upper()
-                
-                # Agregamos la regla para que también sea verdadero si el tipo es ICT o ICD
                 es_impresion = ("IMPRESI" in cat_upper) or ("IMPRESI" in tipo_upper) or (tipo_upper in ["ICT", "ICD"])
+                
                 archivos_metadata = []
                 edited_archivos = pd.DataFrame()
 
@@ -187,25 +178,18 @@ def render(supabase):
                         lista_telas_db = ["Estándar"]
                     lista_perfiles = ["Plotter 1", "Plotter 2", "DTF"]
 
-                    # Generamos una llave dinámica en memoria si no existe
-                    if 'uploader_key_vd' not in st.session_state:
-                        st.session_state['uploader_key_vd'] = str(datetime.now().timestamp())
-
                     # 1. Subida Automática
                     st.markdown("**1. Subir PDFs, Excel o CSV en lote**")
                     st.info("💡 **Tip:** Límite 200MB. Para archivos más pesados, usa el script local y sube aquí solo el archivo Excel/CSV.")
                     
-                    # Usamos la llave dinámica para forzar la limpieza
                     archivos = st.file_uploader("Arrastra aquí los archivos:", type=["pdf", "xlsx", "csv"], accept_multiple_files=True, key=st.session_state['uploader_key_vd'])
                     
                     if st.button("📥 Procesar Archivos Subidos", use_container_width=True):
                         if archivos:
-                            # --- ESCUDO DE MEMORIA ---
                             peso_total_mb = sum([f.size for f in archivos]) / (1024 * 1024)
                             
                             if peso_total_mb > 200.0:
                                 st.error(f"🛑 **¡ALERTA DE SOBRECARGA!** Peso total: {peso_total_mb:.1f} MB. Máximo permitido: 200 MB.")
-                                st.warning("Por favor, usa el script local de Python para extraer las medidas y arrastra únicamente el archivo `.xlsx` o `.csv`.")
                             else:
                                 for archivo in archivos:
                                     nombre_archivo = archivo.name.lower()
@@ -229,31 +213,10 @@ def render(supabase):
                                         except Exception as e:
                                             st.warning(f"Error leyendo Excel: {e}")
                                 
-                                # --- MAGIA PARA LIMPIAR EL UPLOADER ---
-                                # Cambiamos la llave; al hacer rerun, Streamlit crea un uploader nuevo y vacío
                                 st.session_state['uploader_key_vd'] = str(datetime.now().timestamp())
                                 st.rerun()
                         else:
                             st.warning("⚠️ No has seleccionado ningún archivo para procesar.")
-                                    nom, anc, lar = extraer_metadata_pdf(archivo)
-                                    st.session_state['temp_archivos_impresion'].append({
-                                        "Nombre": nom, "Perfil": "Plotter 1", "Tela": lista_telas_db[0],
-                                        "Ancho (m)": anc, "Largo (m)": lar, "Cantidad": 1, "Notas": ""
-                                    })
-                                elif nombre_archivo.endswith('.csv') or nombre_archivo.endswith('.xlsx'):
-                                    try:
-                                        df_local = pd.read_csv(archivo) if nombre_archivo.endswith('.csv') else pd.read_excel(archivo)
-                                        for _, row in df_local.iterrows():
-                                            st.session_state['temp_archivos_impresion'].append({
-                                                "Nombre": str(row.get('Nombre', 'Desconocido')),
-                                                "Perfil": "Plotter 1", "Tela": lista_telas_db[0],
-                                                "Ancho (m)": float(row.get('Ancho en metros', 0.0)),
-                                                "Largo (m)": float(row.get('Largo en metros', 0.0)),
-                                                "Cantidad": 1, "Notas": "Vía Excel/CSV"
-                                            })
-                                    except Exception as e:
-                                        st.warning(f"Error leyendo Excel: {e}")
-                            st.rerun()
 
                     # 2. Carga Manual
                     with st.expander("➕ 2. Cargar datos de archivo manualmente"):
@@ -285,7 +248,7 @@ def render(supabase):
                     df_archivos_vd = pd.DataFrame(st.session_state['temp_archivos_impresion'])
                     
                     if not df_archivos_vd.empty:
-                        df_archivos_vd['Eliminar'] = False # Agregamos columna para borrar
+                        df_archivos_vd['Eliminar'] = False 
                         
                         edited_archivos = st.data_editor(
                             df_archivos_vd,
@@ -302,26 +265,22 @@ def render(supabase):
                             use_container_width=True, hide_index=True, key=f"editor_vd_{prod_obj['id']}"
                         )
                         
-                        # Sincronizador de borrado
                         if st.button("🔄 Borrar Seleccionados y Actualizar", use_container_width=True):
                             df_kept = edited_archivos[~edited_archivos['Eliminar']].copy().drop(columns=['Eliminar'])
                             st.session_state['temp_archivos_impresion'] = df_kept.to_dict('records')
                             st.rerun()
                             
-                        # El cálculo de metros ahora es automático leyendo la tabla editable
                         largo_total_calculado = (edited_archivos['Largo (m)'] * edited_archivos['Cantidad']).sum()
                     else:
                         st.info("No hay archivos en la lista.")
                         largo_total_calculado = 0.0
 
-                    # Cambiamos el min_value de 0.01 a 0.0 para que no explote cuando la tabla está vacía
                     cantidad_cobro = st.number_input("Total Metros a Cobrar", value=float(largo_total_calculado), min_value=0.0, step=0.1)
                 else:
                     cantidad_cobro = st.number_input("Cantidad", min_value=1.0, value=1.0, step=1.0)
 
                 st.write("")
                 if st.button("➕ Agregar al Carrito", type="primary"):
-                    # Si es impresión, extraemos los datos limpios de la tabla editable para guardarlos
                     if es_impresion and not edited_archivos.empty:
                         df_final = edited_archivos[~edited_archivos['Eliminar']] if 'Eliminar' in edited_archivos.columns else edited_archivos
                         for _, r in df_final.iterrows():
@@ -335,7 +294,6 @@ def render(supabase):
                         "precio": precio_final, "cantidad": cantidad_cobro, "es_impresion": es_impresion,
                         "archivos": archivos_metadata, "subtotal": cantidad_cobro * precio_final
                     })
-                    # Vaciamos la memoria para el siguiente producto
                     st.session_state['temp_archivos_impresion'] = []
                     st.rerun()
 
@@ -369,9 +327,8 @@ def render(supabase):
                     st.markdown("💰 **Finanzas**")
                     tipo_flujo = st.radio("Destino de la Orden", ["Entrega Inmediata", "Pasa a Cola de Producción/Impresión"])
                     
-                    abono = st.number_input("Monto Recibido ($)", value=total_venta, max_value=float(total_venta))
+                    abono = st.number_input("Monto Recibido ($)", value=float(total_venta), max_value=float(total_venta))
                     
-                    # --- CAMBIO: Selectores de Pago estilo Finanzas ---
                     col_metodo, col_banco = st.columns(2)
                     metodo_pago = col_metodo.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Tarjeta", "Otro"])
                     
@@ -380,8 +337,6 @@ def render(supabase):
                         banco = col_banco.selectbox("Banco Destino", ["Seleccionar...", "JEP", "Pichincha", "Pacifico", "Austro"])
 
                     if st.button("✅ Procesar Venta", use_container_width=True, type="primary"):
-                        
-                        # --- NUEVO: Validación estricta del banco ---
                         if metodo_pago != "Efectivo" and banco == "Seleccionar...":
                             st.error("⚠️ Debes seleccionar a qué banco ingresó el dinero.")
                             st.stop()
@@ -391,7 +346,6 @@ def render(supabase):
                         
                         try:
                             with st.spinner("Registrando venta y enviando archivos..."):
-                                # 1. Cabecera
                                 data_orden = {
                                     "codigo_orden": codigo_vd,
                                     "cliente_id": cliente_id,
@@ -405,17 +359,14 @@ def render(supabase):
                                 res_orden = supabase.table('ordenes').insert(data_orden).execute()
                                 id_orden = res_orden.data[0]['id']
 
-                                # 2. Detalles, Items y Archivos
                                 for item in st.session_state['carrito_vd']:
-                                    # Lo registramos en detalles_orden
                                     supabase.table('detalles_orden').insert({
                                         "orden_id": str(id_orden),
                                         "producto_id": item['id_prod'],
                                         "precio_aplicado": item['precio'],
-                                        "cantidad": int(item['cantidad']) if not item['es_impresion'] else 1 # Adaptación
+                                        "cantidad": int(item['cantidad']) if not item['es_impresion'] else 1 
                                     }).execute()
                                     
-                                    # Si es impresión y tiene archivos, a la cola del plotter directamente
                                     if item['es_impresion'] and item['archivos']:
                                         payloads_plotter = []
                                         for arch in item['archivos']:
@@ -432,20 +383,21 @@ def render(supabase):
                                             })
                                         supabase.table('archivos_impresion').insert(payloads_plotter).execute()
 
-                                # 3. Pagos
                                 if abono > 0:
                                     supabase.table('pagos').insert({
                                         "orden_id": id_orden,
                                         "cliente_id": cliente_id,
                                         "monto": abono,
                                         "metodo_pago": metodo_pago,
-                                        "banco_destino": banco, # <--- Ahora pasará "JEP", "Pichincha", etc.
+                                        "banco_destino": banco,
                                         "fecha_pago": obtener_fecha_actual().isoformat()
                                     }).execute()
 
                             st.session_state['carrito_vd'] = []
                             st.success(f"🎉 Venta registrada. Código: **{codigo_vd}**")
                             st.balloons()
+                            time.sleep(1.5)
+                            st.rerun()
                             
                         except Exception as e:
                             st.error(f"❌ Error al procesar: {e}")
