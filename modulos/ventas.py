@@ -168,7 +168,12 @@ def render(supabase):
                 
                 precio_final = c2.number_input("Precio Final ($)", value=precio_base, format="%.2f", disabled=(tarifa_sel != "Manual"))
 
-                es_impresion = "IMPRESI" in str(prod_obj.get('linea_categoria','')).upper() or "IMPRESI" in str(prod_obj.get('tipo_prenda','')).upper()
+                # Guardamos las variables en mayúsculas para comparar más fácil
+                cat_upper = str(prod_obj.get('linea_categoria','')).upper()
+                tipo_upper = str(prod_obj.get('tipo_prenda','')).upper()
+                
+                # Agregamos la regla para que también sea verdadero si el tipo es ICT o ICD
+                es_impresion = ("IMPRESI" in cat_upper) or ("IMPRESI" in tipo_upper) or (tipo_upper in ["ICT", "ICD"])
                 archivos_metadata = []
                 edited_archivos = pd.DataFrame()
 
@@ -270,7 +275,8 @@ def render(supabase):
                         st.info("No hay archivos en la lista.")
                         largo_total_calculado = 0.0
 
-                    cantidad_cobro = st.number_input("Total Metros a Cobrar", value=float(largo_total_calculado), min_value=0.01)
+                    # Cambiamos el min_value de 0.01 a 0.0 para que no explote cuando la tabla está vacía
+                    cantidad_cobro = st.number_input("Total Metros a Cobrar", value=float(largo_total_calculado), min_value=0.0, step=0.1)
                 else:
                     cantidad_cobro = st.number_input("Cantidad", min_value=1.0, value=1.0, step=1.0)
 
