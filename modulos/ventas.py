@@ -327,7 +327,15 @@ def render(supabase):
                     st.markdown("💰 **Finanzas**")
                     tipo_flujo = st.radio("Destino de la Orden", ["Entrega Inmediata", "Pasa a Cola de Producción/Impresión"])
                     
-                    abono = st.number_input("Monto Recibido ($)", value=float(total_venta), max_value=float(total_venta))
+                    # --- NUEVO: Selector de Modalidad de Pago ---
+                    modalidad_pago = st.radio("Modalidad de Pago Inicial", ["Pago Total (100%)", "Abono Parcial", "Crédito / Sin Abono ($0)"], horizontal=True)
+                    
+                    if modalidad_pago == "Pago Total (100%)":
+                        abono = st.number_input("Monto Recibido ($)", value=float(total_venta), disabled=True)
+                    elif modalidad_pago == "Crédito / Sin Abono ($0)":
+                        abono = st.number_input("Monto Recibido ($)", value=0.0, disabled=True)
+                    else:
+                        abono = st.number_input("Monto Recibido ($)", value=0.0, min_value=0.0, max_value=float(total_venta), step=1.0)
                     
                     col_metodo, col_banco = st.columns(2)
                     metodo_pago = col_metodo.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Tarjeta", "Otro"])
@@ -337,12 +345,14 @@ def render(supabase):
                         banco = col_banco.selectbox("Banco Destino", ["Seleccionar...", "JEP", "Pichincha", "Pacifico", "Austro"])
 
                     if st.button("✅ Procesar Venta", use_container_width=True, type="primary"):
-                        if metodo_pago != "Efectivo" and banco == "Seleccionar...":
+                        # Validamos el banco solo si realmente está ingresando dinero
+                        if abono > 0 and metodo_pago != "Efectivo" and banco == "Seleccionar...":
                             st.error("⚠️ Debes seleccionar a qué banco ingresó el dinero.")
                             st.stop()
                             
                         codigo_vd = generar_codigo_vd(supabase)
-                        estado_orden = "Entregado" if tipo_flujo == "Entrega Inmediata" else "Pendiente Impresión"
+                        # --- CAMBIO: El estado ahora es "Listo para Impresión" para que el plotter lo vea ---
+                        estado_orden = "Entregado" if tipo_flujo == "Entrega Inmediata" else "Listo para Impresión"
                         
                         try:
                             with st.spinner("Registrando venta y enviando archivos..."):
