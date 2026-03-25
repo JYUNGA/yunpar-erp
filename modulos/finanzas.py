@@ -164,8 +164,14 @@ def render(supabase):
                                     
                                     nuevo_saldo = saldo_actual - monto_a_pagar
                                     update_data = {"saldo_pendiente": nuevo_saldo}
+                                    
+                                    # --- CAMBIO: Candado de estado para no sacar la orden de producción por accidente ---
+                                    estado_actual = fila_datos.get("estado", "")
                                     if nuevo_saldo <= 0: 
-                                        update_data["estado"] = "Lista para Entrega"
+                                        # Solo cambiamos a Lista para Entrega si NO está en máquinas
+                                        if estado_actual not in ["Listo para Impresión", "En Impresión", "En Diseño", "En Sublimación", "En Confección"]:
+                                            update_data["estado"] = "Lista para Entrega"
+                                        # Si está en máquina, el estado se queda igual (sigue en proceso aunque ya esté pagada)
 
                                     supabase.table("ordenes").update(update_data).eq("id", orden_seleccionada_id).execute()
                                     
