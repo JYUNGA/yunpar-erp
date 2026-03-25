@@ -26,12 +26,12 @@ supabase = init_connection()
 # 2. AGREGAMOS "Ventas" a los roles de GERENTE y VENDEDORA
 PERMISOS = {
     "GERENTE": [
-        "Inicio", "Ventas y Mostrador", "Cotizaciones", "Producción", "Reportes", 
+        "Inicio", "Ventas", "Cotizaciones", "Producción", "Reportes", 
         "Diseño", "Impresión", "Caja y Finanzas", 
         "Clientes", "Productos", "Insumos", "Usuarios"
     ],
     "VENDEDORA": [
-        "Inicio", "Ventas y Mostrador", "Cotizaciones", "Producción", "Caja y Finanzas", "Clientes", "Reportes"
+        "Inicio", "Ventas", "Cotizaciones", "Producción", "Caja y Finanzas", "Clientes", "Reportes"
     ],
     "IMPRESION": [
         "Inicio", "Impresión"
@@ -85,7 +85,7 @@ def enrutador(opcion):
     if opcion == "Inicio":
         st.title("📊 Tablero Principal")
         st.info(f"Bienvenido al sistema ERP YUNPAR. Tu rol es: **{st.session_state['rol']}**")
-    elif opcion == "Ventas y Mostrador": ventas.render(supabase) # 3. AGREGAMOS LA RUTA AL ENRUTADOR
+    elif opcion == "Ventas": ventas.render(supabase) # 3. AGREGAMOS LA RUTA AL ENRUTADOR
     elif opcion == "Cotizaciones": cotizaciones.render(supabase)
     elif opcion == "Producción": produccion.render(supabase)
     elif opcion == "Reportes": reportes.render_modulo_reportes(supabase)
