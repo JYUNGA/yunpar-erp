@@ -91,9 +91,9 @@ def render(supabase):
                 st.session_state['url_diseno_view'] = None
                 st.session_state['editando_cliente_id'] = None
                 st.session_state['fecha_entrega_edit'] = datetime.date.today() 
+                st.session_state['editando_obs_g'] = "" # <--- NUEVO: Limpiamos la memoria de las observaciones
                 st.session_state['vista_prod'] = "EDITOR"
                 st.rerun()
-
             txt_bus = c_txt.text_input("Buscar", placeholder="Cliente / Código Orden", label_visibility="collapsed")
             f_des = c_des.date_input("Desde", value=datetime.date.today()-datetime.timedelta(days=30))
             f_has = c_has.date_input("Hasta", value=datetime.date.today())
