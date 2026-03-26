@@ -587,7 +587,7 @@ def render(supabase):
                 cols_cfg = {
                     "Nombre": st.column_config.TextColumn("Nombre Jugador", width="medium"),
                     "Numero": st.column_config.TextColumn("Dorsal", width="small"),
-                    "Genero": st.column_config.SelectboxColumn("Género", options=["Masculino", "Femenino"]),
+                    "Genero": st.column_config.SelectboxColumn("Género", options=["Masculino", "Femenino", "BVD-Hombre", "BVD-Mujer"]),
                     "Acabado": st.column_config.TextColumn("Acabado"),
                     "Obs": st.column_config.TextColumn("Observación"),
                     "Tipo Cuello": st.column_config.TextColumn("Tipo Cuello", width="small"),
