@@ -8,7 +8,6 @@ def render(supabase):
     # 🔐 SISTEMA DE ROLES (RBAC)
     # ==========================================
     # Leemos el rol real desde la sesión de tu Login (app.py)
-    # Si por algún motivo falla, asume "VENDEDORA" por seguridad extrema.
     rol_actual = st.session_state.get('rol', 'VENDEDORA').upper() 
 
     st.title("💸 Finanzas y Control de Caja")
@@ -165,13 +164,10 @@ def render(supabase):
                                     nuevo_saldo = saldo_actual - monto_a_pagar
                                     update_data = {"saldo_pendiente": nuevo_saldo}
                                     
-                                    # --- CAMBIO: Candado de estado para no sacar la orden de producción por accidente ---
                                     estado_actual = fila_datos.get("estado", "")
                                     if nuevo_saldo <= 0: 
-                                        # Solo cambiamos a Lista para Entrega si NO está en máquinas
                                         if estado_actual not in ["Listo para Impresión", "En Impresión", "En Diseño", "En Sublimación", "En Confección"]:
                                             update_data["estado"] = "Lista para Entrega"
-                                        # Si está en máquina, el estado se queda igual (sigue en proceso aunque ya esté pagada)
 
                                     supabase.table("ordenes").update(update_data).eq("id", orden_seleccionada_id).execute()
                                     
@@ -234,20 +230,43 @@ def render(supabase):
                                 
             with c_cat:
                 st.subheader("Gestión")
-                # Solo el gerente puede crear nuevas categorías de gasto
-                if rol_actual == "GERENTE":
-                    with st.expander("➕ Crear Nueva Categoría"):
-                        nueva_cat = st.text_input("Nombre de categoría")
-                        if st.button("Guardar Categoría", use_container_width=True):
-                            if nueva_cat:
-                                try:
-                                    supabase.table("categorias_egreso").insert({"nombre": nueva_cat.strip()}).execute()
-                                    st.toast("Categoría añadida", icon="✅")
-                                    st.rerun()
-                                except:
-                                    st.error("Error al crear. Quizá ya existe.")
-                else:
-                    st.info("ℹ️ Las categorías de gasto son gestionadas por el Gerente.")
+                # 1. Liberamos la creación de categorías para todos los roles autorizados en esta pestaña
+                with st.expander("➕ Crear Nueva Categoría"):
+                    nueva_cat = st.text_input("Nombre de categoría")
+                    if st.button("Guardar Categoría", use_container_width=True):
+                        if nueva_cat:
+                            try:
+                                supabase.table("categorias_egreso").insert({"nombre": nueva_cat.strip()}).execute()
+                                st.toast("Categoría añadida", icon="✅")
+                                st.rerun()
+                            except:
+                                st.error("Error al crear. Quizá ya existe.")
+                
+                # 2. Mostramos los últimos 10 registros para evitar duplicados
+                st.divider()
+                st.markdown("##### 🕒 Últimos 10 Registros")
+                st.caption("Revisa aquí para evitar registrar el mismo gasto dos veces.")
+                
+                try:
+                    # Consultamos los últimos 10 egresos ordenados por fecha de creación descendente
+                    res_ultimos = supabase.table("egresos").select("fecha, descripcion, monto").order("created_at", desc=True).limit(10).execute()
+                    
+                    if res_ultimos.data:
+                        df_ultimos = pd.DataFrame(res_ultimos.data)
+                        st.dataframe(
+                            df_ultimos,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "fecha": "Fecha",
+                                "descripcion": "Descripción",
+                                "monto": st.column_config.NumberColumn("Monto", format="$ %.2f")
+                            }
+                        )
+                    else:
+                        st.info("No hay egresos recientes.")
+                except Exception as e:
+                    st.caption("Error al cargar el historial.")
 
     # ==========================================
     # TAB 4: LIBRO DIARIO (Solo Gerente)
