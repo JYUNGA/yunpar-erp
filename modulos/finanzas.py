@@ -318,7 +318,7 @@ def render(supabase):
                         lambda x: f"{x['metodo_pago']} ({x['banco']})" if pd.notna(x.get('banco')) and x.get('banco') else x['metodo_pago'], axis=1
                     )
                     
-                    # 1. SI ES GERENTE, LA TABLA ES INTERACTIVA
+                    # --- LÓGICA DE BORRADO SEGURO (SOLUCIONA EL CLIC FANTASMA) ---
                     if rol_actual == "GERENTE":
                         st.caption("👇 Haz clic en un egreso para anularlo.")
                         evento_tabla_egresos = st.dataframe(
@@ -328,42 +328,40 @@ def render(supabase):
                             selection_mode="single-row",
                             on_select="rerun",
                             column_config={
-                                "id": None, # Ocultamos el ID
+                                "id": None, 
                                 "monto": st.column_config.NumberColumn("monto", format="$ %.2f")
                             }
                         )
                         
-                        filas_seleccionadas_egr = evento_tabla_egresos.selection.rows
-                        
-                        if len(filas_seleccionadas_egr) > 0:
-                            indice_egr = filas_seleccionadas_egr[0]
+                        # 1. Cuando haces clic en la tabla, guardamos la intención de borrar en memoria.
+                        if len(evento_tabla_egresos.selection.rows) > 0:
+                            indice_egr = evento_tabla_egresos.selection.rows[0]
                             fila_egreso = df_egresos_dia.iloc[indice_egr]
-                            id_a_borrar = str(fila_egreso['id']) # Extraemos el ID como texto seguro
+                            st.session_state['id_egreso_eliminar'] = str(fila_egreso['id'])
+                            st.session_state['desc_egreso_eliminar'] = f"{fila_egreso['descripcion']} (${fila_egreso['monto']:.2f})"
+                        else:
+                            # Si deseleccionas la tabla, limpiamos la memoria
+                            st.session_state.pop('id_egreso_eliminar', None)
                             
+                        # 2. Si la memoria tiene un ID, mostramos el botón (Así no desaparece al recargar)
+                        if 'id_egreso_eliminar' in st.session_state:
                             st.markdown("---")
                             st.markdown("##### 🗑️ Anular Egreso Seleccionado")
-                            st.info(f"Vas a eliminar: **{fila_egreso['descripcion']}** por **${fila_egreso['monto']:.2f}**")
+                            st.info(f"Vas a eliminar: **{st.session_state['desc_egreso_eliminar']}**")
                             
-                            # FUNCIÓN CALLBACK: Se ejecuta inmediatamente al hacer clic
-                            def ejecutar_borrado(id_egreso):
+                            if st.button("🚨 Confirmar y Eliminar", type="primary", use_container_width=True):
                                 try:
-                                    supabase.table("egresos").delete().eq("id", id_egreso).execute()
-                                    st.toast("✅ Egreso eliminado permanentemente.", icon="🗑️")
+                                    # Ejecutamos el SQL usando la variable de la memoria
+                                    supabase.table("egresos").delete().eq("id", st.session_state['id_egreso_eliminar']).execute()
+                                    # Borramos la memoria para limpiar la pantalla
+                                    st.session_state.pop('id_egreso_eliminar', None) 
+                                    st.success("✅ Gasto eliminado permanentemente de la base de datos.")
+                                    st.rerun() # Refrescamos para ver el saldo corregido
                                 except Exception as e:
                                     st.error(f"Error al eliminar en la BD: {e}")
-
-                            # Usamos el parámetro on_click en lugar del if st.button()
-                            st.button(
-                                "🚨 Confirmar y Eliminar", 
-                                type="primary", 
-                                key="btn_del_egreso", 
-                                use_container_width=True,
-                                on_click=ejecutar_borrado,
-                                args=(id_a_borrar,) # Le pasamos el ID a la función
-                            )
-                    
-                    # 2. SI NO ES GERENTE, SOLO SE MUESTRA LA TABLA NORMAL ESTÁTICA
+                                    
                     else:
+                        # Si no es gerente, solo ve la tabla estática
                         st.dataframe(df_egresos_dia[['categoria', 'descripcion', 'monto', 'Medio']], use_container_width=True, hide_index=True)
 
                     total_egr_dia = df_egresos_dia['monto'].astype(float).sum()
