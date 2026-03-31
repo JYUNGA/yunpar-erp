@@ -71,10 +71,11 @@ def render(supabase):
         with col_busqueda:
             # --- NUEVO: Fila superior con Fecha de Venta y Fecha de Entrega ---
             col_fec1, col_fec2 = st.columns(2)
-            fecha_venta_seleccionada = col_fec1.date_input("🗓️ Fecha de Creación (Venta)", value=obtener_fecha_actual())
+            fecha_venta_seleccionada = col_fec1.date_input("🗓️ Fecha de Registro (Venta y Pago)", value=obtener_fecha_actual())
             fecha_entrega_seleccionada = col_fec2.date_input("📅 Fecha de Entrega Estimada", value=obtener_fecha_actual())
-            
+
             st.subheader("1. Selección de Cliente")
+            
             with st.container(border=True):
                 c1, c2 = st.columns([3, 1])
                 clis = supabase.table('clientes').select("id, nombre_completo, cedula_ruc").execute().data
@@ -355,7 +356,6 @@ def render(supabase):
                             st.stop()
                             
                         codigo_vd = generar_codigo_vd(supabase)
-                        # --- CAMBIO: El estado ahora es "Listo para Impresión" para que el plotter lo vea ---
                         estado_orden = "Entregado" if tipo_flujo == "Entrega Inmediata" else "Listo para Impresión"
                         
                         try:
@@ -367,15 +367,37 @@ def render(supabase):
                                     "abono_inicial": abono,
                                     "saldo_pendiente": total_venta - abono,
                                     "estado": estado_orden,
-                                    # --- CAMBIO: Usar fechas seleccionadas por la vendedora ---
+                                    # --- CAMBIO: Usar las fechas de los calendarios ---
                                     "fecha_entrega": fecha_entrega_seleccionada.isoformat(),
-                                    "created_at": f"{fecha_venta_seleccionada.isoformat()}T12:00:00", # Sobrescribe la fecha de creación
+                                    "created_at": f"{fecha_venta_seleccionada.isoformat()}T12:00:00",
                                     "creado_por_id": st.session_state.get('id_usuario', None)
                                 }
                                 res_orden = supabase.table('ordenes').insert(data_orden).execute()
                                 id_orden = res_orden.data[0]['id']
 
-                                # ... [Código de Detalles y Archivos SE MANTIENE IGUAL] ...
+                                for item in st.session_state['carrito_vd']:
+                                    supabase.table('detalles_orden').insert({
+                                        "orden_id": str(id_orden),
+                                        "producto_id": item['id_prod'],
+                                        "precio_aplicado": item['precio'],
+                                        "cantidad": int(item['cantidad']) if not item['es_impresion'] else 1 
+                                    }).execute()
+                                    
+                                    if item['es_impresion'] and item['archivos']:
+                                        payloads_plotter = []
+                                        for arch in item['archivos']:
+                                            payloads_plotter.append({
+                                                "orden_id": id_orden,
+                                                "nombre_archivo": arch['nombre'],
+                                                "ancho_metros": arch['ancho'],
+                                                "longitud_metros": arch['largo'],
+                                                "estado_impresion": "Pendiente",
+                                                "cantidad": arch.get('cantidad', 1),
+                                                "perfil_color": arch.get('perfil', 'Plotter 1'),
+                                                "tela": arch.get('tela', 'Estándar'),
+                                                "notas_disenador": arch.get('notas', '')
+                                            })
+                                        supabase.table('archivos_impresion').insert(payloads_plotter).execute()
 
                                 if abono > 0:
                                     supabase.table('pagos').insert({
@@ -384,7 +406,7 @@ def render(supabase):
                                         "monto": abono,
                                         "metodo_pago": metodo_pago,
                                         "banco_destino": banco,
-                                        # --- CAMBIO: Usar fecha de venta para el pago inicial ---
+                                        # --- CAMBIO: Fecha de pago igual a la fecha de registro ---
                                         "fecha_pago": fecha_venta_seleccionada.isoformat()
                                     }).execute()
 
@@ -411,6 +433,6 @@ def render(supabase):
                     df_historial[col] = df_historial[col].apply(lambda x: f"${x:,.2f}")
                 st.dataframe(df_historial, use_container_width=True, hide_index=True)
             else:
-                st.info("No hay ventas directas hoy.")
+                st.info("No hay ventas directas registradas hoy.")
         except Exception as e:
             st.error(f"Error al cargar historial: {e}")
