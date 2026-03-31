@@ -897,10 +897,10 @@ def render(supabase):
 
                 # --- NUEVO: DETALLES DEL PAGO (Solo en creacion y con dinero) ---
                 if mnt > 0 and not es_edicion_ui:
-                    metodo_pago = st.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Depósito", "Tarjeta", "Otro"])
-                    if metodo_pago in ["Transferencia", "Depósito"]:
+                    metodo_pago = st.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Tarjeta", "Otro"])
+                    if metodo_pago in ["Transferencia"]:
                         b_col1, b_col2 = st.columns(2)
-                        banco_destino = b_col1.selectbox("Banco Destino", ["Pichincha", "Guayaquil", "Pacífico", "Produbanco", "Bolivariano", "Otro"])
+                        banco_destino = b_col1.selectbox("Banco Destino", ["Seleccionar...", "JEP", "Pichincha", "Pacifico", "Austro", "Otro"])
                         num_ref = b_col2.text_input("Núm. Comprobante")
 
             with c_obs:
@@ -987,13 +987,16 @@ def render(supabase):
 
                         # 🟢 INTEGRACIÓN FINANZAS: Registrar el Abono completo en Pagos
                         if mnt > 0:
+                            # Limpiar banco si lo dejaron en "Seleccionar..."
+                            banco_final = None if banco_destino == "Seleccionar..." else banco_destino
+                            
                             supabase.table('pagos').insert({
                                 "orden_id": id_o,
                                 "cliente_id": st.session_state['editando_cliente_id'],
                                 "monto": mnt,
-                                "metodo_pago": metodo_pago, # Guardamos Transferencia, Tarjeta, etc
-                                "banco_destino": banco_destino, # Guardamos Banco
-                                "numero_referencia": num_ref, # Guardamos Referencia
+                                "metodo_pago": metodo_pago, 
+                                "banco_destino": banco_final, 
+                                "numero_referencia": num_ref, 
                                 "fecha_pago": fecha_final
                             }).execute()
 
