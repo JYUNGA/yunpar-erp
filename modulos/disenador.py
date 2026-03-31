@@ -406,13 +406,16 @@ def render(supabase):
         st.subheader("🖨️ Gestor de Archivos de Impresión")
         
         try:
-            res_telas_bd = supabase.table("insumos").select("nombre").execute()
-            lista_telas_db = [t['nombre'] for t in res_telas_bd.data] if res_telas_bd.data else ["Estándar"]
+            # Filtramos para traer SOLO los insumos cuya categoría contenga la palabra 'tela'
+            res_telas_bd = supabase.table("insumos").select("nombre").ilike("categoria", "%tela%").execute()
+            
+            # Agregamos "-" como primera opción para impresiones que no requieren tela
+            lista_telas_db = ["-"] + [t['nombre'] for t in res_telas_bd.data] if res_telas_bd.data else ["-"]
         except Exception:
-            lista_telas_db = ["Estándar"]
+            lista_telas_db = ["-"]
 
-        # --- NUEVO: Precálculo inteligente de la tela dominante de la orden ---
-        tela_sugerida = "Estándar"
+        # --- Precálculo inteligente de la tela dominante de la orden ---
+        tela_sugerida = "-"
         if specs_list:
             todas_las_telas = [s['Tela'] for s in specs_list if s['Tela'] not in ["Estándar", "-"]]
             if todas_las_telas:
@@ -561,7 +564,7 @@ def render(supabase):
 
         if not df_archivos.empty:
             if 'ancho_metros' not in df_archivos.columns: df_archivos['ancho_metros'] = 0.0
-            if 'tela' not in df_archivos.columns: df_archivos['tela'] = lista_telas_db[0] if lista_telas_db else "Estándar"
+            if 'tela' not in df_archivos.columns: df_archivos['tela'] = lista_telas_db[0] if lista_telas_db else "-"
             if 'cantidad' not in df_archivos.columns: df_archivos['cantidad'] = 1
             if 'estado_impresion' not in df_archivos.columns: df_archivos['estado_impresion'] = "Pendiente"
             
