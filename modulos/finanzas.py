@@ -318,18 +318,10 @@ def render(supabase):
                         lambda x: f"{x['metodo_pago']} ({x['banco']})" if pd.notna(x.get('banco')) and x.get('banco') else x['metodo_pago'], axis=1
                     )
                     
-                    # --- LÓGICA CON CALLBACK PARA EVITAR EL CLIC FANTASMA ---
+                    # --- LÓGICA ROBUSTA DE ELIMINACIÓN SECUENCIAL ---
                     if rol_actual == "GERENTE":
-                        st.caption("👇 Haz clic en un egreso para anularlo.")
+                        st.caption("👇 Haz clic en la fila del egreso que deseas anular.")
                         
-                        # Definimos la función de borrado ANTES del botón. 
-                        # Esto se ejecutará inmediatamente al hacer clic, superando a Streamlit.
-                        def ejecutar_borrado_callback(id_a_borrar):
-                            try:
-                                supabase.table("egresos").delete().eq("id", str(id_a_borrar)).execute()
-                            except Exception as e:
-                                pass # Si falla, igual evitamos que se rompa la app
-                                
                         evento_tabla_egresos = st.dataframe(
                             df_egresos_dia[['id', 'categoria', 'descripcion', 'monto', 'Medio']], 
                             use_container_width=True, 
@@ -345,19 +337,31 @@ def render(supabase):
                         filas_sel = evento_tabla_egresos.selection.rows
                         if len(filas_sel) > 0:
                             fila_egreso = df_egresos_dia.iloc[filas_sel[0]]
+                            id_egreso = str(fila_egreso['id']) # Aseguramos que el UUID pase como texto
                             
                             st.markdown("---")
                             st.markdown("##### 🗑️ Anular Egreso Seleccionado")
                             st.info(f"Vas a eliminar: **{fila_egreso['descripcion']}** por **${fila_egreso['monto']:.2f}**")
                             
-                            # Usamos el parámetro mágico "on_click" apuntando a nuestra función
-                            st.button(
-                                "🚨 Confirmar y Eliminar", 
-                                type="primary", 
-                                use_container_width=True,
-                                on_click=ejecutar_borrado_callback,
-                                args=(fila_egreso['id'],) # Le pasamos el ID como argumento
-                            )
+                            # CLAVE: Le damos un "key" dinámico al botón para que Streamlit no pierda su estado
+                            if st.button("🚨 Confirmar y Eliminar", type="primary", key=f"del_{id_egreso}", use_container_width=True):
+                                try:
+                                    # Ejecutamos el borrado directamente
+                                    res = supabase.table("egresos").delete().eq("id", id_egreso).execute()
+                                    
+                                    # Validamos que la BD realmente nos devuelva los datos borrados
+                                    if len(res.data) > 0:
+                                        st.success("✅ Gasto eliminado permanentemente de la base de datos.")
+                                    else:
+                                        st.warning("⚠️ No se encontró el registro. ¿Posiblemente ya fue eliminado?")
+                                        
+                                    import time
+                                    time.sleep(1.5) # Damos 1.5 segundos para que leas el mensaje verde
+                                    st.rerun() # Recargamos toda la vista para cuadrar la caja
+                                    
+                                except Exception as e:
+                                    # Si Supabase rechaza el borrado, ahora sí veremos el motivo exacto en pantalla
+                                    st.error(f"Error técnico al intentar borrar: {e}")
                     else:
                         st.dataframe(df_egresos_dia[['categoria', 'descripcion', 'monto', 'Medio']], use_container_width=True, hide_index=True)
 
