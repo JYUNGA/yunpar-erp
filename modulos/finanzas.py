@@ -7,7 +7,6 @@ def render(supabase):
     # ==========================================
     # 🔐 SISTEMA DE ROLES (RBAC)
     # ==========================================
-    # Leemos el rol real desde la sesión de tu Login (app.py)
     rol_actual = st.session_state.get('rol', 'VENDEDORA').upper() 
 
     st.title("💸 Finanzas y Control de Caja")
@@ -16,17 +15,12 @@ def render(supabase):
     # ==========================================
     # 🏗️ CONSTRUCCIÓN DINÁMICA DE PESTAÑAS
     # ==========================================
-    # 1. Definimos qué pestañas ve cada rol según tu base de datos
     if rol_actual == "GERENTE":
         nombres_tabs = ["📊 Flujo de Caja", "⏳ Cuentas por Cobrar", "📤 Registrar Gasto", "📖 Libro Diario"]
     else:
-        # La VENDEDORA solo ve estas dos
         nombres_tabs = ["⏳ Cuentas por Cobrar", "📤 Registrar Gasto"]
 
-    # 2. Creamos las pestañas en la interfaz
     tabs_creados = st.tabs(nombres_tabs)
-    
-    # 3. Emparejamos los nombres con los objetos usando un diccionario
     mis_tabs = dict(zip(nombres_tabs, tabs_creados))
 
     hoy = date.today()
@@ -42,7 +36,6 @@ def render(supabase):
             f_inicio = col_f1.date_input("🗓️ Desde", value=primer_dia_mes)
             f_fin = col_f2.date_input("🗓️ Hasta", value=hoy)
             
-            # Consultas
             res_pagos = supabase.table("pagos").select("monto").gte("fecha_pago", f_inicio.isoformat()).lte("fecha_pago", f_fin.isoformat()).execute()
             ingresos_rango = sum([float(p["monto"]) for p in res_pagos.data]) if res_pagos.data else 0.0
             
@@ -107,7 +100,6 @@ def render(supabase):
                 
                 st.markdown("👇 **Haz clic en la fila de la orden en la tabla para registrar su pago:**")
                 
-                # TABLA INTERACTIVA
                 evento_tabla = st.dataframe(
                     df_filtrado[["id", "codigo_orden", "Cliente", "total_estimado", "abono_inicial", "saldo_pendiente", "estado"]], 
                     use_container_width=True, 
@@ -122,7 +114,6 @@ def render(supabase):
                     }
                 )
                 
-                # PANEL DE PAGO DINÁMICO
                 filas_seleccionadas = evento_tabla.selection.rows
                 
                 if len(filas_seleccionadas) == 0:
@@ -136,7 +127,7 @@ def render(supabase):
                     st.divider()
                     st.markdown(f"### 💰 Liquidar Orden: **{fila_datos['codigo_orden']}** ({fila_datos['Cliente']})")
 
-                    with st.form(key="form_pago"):
+                    with st.form(key="form_pago", clear_on_submit=True):
                         col_monto, col_metodo, col_banco = st.columns(3)
                         monto_a_pagar = col_monto.number_input("Monto a Pagar ($)", min_value=0.01, max_value=saldo_actual, value=saldo_actual)
                         metodo_pago = col_metodo.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Tarjeta", "Otro"])
@@ -191,6 +182,7 @@ def render(supabase):
                 res_categorias = supabase.table("categorias_egreso").select("nombre").execute()
                 lista_categorias = [c["nombre"] for c in res_categorias.data] if res_categorias.data else ["Otros"]
 
+                # AQUI ACTIVAMOS LA PREVENCION (clear_on_submit=True vacía el form al instante de guardar)
                 with st.form("form_egreso", clear_on_submit=True):
                     col1, col2 = st.columns(2)
                     fecha_gasto = col1.date_input("Fecha del Gasto", value=hoy)
@@ -230,7 +222,6 @@ def render(supabase):
                                 
             with c_cat:
                 st.subheader("Gestión")
-                # 1. Liberamos la creación de categorías para todos los roles autorizados en esta pestaña
                 with st.expander("➕ Crear Nueva Categoría"):
                     nueva_cat = st.text_input("Nombre de categoría")
                     if st.button("Guardar Categoría", use_container_width=True):
@@ -242,13 +233,11 @@ def render(supabase):
                             except:
                                 st.error("Error al crear. Quizá ya existe.")
                 
-                # 2. Mostramos los últimos 10 registros para evitar duplicados
                 st.divider()
                 st.markdown("##### 🕒 Últimos 10 Registros")
                 st.caption("Revisa aquí para evitar registrar el mismo gasto dos veces.")
                 
                 try:
-                    # Consultamos los últimos 10 egresos ordenados por fecha de creación descendente
                     res_ultimos = supabase.table("egresos").select("fecha, descripcion, monto").order("created_at", desc=True).limit(10).execute()
                     
                     if res_ultimos.data:
@@ -293,7 +282,10 @@ def render(supabase):
 
             col_ing_diario, col_egr_diario = st.columns(2)
             
-            res_pagos_dia = supabase.table("pagos").select("orden_id, monto, metodo_pago, banco_destino").gte("fecha_pago", f_ini_diario.isoformat()).lte("fecha_pago", f_fin_diario.isoformat()).execute()
+            # 1. AQUI OBTENEMOS EL ID DEL INGRESO
+            res_pagos_dia = supabase.table("pagos").select("id, orden_id, monto, metodo_pago, banco_destino").gte("fecha_pago", f_ini_diario.isoformat()).lte("fecha_pago", f_fin_diario.isoformat()).execute()
+            
+            # 2. AQUI OBTENEMOS EL ID DEL EGRESO PARA PODER BORRARLO
             res_egresos_dia = supabase.table("egresos").select("id, categoria, descripcion, monto, metodo_pago, banco").gte("fecha", f_ini_diario.isoformat()).lte("fecha", f_fin_diario.isoformat()).execute()
             
             with col_ing_diario:
@@ -336,14 +328,13 @@ def render(supabase):
                     st.error(f"**Total Egresos: ${total_egr_dia:,.2f}**")
                     
                     # ==========================================
-                    # 🗑️ ZONA DE ELIMINACIÓN (SOLO GERENTE)
+                    # 🗑️ ZONA DE ELIMINACIÓN DE GASTOS (SOLO GERENTE)
                     # ==========================================
                     if rol_actual == "GERENTE":
                         st.markdown("---")
                         st.markdown("##### 🗑️ Anular Egreso")
-                        st.caption("Selecciona un error para eliminarlo de la base de datos.")
+                        st.caption("Selecciona un error de la lista para eliminarlo.")
                         
-                        # Creamos un diccionario para el selector: ID -> Texto descriptivo
                         opciones_borrar = {e['id']: f"{e['descripcion']} - ${e['monto']}" for e in res_egresos_dia.data}
                         
                         egreso_a_borrar = st.selectbox(
