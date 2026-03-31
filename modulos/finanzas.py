@@ -182,7 +182,6 @@ def render(supabase):
                 res_categorias = supabase.table("categorias_egreso").select("nombre").execute()
                 lista_categorias = [c["nombre"] for c in res_categorias.data] if res_categorias.data else ["Otros"]
 
-                # AQUI ACTIVAMOS LA PREVENCION (clear_on_submit=True vacía el form al instante de guardar)
                 with st.form("form_egreso", clear_on_submit=True):
                     col1, col2 = st.columns(2)
                     fecha_gasto = col1.date_input("Fecha del Gasto", value=hoy)
@@ -282,10 +281,7 @@ def render(supabase):
 
             col_ing_diario, col_egr_diario = st.columns(2)
             
-            # 1. AQUI OBTENEMOS EL ID DEL INGRESO
             res_pagos_dia = supabase.table("pagos").select("id, orden_id, monto, metodo_pago, banco_destino").gte("fecha_pago", f_ini_diario.isoformat()).lte("fecha_pago", f_fin_diario.isoformat()).execute()
-            
-            # 2. AQUI OBTENEMOS EL ID DEL EGRESO PARA PODER BORRARLO
             res_egresos_dia = supabase.table("egresos").select("id, categoria, descripcion, monto, metodo_pago, banco").gte("fecha", f_ini_diario.isoformat()).lte("fecha", f_fin_diario.isoformat()).execute()
             
             with col_ing_diario:
@@ -322,35 +318,45 @@ def render(supabase):
                         lambda x: f"{x['metodo_pago']} ({x['banco']})" if pd.notna(x.get('banco')) and x.get('banco') else x['metodo_pago'], axis=1
                     )
                     
-                    st.dataframe(df_egresos_dia[['categoria', 'descripcion', 'monto', 'Medio']], use_container_width=True, hide_index=True)
-                    
-                    total_egr_dia = df_egresos_dia['monto'].astype(float).sum()
-                    st.error(f"**Total Egresos: ${total_egr_dia:,.2f}**")
-                    
-                    # ==========================================
-                    # 🗑️ ZONA DE ELIMINACIÓN DE GASTOS (SOLO GERENTE)
-                    # ==========================================
+                    # 1. SI ES GERENTE, LA TABLA ES INTERACTIVA
                     if rol_actual == "GERENTE":
-                        st.markdown("---")
-                        st.markdown("##### 🗑️ Anular Egreso")
-                        st.caption("Selecciona un error de la lista para eliminarlo.")
-                        
-                        opciones_borrar = {e['id']: f"{e['descripcion']} - ${e['monto']}" for e in res_egresos_dia.data}
-                        
-                        egreso_a_borrar = st.selectbox(
-                            "Seleccionar registro:", 
-                            options=[""] + list(opciones_borrar.keys()), 
-                            format_func=lambda x: opciones_borrar[x] if x != "" else "Elige un registro..."
+                        st.caption("👇 Haz clic en un egreso para anularlo.")
+                        evento_tabla_egresos = st.dataframe(
+                            df_egresos_dia[['id', 'categoria', 'descripcion', 'monto', 'Medio']], 
+                            use_container_width=True, 
+                            hide_index=True,
+                            selection_mode="single-row",
+                            on_select="rerun",
+                            column_config={
+                                "id": None, # Ocultamos el ID
+                                "monto": st.column_config.NumberColumn("monto", format="$ %.2f")
+                            }
                         )
                         
-                        if egreso_a_borrar != "":
-                            if st.button("🚨 Eliminar Definitivamente", type="primary"):
+                        filas_seleccionadas_egr = evento_tabla_egresos.selection.rows
+                        
+                        if len(filas_seleccionadas_egr) > 0:
+                            indice_egr = filas_seleccionadas_egr[0]
+                            fila_egreso = df_egresos_dia.iloc[indice_egr]
+                            
+                            st.markdown("---")
+                            st.markdown("##### 🗑️ Anular Egreso Seleccionado")
+                            st.info(f"Vas a eliminar: **{fila_egreso['descripcion']}** por **${fila_egreso['monto']:.2f}**")
+                            
+                            if st.button("🚨 Confirmar y Eliminar", type="primary", key="btn_del_egreso", use_container_width=True):
                                 try:
-                                    supabase.table("egresos").delete().eq("id", egreso_a_borrar).execute()
+                                    supabase.table("egresos").delete().eq("id", fila_egreso['id']).execute()
                                     st.success("Egreso anulado con éxito.")
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Error al eliminar: {e}")
+                    
+                    # 2. SI NO ES GERENTE (por seguridad extra), SOLO SE MUESTRA LA TABLA NORMAL
+                    else:
+                        st.dataframe(df_egresos_dia[['categoria', 'descripcion', 'monto', 'Medio']], use_container_width=True, hide_index=True)
+
+                    total_egr_dia = df_egresos_dia['monto'].astype(float).sum()
+                    st.error(f"**Total Egresos: ${total_egr_dia:,.2f}**")
                 else:
                     st.info("No hay egresos en este periodo.")
                     total_egr_dia = 0.0
