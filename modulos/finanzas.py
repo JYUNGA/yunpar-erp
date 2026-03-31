@@ -328,35 +328,51 @@ def render(supabase):
                             hide_index=True,
                             selection_mode="single-row",
                             on_select="rerun",
+                            key="tabla_anular_egresos", # Llave única para mayor estabilidad en el renderizado
                             column_config={
                                 "id": None, # Ocultamos el ID visualmente
                                 "monto": st.column_config.NumberColumn("monto", format="$ %.2f")
                             }
                         )
                         
+                        # Mostramos notificaciones si venimos de un borrado exitoso o fallido
+                        if 'toast_exito' in st.session_state:
+                            st.success(st.session_state.pop('toast_exito'))
+                        if 'toast_error' in st.session_state:
+                            st.error(st.session_state.pop('toast_error'))
+
                         filas_sel = evento_tabla_egresos.selection.rows
+                        
                         if len(filas_sel) > 0:
-                            # Extraemos los datos exactos de la fila que tocaste
+                            # Extraemos los datos exactos de la fila
                             fila_egreso = df_egresos_dia.iloc[filas_sel[0]]
-                            id_egreso = str(fila_egreso['id']).strip() # Limpiamos espacios por seguridad
+                            id_egreso = str(fila_egreso['id']).strip() 
                             
                             st.markdown("---")
                             st.markdown("##### 🗑️ Anular Egreso Seleccionado")
-                            st.info(f"Vas a eliminar: **{fila_egreso['descripcion']}** por **${fila_egreso['monto']:.2f}**")
+                            st.warning(f"Vas a eliminar: **{fila_egreso['descripcion']}** por **${fila_egreso['monto']:.2f}**")
                             
-                            # Botón fijo y directo
-                            if st.button("🚨 Confirmar y Eliminar", type="primary", key="btn_borrar_gasto", use_container_width=True):
+                            # Callback: Ejecuta el borrado ANTES del ciclo de recarga de Streamlit
+                            def procesar_eliminacion(id_a_borrar):
                                 try:
-                                    # Mandamos la orden a Supabase sin esperar validaciones engañosas
-                                    supabase.table("egresos").delete().eq("id", id_egreso).execute()
-                                    
-                                    # Mostramos éxito y forzamos la recarga de la app
-                                    st.success("✅ Gasto eliminado exitosamente. Recargando caja...")
-                                    import time
-                                    time.sleep(1.5) # Esperamos 1.5 segundos para que leas el mensaje
-                                    st.rerun() # Esto borra la pantalla y refresca los totales
+                                    # Supabase devuelve en .data los registros afectados
+                                    respuesta = supabase.table("egresos").delete().eq("id", id_a_borrar).execute()
+                                    if respuesta.data: 
+                                        st.session_state['toast_exito'] = "✅ Gasto eliminado exitosamente. La caja ha sido actualizada."
+                                    else:
+                                        st.session_state['toast_error'] = "⚠️ No se encontró el registro en la BD. Es posible que ya haya sido borrado."
                                 except Exception as e:
-                                    st.error(f"Error técnico al intentar borrar en BD: {e}")
+                                    st.session_state['toast_error'] = f"Error técnico al borrar en BD: {e}"
+
+                            # Botón modificado para usar el callback on_click
+                            st.button(
+                                "🚨 Confirmar y Eliminar", 
+                                type="primary", 
+                                key="btn_borrar_gasto", 
+                                use_container_width=True,
+                                on_click=procesar_eliminacion,
+                                args=(id_egreso,)
+                            )
                     
                     # 2. SI ES VENDEDORA, LA TABLA ES ESTATICA (NO PUEDE CLICAR)
                     else:
