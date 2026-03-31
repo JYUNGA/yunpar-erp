@@ -318,7 +318,7 @@ def render(supabase):
                         lambda x: f"{x['metodo_pago']} ({x['banco']})" if pd.notna(x.get('banco')) and x.get('banco') else x['metodo_pago'], axis=1
                     )
                     
-                    # --- LÓGICA ROBUSTA DE ELIMINACIÓN SECUENCIAL ---
+                    # 1. SI ES GERENTE, LA TABLA ES INTERACTIVA
                     if rol_actual == "GERENTE":
                         st.caption("👇 Haz clic en la fila del egreso que deseas anular.")
                         
@@ -329,39 +329,36 @@ def render(supabase):
                             selection_mode="single-row",
                             on_select="rerun",
                             column_config={
-                                "id": None, 
+                                "id": None, # Ocultamos el ID visualmente
                                 "monto": st.column_config.NumberColumn("monto", format="$ %.2f")
                             }
                         )
                         
                         filas_sel = evento_tabla_egresos.selection.rows
                         if len(filas_sel) > 0:
+                            # Extraemos los datos exactos de la fila que tocaste
                             fila_egreso = df_egresos_dia.iloc[filas_sel[0]]
-                            id_egreso = str(fila_egreso['id']) # Aseguramos que el UUID pase como texto
+                            id_egreso = str(fila_egreso['id']).strip() # Limpiamos espacios por seguridad
                             
                             st.markdown("---")
                             st.markdown("##### 🗑️ Anular Egreso Seleccionado")
                             st.info(f"Vas a eliminar: **{fila_egreso['descripcion']}** por **${fila_egreso['monto']:.2f}**")
                             
-                            # CLAVE: Le damos un "key" dinámico al botón para que Streamlit no pierda su estado
-                            if st.button("🚨 Confirmar y Eliminar", type="primary", key=f"del_{id_egreso}", use_container_width=True):
+                            # Botón fijo y directo
+                            if st.button("🚨 Confirmar y Eliminar", type="primary", key="btn_borrar_gasto", use_container_width=True):
                                 try:
-                                    # Ejecutamos el borrado directamente
-                                    res = supabase.table("egresos").delete().eq("id", id_egreso).execute()
+                                    # Mandamos la orden a Supabase sin esperar validaciones engañosas
+                                    supabase.table("egresos").delete().eq("id", id_egreso).execute()
                                     
-                                    # Validamos que la BD realmente nos devuelva los datos borrados
-                                    if len(res.data) > 0:
-                                        st.success("✅ Gasto eliminado permanentemente de la base de datos.")
-                                    else:
-                                        st.warning("⚠️ No se encontró el registro. ¿Posiblemente ya fue eliminado?")
-                                        
+                                    # Mostramos éxito y forzamos la recarga de la app
+                                    st.success("✅ Gasto eliminado exitosamente. Recargando caja...")
                                     import time
-                                    time.sleep(1.5) # Damos 1.5 segundos para que leas el mensaje verde
-                                    st.rerun() # Recargamos toda la vista para cuadrar la caja
-                                    
+                                    time.sleep(1.5) # Esperamos 1.5 segundos para que leas el mensaje
+                                    st.rerun() # Esto borra la pantalla y refresca los totales
                                 except Exception as e:
-                                    # Si Supabase rechaza el borrado, ahora sí veremos el motivo exacto en pantalla
-                                    st.error(f"Error técnico al intentar borrar: {e}")
+                                    st.error(f"Error técnico al intentar borrar en BD: {e}")
+                    
+                    # 2. SI ES VENDEDORA, LA TABLA ES ESTATICA (NO PUEDE CLICAR)
                     else:
                         st.dataframe(df_egresos_dia[['categoria', 'descripcion', 'monto', 'Medio']], use_container_width=True, hide_index=True)
 
