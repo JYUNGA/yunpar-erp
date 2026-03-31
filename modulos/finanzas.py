@@ -256,7 +256,60 @@ def render(supabase):
                 except Exception as e:
                     st.caption("Error al cargar el historial.")
 
-    with col_egr_diario:
+    # ==========================================
+    # TAB 4: LIBRO DIARIO (Solo Gerente)
+    # ==========================================
+    if "📖 Libro Diario" in mis_tabs:
+        with mis_tabs["📖 Libro Diario"]:
+            st.subheader("Libro Diario y Cuadre de Caja")
+            
+            fecha_input = st.date_input(
+                "🗓️ Selecciona fecha única o un rango de fechas:", 
+                value=(hoy, hoy), 
+                key="fecha_diario_filtro"
+            )
+            
+            if isinstance(fecha_input, tuple):
+                if len(fecha_input) == 2:
+                    f_ini_diario, f_fin_diario = fecha_input
+                elif len(fecha_input) == 1:
+                    f_ini_diario = f_fin_diario = fecha_input[0]
+                else:
+                    f_ini_diario = f_fin_diario = hoy
+            else:
+                f_ini_diario = f_fin_diario = fecha_input
+
+            col_ing_diario, col_egr_diario = st.columns(2)
+            
+            res_pagos_dia = supabase.table("pagos").select("id, orden_id, monto, metodo_pago, banco_destino").gte("fecha_pago", f_ini_diario.isoformat()).lte("fecha_pago", f_fin_diario.isoformat()).execute()
+            res_egresos_dia = supabase.table("egresos").select("id, categoria, descripcion, monto, metodo_pago, banco").gte("fecha", f_ini_diario.isoformat()).lte("fecha", f_fin_diario.isoformat()).execute()
+            
+            with col_ing_diario:
+                st.markdown("#### 🟢 Ingresos")
+                if res_pagos_dia.data:
+                    df_ingresos_dia = pd.DataFrame(res_pagos_dia.data)
+                    
+                    ordenes_ids = df_ingresos_dia['orden_id'].tolist()
+                    if ordenes_ids:
+                        res_ords = supabase.table("ordenes").select("id, codigo_orden").in_("id", ordenes_ids).execute()
+                        if res_ords.data:
+                            mapa_ords = {o['id']: o['codigo_orden'] for o in res_ords.data}
+                            df_ingresos_dia['Orden'] = df_ingresos_dia['orden_id'].map(mapa_ords)
+                    
+                    df_ingresos_dia['Medio'] = df_ingresos_dia.apply(
+                        lambda x: f"{x['metodo_pago']} ({x['banco_destino']})" if pd.notna(x.get('banco_destino')) and x.get('banco_destino') else x['metodo_pago'], axis=1
+                    )
+                    
+                    df_mostrar_ing = df_ingresos_dia[['Orden', 'monto', 'Medio']] if 'Orden' in df_ingresos_dia.columns else df_ingresos_dia[['monto', 'Medio']]
+                    st.dataframe(df_mostrar_ing, use_container_width=True, hide_index=True)
+                    
+                    total_ing_dia = df_ingresos_dia['monto'].astype(float).sum()
+                    st.success(f"**Total Ingresos: ${total_ing_dia:,.2f}**")
+                else:
+                    st.info("No hay ingresos en este periodo.")
+                    total_ing_dia = 0.0
+
+            with col_egr_diario:
                 st.markdown("#### 🔴 Egresos")
                 if res_egresos_dia.data:
                     df_egresos_dia = pd.DataFrame(res_egresos_dia.data)
