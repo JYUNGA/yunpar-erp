@@ -191,7 +191,7 @@ def render(supabase):
                 res_categorias = supabase.table("categorias_egreso").select("nombre").execute()
                 lista_categorias = [c["nombre"] for c in res_categorias.data] if res_categorias.data else ["Otros"]
 
-                with st.form("form_egreso"):
+                with st.form("form_egreso", clear_on_submit=True):
                     col1, col2 = st.columns(2)
                     fecha_gasto = col1.date_input("Fecha del Gasto", value=hoy)
                     categoria_gasto = col2.selectbox("Categoría", lista_categorias)
@@ -294,7 +294,7 @@ def render(supabase):
             col_ing_diario, col_egr_diario = st.columns(2)
             
             res_pagos_dia = supabase.table("pagos").select("orden_id, monto, metodo_pago, banco_destino").gte("fecha_pago", f_ini_diario.isoformat()).lte("fecha_pago", f_fin_diario.isoformat()).execute()
-            res_egresos_dia = supabase.table("egresos").select("categoria, descripcion, monto, metodo_pago, banco").gte("fecha", f_ini_diario.isoformat()).lte("fecha", f_fin_diario.isoformat()).execute()
+            res_egresos_dia = supabase.table("egresos").select("id, categoria, descripcion, monto, metodo_pago, banco").gte("fecha", f_ini_diario.isoformat()).lte("fecha", f_fin_diario.isoformat()).execute()
             
             with col_ing_diario:
                 st.markdown("#### 🟢 Ingresos")
@@ -334,6 +334,32 @@ def render(supabase):
                     
                     total_egr_dia = df_egresos_dia['monto'].astype(float).sum()
                     st.error(f"**Total Egresos: ${total_egr_dia:,.2f}**")
+                    
+                    # ==========================================
+                    # 🗑️ ZONA DE ELIMINACIÓN (SOLO GERENTE)
+                    # ==========================================
+                    if rol_actual == "GERENTE":
+                        st.markdown("---")
+                        st.markdown("##### 🗑️ Anular Egreso")
+                        st.caption("Selecciona un error para eliminarlo de la base de datos.")
+                        
+                        # Creamos un diccionario para el selector: ID -> Texto descriptivo
+                        opciones_borrar = {e['id']: f"{e['descripcion']} - ${e['monto']}" for e in res_egresos_dia.data}
+                        
+                        egreso_a_borrar = st.selectbox(
+                            "Seleccionar registro:", 
+                            options=[""] + list(opciones_borrar.keys()), 
+                            format_func=lambda x: opciones_borrar[x] if x != "" else "Elige un registro..."
+                        )
+                        
+                        if egreso_a_borrar != "":
+                            if st.button("🚨 Eliminar Definitivamente", type="primary"):
+                                try:
+                                    supabase.table("egresos").delete().eq("id", egreso_a_borrar).execute()
+                                    st.success("Egreso anulado con éxito.")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error al eliminar: {e}")
                 else:
                     st.info("No hay egresos en este periodo.")
                     total_egr_dia = 0.0
