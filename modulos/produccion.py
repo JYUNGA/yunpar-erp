@@ -345,7 +345,13 @@ def render(supabase):
         with c_boc:
             st.info("📌 Boceto Original")
             if st.session_state.get('url_boceto_view'):
-                st.image(st.session_state['url_boceto_view'], width=200)
+                # PROTECCIÓN CONTRA PDFs Y OTROS FORMATOS
+                try:
+                    st.image(st.session_state['url_boceto_view'], width=200)
+                except Exception:
+                    st.warning("⚠️ Vista previa no disponible (Es PDF o documento)")
+                    st.markdown(f"[🔗 Hacer clic aquí para abrir archivo original]({st.session_state['url_boceto_view']})")
+                    
                 if st.button("🗑️ Eliminar Boceto", key="d_boc"):
                     # Borrar de la nube
                     borrar_img(supabase, st.session_state['url_boceto_view'])
@@ -361,6 +367,32 @@ def render(supabase):
                     url_b = subir_img(supabase, boceto_file, "bocetos")
                     if url_b:
                         st.session_state['url_boceto_view'] = url_b
+                        st.success("Subido correctamente"); time.sleep(0.5); st.rerun()
+        
+        # 2. DISEÑO FINAL
+        with c_art:
+            st.success("🎨 Diseño Final")
+            if st.session_state.get('url_diseno_view'):
+                # PROTECCIÓN CONTRA PDFs Y OTROS FORMATOS
+                try:
+                    st.image(st.session_state['url_diseno_view'], width=200)
+                except Exception:
+                    st.warning("⚠️ Vista previa no disponible (Es PDF o documento)")
+                    st.markdown(f"[🔗 Hacer clic aquí para abrir archivo original]({st.session_state['url_diseno_view']})")
+                    
+                if st.button("🗑️ Eliminar Diseño", key="d_art"):
+                    # Borrar de la nube
+                    borrar_img(supabase, st.session_state['url_diseno_view'])
+                    st.session_state['url_diseno_view'] = None
+                    if st.session_state.get('editando_orden_id'):
+                        supabase.table('ordenes').update({'url_arte_final': None}).eq('id', st.session_state['editando_orden_id']).execute()
+                    st.rerun()
+            else:
+                arte_file = st.file_uploader("Cargar Diseño Final", type=["jpg", "png", "pdf"], key="up_art")
+                if arte_file:
+                    url_a = subir_img(supabase, arte_file, "artes")
+                    if url_a:
+                        st.session_state['url_diseno_view'] = url_a
                         st.success("Subido correctamente"); time.sleep(0.5); st.rerun()
         
         # 2. DISEÑO FINAL
