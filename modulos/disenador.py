@@ -332,11 +332,16 @@ def render(supabase):
                 
                 columnas_agrupar = ["Terminado", "Orden", "Cliente", "Producto", "Tipo", "Tela", "Género", "Cuello", "Acabado", "Talla Sup.", "Talla Inf.", "Jugador", "Dorsal", "Arquero", "Notas"]
                 
-                # Comprimimos filas repetidas y empaquetamos los IDs usando un método universalmente compatible
-                df_agrupado = df_filtrado.groupby(columnas_agrupar, dropna=False).agg({
-                    'Producto': 'count',
-                    'ID_Esp': lambda x: [i for i in x if pd.notna(i)]
-                }).rename(columns={'Producto': 'Cant.', 'ID_Esp': 'IDs'}).reset_index()
+                # --- BLINDAJE ABSOLUTO: Agrupación manual para evitar bugs de Pandas ---
+                agrupado_data = []
+                for name, group in df_filtrado.groupby(columnas_agrupar, dropna=False):
+                    fila_dict = dict(zip(columnas_agrupar, name))
+                    fila_dict['Cant.'] = len(group)
+                    fila_dict['IDs'] = [i for i in group['ID_Esp'].tolist() if pd.notna(i)]
+                    agrupado_data.append(fila_dict)
+                    
+                df_agrupado = pd.DataFrame(agrupado_data)
+                # ----------------------------------------------------------------------
                 
                 # Reordenamos columnas base
                 cols = ['Orden', 'Cliente', 'Cant.'] + [c for c in df_agrupado.columns if c not in ['Terminado', 'Orden', 'Cliente', 'Cant.', 'Tipo', 'ID_Esp', 'IDs']]
