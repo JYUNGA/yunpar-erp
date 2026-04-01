@@ -188,10 +188,12 @@ def render(supabase):
         resumen_polines = {}
         specs_list = []
 
-        for item in items:
+      for item in items:
             fam = str(item.get('familia_producto', '')).strip().upper()
-            prod = item['nombre_producto']
-            tela = item['nombre_tela']
+            
+            # --- BLINDAJE CONTRA DATOS VIEJOS O ELIMINADOS ---
+            prod = item.get('nombre_producto', fam)
+            tela = item.get('nombre_tela', 'Estándar')
             
             # Usamos tipo_prenda si existe (ej: Chaleco, Calentador). Si no, caemos en la familia.
             tipo_prenda = str(item.get('tipo_prenda') or '').strip().upper()
