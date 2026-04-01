@@ -189,6 +189,7 @@ def render(supabase):
         specs_list = []
 
       for item in items:
+            for item in items:
             fam = str(item.get('familia_producto', '')).strip().upper()
             
             # --- BLINDAJE CONTRA DATOS VIEJOS O ELIMINADOS ---
