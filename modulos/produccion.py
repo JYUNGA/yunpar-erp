@@ -979,31 +979,36 @@ def render(supabase):
                     
                     fecha_final = str(f_entrega) if 'f_entrega' in locals() else str(datetime.date.today())
                     
+                    # --- FILTRO ANTI-NAN --- (Limpiamos las variables que Pandas ensucia)
+                    url_boc = st.session_state.get('url_boceto_view')
+                    url_art = st.session_state.get('url_diseno_view')
+                    
                     # 2. Datos Base (Comunes para ambas acciones)
                     cab = {
                         "codigo_orden": cod, 
                         "cliente_id": st.session_state['editando_cliente_id'], 
                         "fecha_entrega": fecha_final, 
-                        "total_estimado": tot, 
-                        "abono_inicial": mnt, 
-                        "saldo_pendiente": tot - mnt, 
-                        "observaciones_generales": obs_g,
+                        "total_estimado": float(tot) if pd.notna(tot) else 0.0, 
+                        "abono_inicial": float(mnt) if pd.notna(mnt) else 0.0, 
+                        "saldo_pendiente": float(tot - mnt) if pd.notna(tot - mnt) else 0.0, 
+                        "observaciones_generales": str(obs_g) if pd.notna(obs_g) else "",
                         "disenador_asignado": disenador_sel,
-                        "url_boceto_vendedora": st.session_state.get('url_boceto_view'),
-                        "url_arte_final": st.session_state.get('url_diseno_view')
+                        "url_boceto_vendedora": url_boc if pd.notna(url_boc) else None,
+                        "url_arte_final": url_art if pd.notna(url_art) else None
                     }
                     
                     # 3. Lógica Diferenciada (AQUÍ ESTÁ LA MAGIA)
                     if es_edicion:
                         id_o = st.session_state['editando_orden_id']
                         cab["alerta_cambios"] = True 
-                        cab["detalle_cambios"] = detalle_cambios_txt.strip() # --- NUEVO: GUARDAR DETALLE ---
+                        cab["detalle_cambios"] = detalle_cambios_txt.strip() 
                         
-                        # --- NUEVO: RECALCULAR SALDO PENDIENTE REAL ---
+                        # --- RECALCULAR SALDO PENDIENTE REAL CON FILTRO ---
                         res_pagos = supabase.table('pagos').select('monto').eq('orden_id', id_o).execute()
-                        total_pagado = sum([float(p['monto']) for p in res_pagos.data]) if res_pagos.data else 0.0
+                        total_pagado = sum([float(p['monto']) for p in res_pagos.data if p.get('monto') is not None]) if res_pagos.data else 0.0
                         
-                        cab["saldo_pendiente"] = tot - total_pagado
+                        saldo_calc = tot - total_pagado
+                        cab["saldo_pendiente"] = float(saldo_calc) if pd.notna(saldo_calc) else 0.0
                         cab.pop("abono_inicial", None)
                         
                         supabase.table('ordenes').update(cab).eq('id', id_o).execute()
