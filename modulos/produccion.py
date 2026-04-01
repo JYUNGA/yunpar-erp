@@ -14,17 +14,46 @@ import os
 def subir_img(supabase, archivo_streamlit, carpeta="bocetos"):
     try:
         file_bytes = archivo_streamlit.getvalue()
-        nombre = f"{carpeta}/{int(time.time())}_{uuid.uuid4()}.jpg"
+        
+        # 1. Respetar la extensión original del archivo
+        import os
+        _, extension = os.path.splitext(archivo_streamlit.name)
+        extension = extension.lower()
+        if not extension: extension = ".jpg"
+        
+        # 2. Asignar el content-type correcto
+        content_type = "image/jpeg"
+        if extension == ".pdf": content_type = "application/pdf"
+        elif extension == ".png": content_type = "image/png"
+            
+        nombre = f"{carpeta}/{int(time.time())}_{uuid.uuid4()}{extension}"
+        
         supabase.storage.from_("ordenes_produccion").upload(
             path=nombre, 
             file=file_bytes, 
-            file_options={"content-type": "image/jpeg"}
+            file_options={"content-type": content_type}
         )
         return supabase.storage.from_("ordenes_produccion").get_public_url(nombre)
     except Exception as e: 
         st.error(f"Error subida imagen: {e}")
         return None
-
+def es_imagen_segura(url):
+    """Verifica si la URL es realmente una imagen y no un PDF disfrazado"""
+    if not url: return False
+    url_lower = str(url).lower()
+    if ".pdf" in url_lower: return False # Si dice .pdf, no es imagen
+    
+    # Verificación de emergencia para PDFs viejos guardados como .jpg
+    try:
+        import requests
+        res = requests.get(url, stream=True, timeout=3)
+        primeros_bytes = res.raw.read(4)
+        if primeros_bytes.startswith(b'%PDF'):
+            return False # Es un PDF camuflado
+        return True
+    except:
+        return False
+        
 def cod_ord(supabase):
     try:
         res = supabase.table('ordenes').select("codigo_orden").execute()
@@ -337,6 +366,7 @@ def render(supabase):
             usuario_logueado = st.session_state.get('nombre_usuario', 'Usuario Actual') 
             c_usu.text_input("👤 Generado Por", value=usuario_logueado, disabled=True)
 
+              
         # --- SECCIÓN: GESTIÓN DE ARCHIVOS (CORREGIDO: SIN DUPLICADOS) ---
         st.subheader("Archivos del Pedido")
         c_boc, c_art = st.columns(2)
@@ -345,19 +375,18 @@ def render(supabase):
         with c_boc:
             st.info("📌 Boceto Original")
             if st.session_state.get('url_boceto_view'):
-                # PROTECCIÓN CONTRA PDFs Y OTROS FORMATOS
-                try:
-                    st.image(st.session_state['url_boceto_view'], width=200)
-                except Exception:
+                url_b = st.session_state['url_boceto_view']
+                
+                # BARRERA DE SEGURIDAD ABSOLUTA
+                if es_imagen_segura(url_b):
+                    st.image(url_b, width=200)
+                else:
                     st.warning("⚠️ Vista previa no disponible (Es PDF o documento)")
-                    st.markdown(f"[🔗 Hacer clic aquí para abrir archivo original]({st.session_state['url_boceto_view']})")
+                    st.markdown(f"[🔗 Hacer clic aquí para abrir archivo original]({url_b})")
                     
                 if st.button("🗑️ Eliminar Boceto", key="d_boc"):
-                    # Borrar de la nube
-                    borrar_img(supabase, st.session_state['url_boceto_view'])
-                    # Borrar de memoria
+                    borrar_img(supabase, url_b)
                     st.session_state['url_boceto_view'] = None
-                    # Actualizar BD si estamos editando
                     if st.session_state.get('editando_orden_id'):
                         supabase.table('ordenes').update({'url_boceto_vendedora': None}).eq('id', st.session_state['editando_orden_id']).execute()
                     st.rerun()
@@ -373,36 +402,17 @@ def render(supabase):
         with c_art:
             st.success("🎨 Diseño Final")
             if st.session_state.get('url_diseno_view'):
-                # PROTECCIÓN CONTRA PDFs Y OTROS FORMATOS
-                try:
-                    st.image(st.session_state['url_diseno_view'], width=200)
-                except Exception:
+                url_a = st.session_state['url_diseno_view']
+                
+                # BARRERA DE SEGURIDAD ABSOLUTA
+                if es_imagen_segura(url_a):
+                    st.image(url_a, width=200)
+                else:
                     st.warning("⚠️ Vista previa no disponible (Es PDF o documento)")
-                    st.markdown(f"[🔗 Hacer clic aquí para abrir archivo original]({st.session_state['url_diseno_view']})")
+                    st.markdown(f"[🔗 Hacer clic aquí para abrir archivo original]({url_a})")
                     
                 if st.button("🗑️ Eliminar Diseño", key="d_art"):
-                    # Borrar de la nube
-                    borrar_img(supabase, st.session_state['url_diseno_view'])
-                    st.session_state['url_diseno_view'] = None
-                    if st.session_state.get('editando_orden_id'):
-                        supabase.table('ordenes').update({'url_arte_final': None}).eq('id', st.session_state['editando_orden_id']).execute()
-                    st.rerun()
-            else:
-                arte_file = st.file_uploader("Cargar Diseño Final", type=["jpg", "png", "pdf"], key="up_art")
-                if arte_file:
-                    url_a = subir_img(supabase, arte_file, "artes")
-                    if url_a:
-                        st.session_state['url_diseno_view'] = url_a
-                        st.success("Subido correctamente"); time.sleep(0.5); st.rerun()
-        
-        # 2. DISEÑO FINAL
-        with c_art:
-            st.success("🎨 Diseño Final")
-            if st.session_state.get('url_diseno_view'):
-                st.image(st.session_state['url_diseno_view'], width=200)
-                if st.button("🗑️ Eliminar Diseño", key="d_art"):
-                    # Borrar de la nube
-                    borrar_img(supabase, st.session_state['url_diseno_view'])
+                    borrar_img(supabase, url_a)
                     st.session_state['url_diseno_view'] = None
                     if st.session_state.get('editando_orden_id'):
                         supabase.table('ordenes').update({'url_arte_final': None}).eq('id', st.session_state['editando_orden_id']).execute()
