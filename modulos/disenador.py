@@ -138,18 +138,33 @@ def render(supabase):
         # --- IMÁGENES DE REFERENCIA ---
         st.markdown("### 🖼️ Referencias Visuales")
         col_img1, col_img2 = st.columns(2)
+        
         with col_img1:
             st.caption("Boceto Vendedora")
-            if orden.get('url_boceto_vendedora'): st.image(orden['url_boceto_vendedora'], use_container_width=True)
-            else: st.info("No hay boceto registrado.")
+            url_boceto = orden.get('url_boceto_vendedora')
+            if url_boceto and str(url_boceto).strip() != "":
+                try:
+                    st.image(url_boceto, use_container_width=True)
+                except Exception:
+                    st.warning("⚠️ Formato no soportado para vista previa.")
+                    st.markdown(f"[🔗 Hacer clic aquí para abrir archivo original]({url_boceto})")
+            else: 
+                st.info("No hay boceto registrado.")
             
         with col_img2:
             st.caption("Arte Final / Diseño")
             url_imagen_final = orden.get('url_arte_final') or orden.get('url_diseno_final')
-            if url_imagen_final: st.image(url_imagen_final, use_container_width=True)
-            else: st.info("No hay arte final registrado en la base de datos.")
-            
+            if url_imagen_final and str(url_imagen_final).strip() != "":
+                try:
+                    st.image(url_imagen_final, use_container_width=True)
+                except Exception:
+                    st.warning("⚠️ Formato no soportado para vista previa.")
+                    st.markdown(f"[🔗 Hacer clic aquí para abrir archivo original]({url_imagen_final})")
+            else: 
+                st.info("No hay arte final registrado en la base de datos.")
+        
         st.markdown("### 📝 Observaciones Generales de la Orden")
+        
         if orden.get('observaciones_generales'):
             st.info(f"**Nota del cliente/comercial:** {orden['observaciones_generales']}")
         else:
