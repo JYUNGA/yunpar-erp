@@ -289,12 +289,17 @@ def render(supabase):
                 if res_pagos_dia.data:
                     df_ingresos_dia = pd.DataFrame(res_pagos_dia.data)
                     
-                    ordenes_ids = df_ingresos_dia['orden_id'].tolist()
+                    # 1. Limpiamos: quitamos nulos, pasamos a entero y quitamos duplicados
+                    ordenes_ids = df_ingresos_dia['orden_id'].dropna().astype(int).unique().tolist()
+                    
                     if ordenes_ids:
                         res_ords = supabase.table("ordenes").select("id, codigo_orden").in_("id", ordenes_ids).execute()
                         if res_ords.data:
                             mapa_ords = {o['id']: o['codigo_orden'] for o in res_ords.data}
                             df_ingresos_dia['Orden'] = df_ingresos_dia['orden_id'].map(mapa_ords)
+                    else:
+                        # Si no hay IDs válidos (todos eran nulos), creamos la columna vacía para que no falle luego
+                        df_ingresos_dia['Orden'] = "Sin Orden"
                     
                     df_ingresos_dia['Medio'] = df_ingresos_dia.apply(
                         lambda x: f"{x['metodo_pago']} ({x['banco_destino']})" if pd.notna(x.get('banco_destino')) and x.get('banco_destino') else x['metodo_pago'], axis=1
