@@ -126,8 +126,24 @@ def render(supabase):
 
         # Mostrar Arte Final en tamaño muy grande
         st.markdown("### 🖼️ Arte Final de Referencia")
-        if orden_actual['url_arte_final']:
-            st.image(orden_actual['url_arte_final'], use_container_width=True, caption="Arte Final para Impresión")
+        
+        url_arte = orden_actual.get('url_arte_final')
+        
+        # 1. Validar que la variable no sea nula ni un NaN de Pandas
+        if pd.notna(url_arte) and url_arte:
+            url_str = str(url_arte).strip().lower()
+            
+            # 2. Si es un archivo PDF, mostramos un botón para abrirlo
+            if url_str.endswith('.pdf'):
+                st.info("📄 El Arte Final se ha subido como un documento PDF.")
+                st.link_button("👁️ Abrir / Descargar PDF de Arte Final", url_arte, use_container_width=True)
+            else:
+                # 3. Si es imagen (JPG/PNG), usamos st.image pero protegido con try/except
+                try:
+                    st.image(url_arte, use_container_width=True, caption="Arte Final para Impresión")
+                except Exception as e:
+                    st.error("No se pudo previsualizar el archivo. Es posible que el formato no sea compatible.")
+                    st.link_button("🔗 Abrir Archivo Original", url_arte)
         else:
             st.info("No se adjuntó un Arte Final visual para esta orden.")
 
