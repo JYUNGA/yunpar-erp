@@ -684,8 +684,14 @@ def generar_hoja_produccion(orden):
             # Damos 9.5 mm para que las dos líneas entren perfectas sin chocar con lo gris
             pdf.set_xy(x, y_base_fila + 9.5)
             
-            # DIBUJAR CABECERA GRIS
-            pdf.set_fill_color(*fill_cab)
+            # DIBUJAR CABECERA (CON COLOR DINÁMICO)
+            if "(INFERIOR)" in tabla["titulo"]:
+                pdf.set_fill_color(80, 130, 180) # Azul acero para diferenciar prendas inferiores
+            elif tabla["tipo"] == "polin":
+                pdf.set_fill_color(100, 100, 100) # Gris oscuro para polines
+            else:
+                pdf.set_fill_color(*fill_cab) # Gris original para superiores
+                
             pdf.set_text_color(255, 255, 255)
             
             if tabla["tipo"] == "normal":
@@ -698,7 +704,7 @@ def generar_hoja_produccion(orden):
                 
             pdf.set_text_color(0, 0, 0)
             pdf.set_font("helvetica", "", 8)
-            
+                        
             # DIBUJAR DATOS Y FILAS
             tot_cant = 0
             if tabla["tipo"] == "normal":
@@ -718,10 +724,15 @@ def generar_hoja_produccion(orden):
                     pdf.cell(15, 6, str(cant), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
                     tot_cant += cant
                     
-            # DIBUJAR FILA TOTAL
+            # DIBUJAR FILA TOTAL (CON COLOR DINÁMICO)
             pdf.set_x(x)
             pdf.set_font("helvetica", "B", 8)
-            pdf.set_fill_color(*fill_tot)
+            
+            if "(INFERIOR)" in tabla["titulo"]:
+                pdf.set_fill_color(176, 196, 222) # Azul claro para la fila total inferior
+            else:
+                pdf.set_fill_color(*fill_tot) # Gris original para las demás
+
             if tabla["tipo"] == "normal":
                 pdf.cell(20, 6, "TOTAL", border=1, align="C", fill=True)
                 pdf.cell(20, 6, str(tot_cant), border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
@@ -1112,13 +1123,18 @@ def render_modulo_reportes(supabase_client):
         col_pdf1, col_pdf2, col_pdf3 = st.columns(3)
         
         with col_pdf1:
-            if st.button("📄 Generar Comprobante", use_container_width=True):
-                pdf_bytes = generar_comprobante_cliente(orden)
-                st.download_button(
-                    label="⬇️ Descargar Comprobante",
-                    data=pdf_bytes, file_name=f"Comprobante_{orden['codigo_orden']}.pdf",
-                    mime="application/pdf", use_container_width=True
-                )
+            # LÓGICA DE PERMISOS: Ocultamos el botón si el usuario es de IMPRESION
+            if st.session_state.get('rol') != 'IMPRESION':
+                if st.button("📄 Generar Comprobante", use_container_width=True):
+                    pdf_bytes = generar_comprobante_cliente(orden)
+                    st.download_button(
+                        label="⬇️ Descargar Comprobante",
+                        data=pdf_bytes, file_name=f"Comprobante_{orden['codigo_orden']}.pdf",
+                        mime="application/pdf", use_container_width=True
+                    )
+            else:
+                # Opcional: Mostrar un mensaje sutil indicando la restricción
+                st.info("🔒 Comprobantes exclusivos para Ventas/Gerencia")
 
         with col_pdf2:
             if st.button("🏭 Generar Producción", type="primary", use_container_width=True):
