@@ -34,7 +34,7 @@ PERMISOS = {
         "Inicio", "Ventas", "Cotizaciones", "Producción", "Caja y Finanzas", "Clientes", "Reportes"
     ],
     "IMPRESION": [
-        "Inicio", "Impresión"
+        "Inicio", "Impresión", "Reportes"
     ],
     "DISEÑADOR": [
         "Inicio", "Diseño" # Producción habilitado para subir artes finales
