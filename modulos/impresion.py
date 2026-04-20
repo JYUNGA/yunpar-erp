@@ -202,7 +202,7 @@ def render(supabase):
                     "nombre_archivo": st.column_config.TextColumn("Nombre Archivo", disabled=True),
                     "perfil_color": st.column_config.TextColumn("Perfil de Color", disabled=True),
                     "ancho_metros": st.column_config.NumberColumn("Ancho (m)", disabled=True, format="%.2f"),
-                    "longitud_metros": st.column_config.NumberColumn("Long. Unitaria (m)", disabled=True, format="%.2f"),
+                    "longitud_metros": None, # <-- CAMBIO 1: Se establece en None para ocultar la columna visualmente
                     
                     # Agregamos Cantidad y Total Diseño
                     "cantidad": st.column_config.NumberColumn("Cantidad", min_value=1, step=1),
@@ -216,7 +216,8 @@ def render(supabase):
 
                 column_order = [
                     "chk_impreso", "nombre_archivo", "perfil_color", "ancho_metros", 
-                    "longitud_metros", "cantidad", "longitud_total_diseno", "longitud_impresa", "motivo_reimpresion", "notas_disenador"
+                    "cantidad", "longitud_total_diseno", "longitud_impresa", "motivo_reimpresion", "notas_disenador"
+                    # <-- CAMBIO 2: Se elimina "longitud_metros" de la lista de visualización
                 ]
 
                 st.write("Edita la cantidad de papel real gastado y marca los archivos completados:")
