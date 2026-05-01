@@ -8,6 +8,13 @@ import io
 # ==========================================
 # 1. UTILIDADES Y FORMATEO
 # ==========================================
+
+def limpiar_texto_pdf(texto):
+    """Elimina emojis y caracteres especiales no soportados por FPDF (Helvetica)"""
+    if not texto: return ""
+    # El ignore elimina cualquier símbolo que rompa la codificación latin-1 del PDF
+    return str(texto).encode('latin-1', 'ignore').decode('latin-1')
+
 def formatear_fecha_es(fecha_str):
     if not fecha_str: return "Fecha no definida"
     try:
@@ -484,11 +491,11 @@ def generar_comprobante_cliente(orden):
                 cant = str(esp.get('cant_fila', 1)) # <--- REEMPLAZAMOS EL "1" FIJO POR EL VALOR CALCULADO DINÁMICAMENTE
                 talla_s = str(esp.get('talla_superior') or '').strip() or '-'
                 talla_i = str(esp.get('talla_inferior') or '').strip() or '-'
-                nom = str(esp.get('nombre_jugador') or '').strip()
-                num = str(esp.get('numero_dorsal') or '').strip()
-                cuello = str(esp.get('tipo_cuello_texto') or '').strip()
-                obs = str(esp.get('observacion_individual') or '').strip()
-                polin = str(esp.get('talla_polines') or '').strip() or '-' 
+                nom = limpiar_texto_pdf(str(esp.get('nombre_jugador') or '').strip())
+                num = limpiar_texto_pdf(str(esp.get('numero_dorsal') or '').strip())
+                cuello = limpiar_texto_pdf(str(esp.get('tipo_cuello_texto') or '').strip())
+                obs = limpiar_texto_pdf(str(esp.get('observacion_individual') or '').strip())
+                polin = str(esp.get('talla_polines') or '').strip() or '-'
                 
                 if familia == 'UNIFORME COMPLETO': talla = f"{talla_s} / {talla_i}"
                 elif familia == 'PRENDA SUPERIOR': talla = talla_s
@@ -600,12 +607,10 @@ def generar_hoja_produccion(orden):
                     resumen_polines[k] = resumen_polines.get(k, 0) + 1
 
     # --- 3. IMAGEN MAXIMIZADA ---
-    arte = str(orden.get('url_arte_final') or '').strip()
+    # MODIFICACIÓN: Mostrar ÚNICAMENTE el boceto inicial de la vendedora en producción
     boceto = str(orden.get('url_boceto_vendedora') or '').strip()
     
-    if arte and arte.lower() not in ['none', 'null']:
-        url_imagen = arte
-    elif boceto and boceto.lower() not in ['none', 'null']:
+    if boceto and boceto.lower() not in ['none', 'null']:
         url_imagen = boceto
     else:
         url_imagen = None
@@ -840,36 +845,40 @@ def generar_hoja_produccion(orden):
                 row = table.row(style=estilo_fila_actual)
                 c_fila = str(esp.get('cant_fila', 1))
                 
+                nom_limpio = limpiar_texto_pdf(str(esp.get('nombre_jugador') or '').strip())
+                num_limpio = limpiar_texto_pdf(str(esp.get('numero_dorsal') or '').strip())
+                cuello_limpio = limpiar_texto_pdf(str(esp.get('tipo_cuello_texto') or '').strip())
+                obs_limpia_txt = limpiar_texto_pdf(str(esp.get('observacion_individual') or '').strip())
+                
                 if familia == 'UNIFORME COMPLETO':
                     row.cell(c_fila)
                     row.cell(str(esp.get('talla_superior') or '-').strip() or '-'); row.cell(str(esp.get('talla_inferior') or '-').strip() or '-')
-                    row.cell(str(esp.get('nombre_jugador') or '').strip()); row.cell(str(esp.get('numero_dorsal') or '').strip())
-                    row.cell(str(esp.get('tipo_cuello_texto') or '').strip())
+                    row.cell(nom_limpio); row.cell(num_limpio)
+                    row.cell(cuello_limpio)
                     if tiene_polines: row.cell(str(esp.get('talla_polines') or '-').strip() or '-')
-                    row.cell(str(esp.get('observacion_individual') or '').strip())
+                    row.cell(obs_limpia_txt)
                 elif familia == 'PRENDA SUPERIOR':
                     row.cell(c_fila)
                     row.cell(str(esp.get('talla_superior') or '-').strip() or '-'); row.cell("-")
-                    row.cell(str(esp.get('nombre_jugador') or '').strip()); row.cell(str(esp.get('numero_dorsal') or '').strip())
-                    row.cell(str(esp.get('tipo_cuello_texto') or '').strip()); row.cell(str(esp.get('observacion_individual') or '').strip())
+                    row.cell(nom_limpio); row.cell(num_limpio)
+                    row.cell(cuello_limpio); row.cell(obs_limpia_txt)
                 elif familia == 'PANTALONETA':
                     row.cell(c_fila)
-                    row.cell(str(esp.get('talla_inferior') or '-').strip() or '-'); row.cell(str(esp.get('numero_dorsal') or '').strip())
-                    row.cell(str(esp.get('observacion_individual') or '').strip())
+                    row.cell(str(esp.get('talla_inferior') or '-').strip() or '-'); row.cell(num_limpio)
+                    row.cell(obs_limpia_txt)
                 elif familia == 'IMPRESION':
                     row.cell(c_fila)
-                    # Corregido: Ya no dividimos para 100 porque los datos ya entran como metros desde la UI
                     ancho_val = esp.get('ancho_cm')
                     alto_val = esp.get('alto_cm')
                     row.cell(f"{float(ancho_val):.2f} m" if ancho_val else "-")
                     row.cell(f"{float(alto_val):.2f} m" if alto_val else "-")
-                    row.cell(str(esp.get('acabado') or '').strip()); row.cell(str(esp.get('observacion_individual') or '').strip())
+                    row.cell(limpiar_texto_pdf(str(esp.get('acabado') or '').strip())); row.cell(obs_limpia_txt)
                 else:
-                    row.cell(c_fila); row.cell(str(esp.get('acabado') or '').strip()); row.cell(str(esp.get('observacion_individual') or '').strip())
+                    row.cell(c_fila); row.cell(limpiar_texto_pdf(str(esp.get('acabado') or '').strip())); row.cell(obs_limpia_txt)
         pdf.ln(5)
 
     # --- 6. OBSERVACIONES GENERALES DE LA ORDEN ---
-    observaciones = str(orden.get('observaciones_generales') or '').strip()
+    observaciones = limpiar_texto_pdf(str(orden.get('observaciones_generales') or '').strip())
     if observaciones and observaciones.lower() not in ['none', 'null', '', 'ninguna']:
         # Evaluamos si hay espacio suficiente al final de la hoja para que no quede cortado el cuadro
         if pdf.get_y() > 240:
@@ -891,16 +900,61 @@ def generar_hoja_produccion(orden):
 
 
 # ==========================================
-# MÓDULO NUEVO: GENERADOR DE ETIQUETAS DE EMPAQUE
+# MÓDULO NUEVO: GENERADOR DE ETIQUETAS DE EMPAQUE (MODO LOTE)
 # ==========================================
-def generar_etiquetas(orden):
-    # Usamos orientación "L" (Landscape/Horizontal) para A4 (297x210 mm)
-    pdf = FPDF(orientation="L", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=False) # Apagamos el salto automático para controlarlo nosotros
+def extraer_datos_etiquetas(ordenes):
+    """Extrae y cuenta las etiquetas válidas de una o varias órdenes."""
+    datos_completos = []
+    resumen_por_orden = {}
     
-    # -------------------------------------------------------------
-    # 🛠️ ZONA DE AJUSTE MANUAL (COORDENADAS MILIMÉTRICAS) 🛠️
-    # -------------------------------------------------------------
+    def es_talla_valida(t):
+        if not t: return False
+        t_str = str(t).strip().upper()
+        if t_str in ['', '-', 'NONE', 'NULL', 'N/A', 'NAN', '0']: return False
+        return True
+
+    for orden in ordenes:
+        cod_orden = orden.get('codigo_orden', 'SIN-CODIGO')
+        etiquetas_orden = []
+        
+        for item in orden.get('items', []):
+            fam = str(item.get('familia_producto', '')).strip().upper()
+            if fam == 'UNIFORME COMPLETO':
+                for esp in item.get('especificaciones_producto', []):
+                    talla_s = esp.get('talla_superior')
+                    talla_i = esp.get('talla_inferior')
+                    
+                    if not (es_talla_valida(talla_s) and es_talla_valida(talla_i)):
+                        continue 
+                    
+                    t_sup_str = str(talla_s).strip().upper()
+                    t_inf_str = str(talla_i).strip().upper()
+                    
+                    talla = f"{t_sup_str}/{t_inf_str}" if t_sup_str != t_inf_str else t_sup_str 
+                    numero = str(esp.get('numero_dorsal') or '').strip()
+                    nombre = str(esp.get('nombre_jugador') or '').strip()
+                    
+                    if talla or numero or nombre:
+                        etiquetas_orden.append({
+                            'talla': talla,
+                            'numero': numero,
+                            'nombre': nombre,
+                            'codigo': cod_orden # <-- Guardamos el código de orden aquí
+                        })
+                        
+        if etiquetas_orden:
+            datos_completos.extend(etiquetas_orden)
+            resumen_por_orden[cod_orden] = len(etiquetas_orden)
+            
+    return datos_completos, resumen_por_orden
+
+def generar_etiquetas_pdf(datos_etiquetas):
+    """Genera el PDF físico a partir de una lista plana de datos de etiquetas."""
+    if not datos_etiquetas: return None
+    
+    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=False)
+    
     PASO_X = 98.0  
     PASO_Y = 70.0  
     ORIGEN_X = 0   
@@ -910,58 +964,13 @@ def generar_etiquetas(orden):
     OFFSET_X_NUMERO = 75.0   
     OFFSET_Y_NUMERO = 40.0   
     OFFSET_X_NOMBRE = 38.0   
-    OFFSET_Y_NOMBRE = 52.0   
+    OFFSET_Y_NOMBRE = 52.0
+    # Nueva coordenada para el código de orden (esquina inferior derecha)
+    OFFSET_X_CODIGO = 65.0   
+    OFFSET_Y_CODIGO = 62.0   
     TAMANO_FUENTE = 14
-    # -------------------------------------------------------------
 
-    # Función auxiliar agresiva para validar tallas y evadir basura de la BD
-    def es_talla_valida(t):
-        if not t: return False
-        t_str = str(t).strip().upper()
-        if t_str in ['', '-', 'NONE', 'NULL', 'N/A', 'NAN', '0']: return False
-        return True
-
-    # Recopilar la data: Extraemos todos los nombres y tallas de la orden
-    datos_etiquetas = []
-    for item in orden.get('items', []):
-        fam = str(item.get('familia_producto', '')).strip().upper()
-        
-        # BLINDAJE 1: Exigir que la familia diga UNIFORME COMPLETO
-        if fam == 'UNIFORME COMPLETO':
-            for esp in item.get('especificaciones_producto', []):
-                talla_s = esp.get('talla_superior')
-                talla_i = esp.get('talla_inferior')
-                
-                # BLINDAJE 2 (EXTREMO): Validar rigurosamente que existan AMBAS tallas reales
-                if not (es_talla_valida(talla_s) and es_talla_valida(talla_i)):
-                    continue # Si falta una talla, es una prenda suelta. NO genera etiqueta y salta al siguiente.
-                
-                t_sup_str = str(talla_s).strip().upper()
-                t_inf_str = str(talla_i).strip().upper()
-                
-                # Inteligencia de Tallas (Si son iguales pone una. Si son distintas, pone las dos)
-                if t_sup_str != t_inf_str:
-                    talla = f"{t_sup_str}/{t_inf_str}"
-                else:
-                    talla = t_sup_str 
-                
-                numero = str(esp.get('numero_dorsal') or '').strip()
-                nombre = str(esp.get('nombre_jugador') or '').strip()
-                
-                if talla or numero or nombre:
-                    datos_etiquetas.append({
-                        'talla': talla,
-                        'numero': numero,
-                        'nombre': nombre
-                    })
-
-    # Si luego de los filtros agresivos no hay datos, devolvemos None para que la UI lance una alerta
-    if not datos_etiquetas:
-        return None
-
-    # Motor de dibujo de la cuadrícula (3x3)
     for i, data in enumerate(datos_etiquetas):
-        # Cada 9 etiquetas creamos una nueva página y ponemos el fondo
         if i % 9 == 0:
             pdf.add_page()
             try:
@@ -969,26 +978,30 @@ def generar_etiquetas(orden):
             except Exception:
                 pass 
 
-        # Matemáticas de la Matriz (0 a 8)
         posicion_en_hoja = i % 9
         columna = posicion_en_hoja % 3   
         fila = posicion_en_hoja // 3     
         
-        # Calcular la esquina superior izquierda de LA etiqueta actual
         base_x = ORIGEN_X + (columna * PASO_X)
         base_y = ORIGEN_Y + (fila * PASO_Y)
         
-        # Dibujar los Textos
         pdf.set_font("helvetica", "B", TAMANO_FUENTE)
         
-        if data['talla']:
-            pdf.text(x=base_x + OFFSET_X_TALLA, y=base_y + OFFSET_Y_TALLA, txt=data['talla'])
+        if data['talla']: pdf.text(x=base_x + OFFSET_X_TALLA, y=base_y + OFFSET_Y_TALLA, txt=limpiar_texto_pdf(data['talla']))
+        if data['numero']: pdf.text(x=base_x + OFFSET_X_NUMERO, y=base_y + OFFSET_Y_NUMERO, txt=limpiar_texto_pdf(data['numero']))
+        if data['nombre']: pdf.text(x=base_x + OFFSET_X_NOMBRE, y=base_y + OFFSET_Y_NOMBRE, txt=limpiar_texto_pdf(data['nombre']))
+        
+        # Dibujamos el código de la orden (Arriba del número, fondo azul, letra blanca)
+        if data.get('codigo'):
+            pdf.set_fill_color(0, 80, 160) 
+            pdf.set_text_color(255, 255, 255) 
+            pdf.set_font("helvetica", "B", 11) # Un punto menos para que encaje elegante en el nuevo ancho
             
-        if data['numero']:
-            pdf.text(x=base_x + OFFSET_X_NUMERO, y=base_y + OFFSET_Y_NUMERO, txt=data['numero'])
+            # Ajuste de coordenadas: Movimos X a 62 para centrarlo, y reducimos el ancho (w) de 38 a 28
+            pdf.set_xy(base_x + 62, base_y + 24)
+            pdf.cell(w=28, h=7, txt=data['codigo'], border=0, align="C", fill=True)
             
-        if data['nombre']:
-            pdf.text(x=base_x + OFFSET_X_NOMBRE, y=base_y + OFFSET_Y_NOMBRE, txt=data['nombre'])
+            pdf.set_text_color(0, 0, 0)
 
     return bytes(pdf.output())
 
@@ -999,8 +1012,10 @@ def generar_etiquetas(orden):
 def render_modulo_reportes(supabase_client):
     st.header("🖨️ Módulo de Reportes y Producción")
 
-    if 'orden_actual' not in st.session_state:
-        st.session_state.orden_actual = None
+    if 'ordenes_actuales' not in st.session_state:
+        st.session_state.ordenes_actuales = []
+    if 'ultima_seleccion' not in st.session_state:
+        st.session_state.ultima_seleccion = {"evt1": [], "evt2": [], "evt3": []}
 
     with st.expander("🔍 Buscador Avanzado", expanded=True):
         with st.form("buscar_orden_form"):
@@ -1068,95 +1083,136 @@ def render_modulo_reportes(supabase_client):
         ])
         
         with tab1:
-            evt1 = st.dataframe(df_nuevas, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="evt_nuevas")
+            evt1 = st.dataframe(df_nuevas, width="stretch", hide_index=True, on_select="rerun", selection_mode="multi-row", key="evt_nuevas")
         with tab2:
-            evt2 = st.dataframe(df_proceso, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="evt_proceso")
+            evt2 = st.dataframe(df_proceso, width="stretch", hide_index=True, on_select="rerun", selection_mode="multi-row", key="evt_proceso")
         with tab3:
-            evt3 = st.dataframe(df_pagadas, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="evt_pagadas")
+            evt3 = st.dataframe(df_pagadas, width="stretch", hide_index=True, on_select="rerun", selection_mode="multi-row", key="evt_pagadas")
             
-        # --- 3. LÓGICA DE SELECCIÓN GLOBAL ---
-        codigo_seleccionado = None
+        # --- 3. LÓGICA DE SELECCIÓN GLOBAL (MULTIPLE MODO LOTE) ---
+        codigos_seleccionados = []
         
-        # Verificamos de cuál de las 3 tablas el usuario hizo clic
-        if len(evt1.selection.rows) > 0:
-            codigo_seleccionado = df_nuevas.iloc[evt1.selection.rows[0]]["Código"]
-        elif len(evt2.selection.rows) > 0:
-            codigo_seleccionado = df_proceso.iloc[evt2.selection.rows[0]]["Código"]
-        elif len(evt3.selection.rows) > 0:
-            codigo_seleccionado = df_pagadas.iloc[evt3.selection.rows[0]]["Código"]
-
-        if codigo_seleccionado:
-            if not st.session_state.orden_actual or st.session_state.orden_actual['codigo_orden'] != codigo_seleccionado:
-                with st.spinner(f"Cargando detalle de {codigo_seleccionado}..."):
-                    datos = obtener_datos_orden(supabase_client, codigo_seleccionado)
-                    st.session_state.orden_actual = datos
-                    st.rerun() 
+        actual_evt1 = evt1.selection.rows
+        actual_evt2 = evt2.selection.rows
+        actual_evt3 = evt3.selection.rows
+        
+        if actual_evt1 != st.session_state.ultima_seleccion["evt1"]:
+            codigos_seleccionados = df_nuevas.iloc[actual_evt1]["Código"].tolist() if len(actual_evt1) > 0 else []
+            st.session_state.ultima_seleccion["evt1"] = actual_evt1
+        elif actual_evt2 != st.session_state.ultima_seleccion["evt2"]:
+            codigos_seleccionados = df_proceso.iloc[actual_evt2]["Código"].tolist() if len(actual_evt2) > 0 else []
+            st.session_state.ultima_seleccion["evt2"] = actual_evt2
+        elif actual_evt3 != st.session_state.ultima_seleccion["evt3"]:
+            codigos_seleccionados = df_pagadas.iloc[actual_evt3]["Código"].tolist() if len(actual_evt3) > 0 else []
+            st.session_state.ultima_seleccion["evt3"] = actual_evt3
         else:
-            if st.session_state.orden_actual is not None:
-                st.session_state.orden_actual = None
-                st.rerun()
+            if len(actual_evt1) > 0: codigos_seleccionados = df_nuevas.iloc[actual_evt1]["Código"].tolist()
+            elif len(actual_evt2) > 0: codigos_seleccionados = df_proceso.iloc[actual_evt2]["Código"].tolist()
+            elif len(actual_evt3) > 0: codigos_seleccionados = df_pagadas.iloc[actual_evt3]["Código"].tolist()
+
+        if codigos_seleccionados:
+            codigos_en_memoria = [o.get('codigo_orden') for o in st.session_state.ordenes_actuales]
+            if set(codigos_seleccionados) != set(codigos_en_memoria):
+                # SOLUCIÓN: Eliminamos el st.spinner(). Al no haber elementos visuales 
+                # apareciendo y desapareciendo de golpe, React ya no perderá el hilo.
+                datos_cargados = []
+                for cod in codigos_seleccionados:
+                    datos = obtener_datos_orden(supabase_client, cod)
+                    if datos: datos_cargados.append(datos)
+                st.session_state.ordenes_actuales = datos_cargados
+        else:
+            if st.session_state.ordenes_actuales:
+                st.session_state.ordenes_actuales = []
                 
     else: 
         st.info("No hay órdenes registradas o no se encontraron coincidencias con los filtros.")
         
     st.divider()
 
-    if st.session_state.orden_actual:
-        orden = st.session_state.orden_actual
-        
-        st.subheader(f"Vista Previa: {orden['codigo_orden']}")
-        col_info, col_finanzas = st.columns(2)
-        with col_info:
-            cliente_data = orden.get('clientes', {})
-            nombre_cliente = cliente_data.get('nombre_completo', cliente_data.get('nombre', 'Cliente sin nombre registrado'))
-            
-            st.write(f"**Cliente:** {nombre_cliente}")
-            st.write(f"**Estado:** {orden.get('estado', 'N/A')}")
-            st.write(f"**Fecha Entrega:** {orden.get('fecha_entrega', 'N/A')}")
-        with col_finanzas:
-            st.write(f"**Total:** ${orden.get('total_estimado', 0)}")
-            st.write(f"**Saldo:** ${orden.get('saldo_pendiente', 0)}")
+    # ANCLA VISUAL DEFINITIVA: st.empty() obliga a React a destruir y recrear el bloque limpio
+    espacio_detalle = st.empty()
+    
+    with espacio_detalle.container():
+        if st.session_state.ordenes_actuales:
+            # --- EXTRAEMOS LOS DATOS DE ETIQUETAS GLOBALES ---
+            datos_etiquetas, resumen_ordenes = extraer_datos_etiquetas(st.session_state.ordenes_actuales)
+            total_etiq = len(datos_etiquetas)
+            hojas = (total_etiq + 8) // 9
+            vacios = (hojas * 9) - total_etiq
 
-        st.divider()
-        
-        st.markdown("### 🖨️ Acciones de Generación")
-        col_pdf1, col_pdf2, col_pdf3 = st.columns(3)
-        
-        with col_pdf1:
-            # LÓGICA DE PERMISOS: Ocultamos el botón si el usuario es de IMPRESION
-            if st.session_state.get('rol') != 'IMPRESION':
-                if st.button("📄 Generar Comprobante", use_container_width=True):
-                    pdf_bytes = generar_comprobante_cliente(orden)
-                    st.download_button(
-                        label="⬇️ Descargar Comprobante",
-                        data=pdf_bytes, file_name=f"Comprobante_{orden['codigo_orden']}.pdf",
-                        mime="application/pdf", use_container_width=True
-                    )
+            if len(st.session_state.ordenes_actuales) == 1:
+                orden = st.session_state.ordenes_actuales[0]
+                cod = orden['codigo_orden']
+                st.subheader(f"Vista Previa: {cod}")
+                
+                col_info, col_finanzas = st.columns(2)
+                with col_info:
+                    cliente_data = orden.get('clientes', {})
+                    nombre_cliente = cliente_data.get('nombre_completo', cliente_data.get('nombre', 'Cliente sin nombre registrado'))
+                    st.write(f"**Cliente:** {nombre_cliente}")
+                    st.write(f"**Estado:** {orden.get('estado', 'N/A')}")
+                    st.write(f"**Fecha Entrega:** {orden.get('fecha_entrega', 'N/A')}")
+                with col_finanzas:
+                    st.write(f"**Total:** ${orden.get('total_estimado', 0)}")
+                    st.write(f"**Saldo:** ${orden.get('saldo_pendiente', 0)}")
+
+                st.divider()
+                
+                if total_etiq > 0:
+                    st.info(f"🏷️ **Resumen de Etiquetas:** {total_etiq} etiquetas ocuparán {hojas} hoja(s) | ⬜ {vacios} espacios vacíos al final.")
+                
+                st.markdown("### 🖨️ Acciones de Generación")
+                col_pdf1, col_pdf2, col_pdf3 = st.columns(3)
+                
+                # LA SOLUCIÓN: Usar variables de estado (session_state) para NO anidar botones
+                with col_pdf1:
+                    if st.session_state.get('rol') != 'IMPRESION':
+                        if st.button("📄 Generar Comprobante", width="stretch", key=f"btn_comp_{cod}"):
+                            with st.spinner("Generando..."):
+                                st.session_state[f"pdf_comp_{cod}"] = generar_comprobante_cliente(orden)
+                        if f"pdf_comp_{cod}" in st.session_state:
+                            st.download_button(label="⬇️ Descargar Comprobante", data=st.session_state[f"pdf_comp_{cod}"], file_name=f"Comprobante_{cod}.pdf", mime="application/pdf", width="stretch", key=f"dl_comp_{cod}")
+                    else:
+                        st.info("🔒 Comprobantes exclusivos")
+
+                with col_pdf2:
+                    if st.button("🏭 Generar Producción", type="primary", width="stretch", key=f"btn_prod_{cod}"):
+                        with st.spinner("Generando..."):
+                            st.session_state[f"pdf_prod_{cod}"] = generar_hoja_produccion(orden)
+                    if f"pdf_prod_{cod}" in st.session_state:
+                        st.download_button(label="⬇️ Descargar Producción", data=st.session_state[f"pdf_prod_{cod}"], file_name=f"Produccion_{cod}.pdf", mime="application/pdf", width="stretch", key=f"dl_prod_{cod}")
+                        
+                with col_pdf3:
+                    if total_etiq > 0:
+                        # Las etiquetas locales se generan tan rápido que ponemos el botón de descarga directamente
+                        pdf_etiq = generar_etiquetas_pdf(datos_etiquetas)
+                        st.download_button(label="🏷️ Descargar Etiquetas", data=pdf_etiq, file_name=f"Etiquetas_{cod}.pdf", mime="application/pdf", type="secondary", width="stretch", key=f"dl_etiq_{cod}")
+                    else:
+                        st.warning("⚠️ Sin uniformes para etiquetar.")
+                        
             else:
-                # Opcional: Mostrar un mensaje sutil indicando la restricción
-                st.info("🔒 Comprobantes exclusivos para Ventas/Gerencia")
-
-        with col_pdf2:
-            if st.button("🏭 Generar Producción", type="primary", use_container_width=True):
-                pdf_bytes = generar_hoja_produccion(orden)
-                st.download_button(
-                    label="⬇️ Descargar Hoja de Producción",
-                    data=pdf_bytes, file_name=f"Produccion_{orden['codigo_orden']}.pdf",
-                    mime="application/pdf", use_container_width=True
-                )
+                # --- MODO LOTE (VARIAS ÓRDENES) ---
+                st.subheader(f"📦 Modo Lote: {len(st.session_state.ordenes_actuales)} órdenes seleccionadas")
                 
-        with col_pdf3:
-            # BOTÓN NUEVO DE ETIQUETAS
-            if st.button("🏷️ Generar Etiquetas", type="secondary", use_container_width=True):
-                pdf_bytes = generar_etiquetas(orden)
-                
-                # Evaluamos si la función devolvió un PDF real o un aviso de "vacío" (None)
-                if pdf_bytes:
-                    st.download_button(
-                        label="⬇️ Descargar Etiquetas",
-                        data=pdf_bytes, file_name=f"Etiquetas_{orden['codigo_orden']}.pdf",
-                        mime="application/pdf", use_container_width=True
-                    )
+                if total_etiq > 0:
+                    col_res1, col_res2 = st.columns([2, 1])
+                    with col_res1:
+                        st.success(f"**Total a Imprimir:** {total_etiq} etiquetas ocuparán {hojas} hoja(s).\n\n**Espacios vacíos al final (retazos salvados):** {vacios}")
+                        desglose = " | ".join([f"{cod}: {cant}" for cod, cant in resumen_ordenes.items()])
+                        st.caption(f"Desglose por orden: {desglose}")
+                        
+                    with col_res2:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        # SOLUCIÓN LOTE: El motor FPDF local es súper rápido, armamos el botón directo. Cero errores.
+                        pdf_lote = generar_etiquetas_pdf(datos_etiquetas)
+                        st.download_button(
+                            label="⬇️ Descargar Lote de Etiquetas", 
+                            data=pdf_lote, 
+                            file_name=f"Lote_Etiquetas_{len(st.session_state.ordenes_actuales)}_ordenes.pdf", 
+                            mime="application/pdf", 
+                            type="primary", 
+                            width="stretch",
+                            key="dl_lote_global"
+                        )
                 else:
-                    # Mostramos una alerta nativa de Streamlit en pantalla
-                    st.warning("⚠️ Esta orden no contiene uniformes completos válidos para etiquetar.")
+                     st.warning("⚠️ Ninguna de las órdenes seleccionadas contiene uniformes válidos para etiquetar.")
