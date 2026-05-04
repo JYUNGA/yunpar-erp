@@ -187,14 +187,20 @@ def render(supabase):
                 idx_sel = sel_fin.selection.rows[0]
 
             if df_origen is not None and idx_sel is not None:
-                row_seleccionada = df_origen.iloc[idx_sel]
+                # BLINDAJE: Verificamos que la fila seleccionada aún exista dentro de la tabla actual
+                if idx_sel < len(df_origen):
+                    row_seleccionada = df_origen.iloc[idx_sel]
+                else:
+                    # Si la tabla se encogió y el índice ya no existe, soltamos la selección
+                    row_seleccionada = None
         
         else:
             st.info("No se encontraron órdenes en el rango de fechas seleccionado.")
 
         if row_seleccionada is not None:
             st.divider()
-            c_edit, c_del, c_sp = st.columns([2, 2, 4]) 
+            # MODIFICACIÓN: Agregamos c_arte para la subida silenciosa
+            c_edit, c_del, c_arte, c_sp = st.columns([2, 2, 2.5, 1.5]) 
 
             id_s = int(row_seleccionada['id'])
             cod_on = row_seleccionada['codigo_orden']
@@ -250,6 +256,9 @@ def render(supabase):
                         sp = supabase.table('especificaciones_producto').select("*").eq('item_orden_id', i['id']).execute().data
                         
                         det_f = []
+                        cant_cobro = 0.0 # Inicializamos el contador de facturación
+                        fam = i['familia_producto']
+                        
                         for s in sp:
                             d = {
                                 "talla_superior": s.get('talla_superior'),
@@ -265,16 +274,24 @@ def render(supabase):
                                 "ancho_cm": float(s.get('ancho_cm', 0.0) or 0.0),
                                 "alto_cm": float(s.get('alto_cm', 0.0) or 0.0),
                                 "acabado": s.get('acabado', ""),
-                                "calandra_si_no": s.get('calandra_si_no', False)
+                                "calandra_si_no": s.get('calandra_si_no', False),
+                                "_cantidad_manual": 1 # Aseguramos que la matriz asigne 1 por cada fila recuperada
                             }
                             det_f.append(d)
+                            
+                            # RECONSTRUCCIÓN: Si es impresión sumamos los metros, si no, sumamos las unidades
+                            if fam == "IMPRESION":
+                                cant_cobro += float(s.get('alto_cm', 0.0) or 0.0)
+                            else:
+                                cant_cobro += 1
                         
                         recup.append({
-                            "familia": i['familia_producto'],
+                            "familia": fam,
                             "obj_p": i['productos_catalogo'],
                             "id_tela": i['insumo_base_id'],
                             "precio_venta": float(i['precio_aplicado']),
-                            "detalles": det_f
+                            "detalles": det_f,
+                            "cantidad_total_cobro": cant_cobro # Recuperamos la memoria del cobro
                         })
                     
                     st.session_state['prod_items'] = recup
@@ -296,6 +313,46 @@ def render(supabase):
                     
                     st.session_state['vista_prod'] = "EDITOR"
                     st.rerun()
+
+            # --- NUEVA FUNCIONALIDAD: SUBIDA SILENCIOSA DE ARTE FINAL ---
+            with c_arte.popover(f"📁 Adjuntar Arte {cod_on}", use_container_width=True):
+                st.markdown("##### 🤫 Subida Silenciosa")
+                st.caption("Adjunta el diseño final como respaldo sin notificar a diseño ni alterar el estado.")
+                
+                arte_actual = row_seleccionada.get('url_arte_final')
+                
+                # CORRECCIÓN: Filtrar los valores 'nan' de Pandas que se disfrazaban de texto
+                if pd.notna(arte_actual) and str(arte_actual).strip().lower() not in ['none', 'null', 'nan', '']:
+                    st.success("✅ Diseño ya adjunto.")
+                    
+                    if es_imagen_segura(arte_actual):
+                        st.image(arte_actual, use_container_width=True)
+                    else:
+                        st.warning("⚠️ Vista previa no disponible (Es PDF o documento)")
+                        st.markdown(f"[🔗 Abrir archivo original]({arte_actual})")
+                else:
+                    st.info("Sin archivo final adjunto.")
+                
+                # Usamos un formulario para evitar parpadeos visuales al subir
+                with st.form(key=f"form_arte_{id_s}", clear_on_submit=True):
+                    nuevo_arte = st.file_uploader("Seleccionar archivo", type=["jpg", "png", "pdf"])
+                    
+                    if st.form_submit_button("Subir y Guardar", type="primary", use_container_width=True):
+                        if nuevo_arte:
+                            with st.spinner("Subiendo..."):
+                                url_a = subir_img(supabase, nuevo_arte, "artes")
+                                if url_a:
+                                    # 1. Limpiamos el servidor de basura borrando la imagen vieja (si existía)
+                                    if arte_actual:
+                                        borrar_img(supabase, arte_actual)
+                                        
+                                    # 2. UPDATE QUIRÚRGICO: Solo tocamos la url, no encendemos alertas de cambio
+                                    supabase.table('ordenes').update({'url_arte_final': url_a}).eq('id', id_s).execute()
+                                    st.success("¡Guardado correctamente!")
+                                    time.sleep(1)
+                                    st.rerun()
+                        else:
+                            st.warning("⚠️ Debes seleccionar un archivo primero.")
 
     # --------------------------------------------------------------------------
     # C.2: VISTA 2 - EDITOR DE ORDEN (NUEVO/EDITAR)
@@ -715,11 +772,15 @@ def render(supabase):
                             st.error("⛔ ERROR DE DUPLICADOS:")
                             for e in errores: st.write(f"- {e}")
                         else:
-                            # Cálculo de cantidad
+                            # Cálculo de cantidad (CORRECCIÓN MATEMÁTICA)
                             cantidad_grupo = 0.0
-                            if ver_medidas: cantidad_grupo = df_final['Largo (m)'].sum()
-                            elif ver_cant: cantidad_grupo = df_final['Cantidad'].sum()
-                            else: cantidad_grupo = len(df_final)
+                            if ver_medidas: 
+                                # Multiplicamos el largo de cada archivo por las veces que se imprimirá
+                                cantidad_grupo = (df_final['Largo (m)'] * df_final['Cantidad']).sum()
+                            elif ver_cant: 
+                                cantidad_grupo = df_final['Cantidad'].sum()
+                            else: 
+                                cantidad_grupo = len(df_final)
 
                           # --- MAPEO A BASE DE DATOS (CON SANITIZACIÓN DE NAN) ---
                             detalles_db = []
@@ -1050,17 +1111,19 @@ def render(supabase):
                     # 4. Guardar Items y Especificaciones
                     for it in st.session_state['prod_items']:
                         
-                        # A. Calculamos la cantidad real sumando la columna Cantidad de la matriz
-                        cantidad_real_prendas = sum(int(d.get("_cantidad_manual", 1) if pd.notna(d.get("_cantidad_manual")) else 1) for d in it['detalles'])
+                        # A. Calculamos el número físico de filas que se van a crear en especificaciones
+                        filas_fisicas = sum(int(d.get("_cantidad_manual", 1) if pd.notna(d.get("_cantidad_manual")) else 1) for d in it['detalles'])
 
                         item_data = {
                             "orden_id": id_o, 
                             "producto_id": it['obj_p']['id'], 
                             "familia_producto": it['familia'], 
                             "insumo_base_id": it['id_tela'], 
-                            "cantidad_total": cantidad_real_prendas, # Usamos la cantidad multiplicada
+                            # LA CLAVE DE FINANZAS: Guardar el valor facturable (metros), no las filas físicas
+                            "cantidad_total": it.get('cantidad_total_cobro', filas_fisicas), 
                             "precio_aplicado": it['precio_venta']
                         }
+                        
                         ri = supabase.table('items_orden').insert(item_data).execute()
                         ii = ri.data[0]['id']
                         
