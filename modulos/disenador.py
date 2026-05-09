@@ -219,21 +219,27 @@ def render(supabase):
                 t_inf = str(esp.get('talla_inferior') or '').strip().upper()
                 es_arq = bool(esp.get("es_arquero", False))
                 
+                # --- NUEVO: EXTRAER GÉNERO PARA SEPARAR MOLDES ---
+                genero_bd = str(esp.get("genero") or '').strip().upper()
+                if genero_bd in ["MASCULINO", "HOMBRE", "BVD-HOMBRE"]: tag_gen = " - HOMBRE"
+                elif genero_bd in ["FEMENINO", "MUJER", "BVD-MUJER"]: tag_gen = " - MUJER"
+                else: tag_gen = ""
+                
                 # --- LÓGICA DE CONTEO DINÁMICO ---
-                # Prenda Superior (Aplica a Uniformes, Camisetas, Chalecos, Chompas...)
+                # Prenda Superior 
                 if fam in ['UNIFORME COMPLETO', 'PRENDA SUPERIOR'] and t_sup not in ['-', 'NONE', '']: 
-                    # Agregamos "(SUPERIOR)" si pertenece a un conjunto completo para evitar confusiones en corte
                     titulo_sup = f"{tipo_prenda} (SUPERIOR)" if fam == 'UNIFORME COMPLETO' else f"{tipo_prenda}"
                     if es_arq: titulo_sup += " (ARQ)"
+                    titulo_sup += tag_gen # <--- DIVISIÓN DE TABLA POR MOLDE
                     
                     if titulo_sup not in resumenes_dinamicos: resumenes_dinamicos[titulo_sup] = {"is_arq": es_arq, "tallas": {}}
                     resumenes_dinamicos[titulo_sup]["tallas"][t_sup] = resumenes_dinamicos[titulo_sup]["tallas"].get(t_sup, 0) + 1
                         
-                # Prenda Inferior (Aplica a Uniformes, Pantalonetas, Calentadores, Leggins...)
+                # Prenda Inferior 
                 if fam in ['UNIFORME COMPLETO', 'PANTALONETA'] and t_inf not in ['-', 'NONE', '']: 
-                    # Si ingresaron una Pantaloneta sola, el tipo_prenda ya es correcto. Si es Uniforme, agregamos "(INFERIOR)"
                     titulo_inf = f"{tipo_prenda}" if fam == 'PANTALONETA' else f"{tipo_prenda} (INFERIOR)"
                     if es_arq: titulo_inf += " (ARQ)"
+                    titulo_inf += tag_gen # <--- DIVISIÓN DE TABLA POR MOLDE
                     
                     if titulo_inf not in resumenes_dinamicos: resumenes_dinamicos[titulo_inf] = {"is_arq": es_arq, "tallas": {}}
                     resumenes_dinamicos[titulo_inf]["tallas"][t_inf] = resumenes_dinamicos[titulo_inf]["tallas"].get(t_inf, 0) + 1
@@ -319,23 +325,27 @@ def render(supabase):
         if specs_list:
             df_specs = pd.DataFrame(specs_list)
             
-            col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns([2, 2, 1.5, 1.5, 1])
+            # NUEVO: Ajustamos las columnas para que quepa el 5to filtro
+            col_f1, col_f2, col_f3, col_f4, col_f_gen, col_f5 = st.columns([1.5, 1.5, 1.5, 1.5, 1.5, 1])
             
             lista_productos = ["Todos"] + list(df_specs['Producto'].unique())
             lista_telas_filtro = ["Todos"] + list(df_specs['Tela'].unique())
             lista_tsup = ["Todos"] + [t for t in df_specs['Talla Sup.'].unique() if t != "-"]
             lista_tinf = ["Todos"] + [t for t in df_specs['Talla Inf.'].unique() if t != "-"]
+            lista_generos = ["Todos"] + [g for g in df_specs['Género'].unique() if g != "-"]
             
             filtro_prod = col_f1.selectbox("Producto:", lista_productos)
             filtro_tela = col_f2.selectbox("Tela:", lista_telas_filtro)
             filtro_tsup = col_f3.selectbox("Talla Sup:", lista_tsup)
             filtro_tinf = col_f4.selectbox("Talla Inf:", lista_tinf)
+            filtro_genero = col_f_gen.selectbox("Género:", lista_generos)
             
             df_filtrado = df_specs.copy()
             if filtro_prod != "Todos": df_filtrado = df_filtrado[df_filtrado['Producto'] == filtro_prod]
             if filtro_tela != "Todos": df_filtrado = df_filtrado[df_filtrado['Tela'] == filtro_tela]
             if filtro_tsup != "Todos": df_filtrado = df_filtrado[df_filtrado['Talla Sup.'] == filtro_tsup]
             if filtro_tinf != "Todos": df_filtrado = df_filtrado[df_filtrado['Talla Inf.'] == filtro_tinf]
+            if filtro_genero != "Todos": df_filtrado = df_filtrado[df_filtrado['Género'] == filtro_genero]
             
             # --- Agrupar filas idénticas, sumar cantidad y guardar IDs ---
             if df_filtrado.empty:
@@ -358,15 +368,20 @@ def render(supabase):
                 df_agrupado = pd.DataFrame(agrupado_data)
                 # ----------------------------------------------------------------------
                 
-                # Reordenamos columnas base
-                cols = ['Orden', 'Cliente', 'Cant.'] + [c for c in df_agrupado.columns if c not in ['Terminado', 'Orden', 'Cliente', 'Cant.', 'Tipo', 'ID_Esp', 'IDs']]
+                # NUEVO ORDEN DE COLUMNAS: Género al lado de Talla
+                cols_ordenadas = ['Orden', 'Cliente', 'Cant.', 'Producto', 'Tela', 'Género', 'Talla Sup.', 'Talla Inf.', 'Jugador', 'Dorsal', 'Cuello', 'Acabado', 'Notas']
+                cols = [c for c in cols_ordenadas if c in df_agrupado.columns]
+                
+                # Añadimos columnas extras que pudieran existir por detrás
+                extras = [c for c in df_agrupado.columns if c not in cols and c not in ['Terminado', 'Tipo', 'ID_Esp', 'IDs']]
+                cols.extend(extras)
                 
                 # Ubicamos 'Dorsal' e insertamos 'Terminado' (el checkbox) justo a su derecha
                 if 'Dorsal' in cols:
                     idx_dorsal = cols.index('Dorsal')
                     cols.insert(idx_dorsal + 1, 'Terminado')
                 else:
-                    cols.append('Terminado')
+                    cols.insert(0, 'Terminado') # Al inicio por si no hay dorsal
                     
                 df_mostrar = df_agrupado[cols]
                 df_mostrar['IDs'] = df_agrupado['IDs'] # Agregamos la columna oculta de IDs

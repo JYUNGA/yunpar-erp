@@ -1059,6 +1059,8 @@ def render(supabase):
                     }
                     
                     # 3. Lógica Diferenciada (AQUÍ ESTÁ LA MAGIA)
+                    huellas_terminadas = [] # Memoria temporal de los diseños que ya estaban listos
+
                     if es_edicion:
                         id_o = st.session_state['editando_orden_id']
                         cab["alerta_cambios"] = True 
@@ -1075,10 +1077,23 @@ def render(supabase):
                         supabase.table('ordenes').update(cab).eq('id', id_o).execute()
                         
                         # --- CORRECCIÓN ERROR 400: Borrar en cascada manual ---
-                        items_actuales = supabase.table('items_orden').select('id').eq('orden_id', id_o).execute().data
+                        # NUEVO: Traemos familia para armar la huella correcta
+                        items_actuales = supabase.table('items_orden').select('id, familia_producto').eq('orden_id', id_o).execute().data
                         ids_items = [item['id'] for item in items_actuales]
+                        map_fam = {item['id']: item['familia_producto'] for item in items_actuales}
                         
                         if ids_items:
+                            # ---> CAPTURAR MEMORIA DE DISEÑOS TERMINADOS ANTES DE BORRAR <---
+                            especs_viejas = supabase.table('especificaciones_producto').select('item_orden_id, talla_superior, talla_inferior, nombre_jugador, numero_dorsal, diseno_terminado').in_('item_orden_id', ids_items).execute().data
+                            for ev in especs_viejas:
+                                if ev.get('diseno_terminado'):
+                                    f_fam = map_fam.get(ev['item_orden_id'], '')
+                                    f_ts = str(ev.get('talla_superior') or '').strip().upper()
+                                    f_ti = str(ev.get('talla_inferior') or '').strip().upper()
+                                    f_nom = str(ev.get('nombre_jugador') or '').strip().upper()
+                                    f_num = str(ev.get('numero_dorsal') or '').strip().upper()
+                                    huellas_terminadas.append((f_fam, f_ts, f_ti, f_nom, f_num))
+
                             supabase.table('especificaciones_producto').delete().in_('item_orden_id', ids_items).execute()
                         
                         supabase.table('items_orden').delete().eq('orden_id', id_o).execute()
@@ -1134,6 +1149,19 @@ def render(supabase):
                             
                             # C. Bucle multiplicador (Opción B)
                             for _ in range(cantidad_fila):
+                                # ---> COMPROBAR HUELLA DIGITAL PARA DEVOLVER EL CHECK <---
+                                huella_actual = (
+                                    it['familia'],
+                                    str(d.get("talla_superior") or '').strip().upper(),
+                                    str(d.get("talla_inferior") or '').strip().upper(),
+                                    str(d.get("nombre_jugador") or '').strip().upper(),
+                                    str(d.get("numero_dorsal") or '').strip().upper()
+                                )
+                                es_terminado = False
+                                if huella_actual in huellas_terminadas:
+                                    es_terminado = True
+                                    huellas_terminadas.remove(huella_actual) # Consumimos una memoria por si hay repetidos
+
                                 esp = {
                                     "item_orden_id": ii, 
                                     "nombre_jugador": d.get("nombre_jugador"), 
@@ -1145,12 +1173,12 @@ def render(supabase):
                                     "es_arquero": d.get("es_arquero"), 
                                     "genero": d.get("genero"), 
                                     "observacion_individual": d.get("observacion_individual"),
-                                    # --- CORRECCIÓN: Agregamos los campos que faltaban ---
                                     "tipo_cuello_texto": d.get("tipo_cuello_texto"),
                                     "ancho_cm": d.get("ancho_cm"),
                                     "alto_cm": d.get("alto_cm"),
                                     "calandra_si_no": d.get("calandra_si_no"),
-                                    "acabado": d.get("acabado")
+                                    "acabado": d.get("acabado"),
+                                    "diseno_terminado": es_terminado # <-- INYECTAMOS EL ESTADO
                                 }
                                 batch_especs.append(esp)
                         
