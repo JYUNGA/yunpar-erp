@@ -4,12 +4,199 @@ from datetime import datetime
 import pytz
 import PyPDF2
 import time
+import os
+import qrcode
+import tempfile
+from fpdf import FPDF
+from num2words import num2words
+
+# Solo importamos el extractor de datos, el PDF lo generaremos nosotros mismos aquí
+from modulos.reportes import obtener_datos_orden
 
 LOCAL_TZ = pytz.timezone('America/Guayaquil')
 
 # ==========================================
-# UTILIDADES Y LECTORES
+# MOTORES DE PDF Y UTILIDADES
 # ==========================================
+class PDFVenta(FPDF):
+    def __init__(self, datos_cabecera=None, ruta_fondo="PROFORMA.png"):
+        super().__init__()
+        self.datos_cabecera = datos_cabecera 
+        self.ruta_fondo = ruta_fondo
+
+    def header(self):
+        # 1. FONDO (Carga directa, sin procesamientos lentos)
+        if self.ruta_fondo and os.path.exists(self.ruta_fondo):
+            self.image(self.ruta_fondo, x=0, y=0, w=210, h=297)
+        
+        # 2. LLENADO DE DATOS
+        if self.datos_cabecera:
+            self.set_font('Arial', 'B', 10)
+            self.set_text_color(60, 60, 60)
+            
+            self.set_xy(68, 78) 
+            self.cell(40, 5, self.datos_cabecera.get('codigo', ''), 0, 0, 'L')
+            
+            self.set_xy(80, 86)
+            self.cell(90, 5, limpiar_texto_pdf(self.datos_cabecera.get('cliente_nombre', '')), 0, 0, 'L')
+            
+            self.set_xy(78, 92)
+            self.cell(40, 5, self.datos_cabecera.get('fecha', ''), 0, 0, 'L')
+            
+            self.set_xy(161, 85)
+            self.cell(50, 5, self.datos_cabecera.get('telefono', ''), 0, 0, 'L')
+            
+            self.set_xy(160, 93) 
+            self.set_font('Arial', '', 9)
+            tipo = self.datos_cabecera.get('tipo', '')
+            self.cell(38, 5, limpiar_texto_pdf(tipo[:18]), 0, 0, 'C')
+
+        self.set_y(105) 
+        self.set_left_margin(52) 
+        self.set_right_margin(10)
+
+    def footer(self):
+        self.set_y(-10)
+        self.set_text_color(255, 255, 255)
+        self.set_font('Arial', '', 7)
+        self.cell(0, 10, f'Pag {self.page_no()}', 0, 0, 'R')
+
+def limpiar_texto_pdf(texto):
+    if not texto: return ""
+    reemplazos = {"│": "|", "–": "-", "“": '"', "”": '"', "’": "'", "‘": "'", "Ñ": "N", "ñ": "n", "°": " degrees", "á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u"}
+    t = str(texto)
+    for k, v in reemplazos.items(): t = t.replace(k, v)
+    return t.encode('latin-1', 'replace').decode('latin-1')
+
+def generar_pdf_venta(datos_venta):
+    cli = datos_venta.get('clientes', {})
+    cabecera = {
+        "codigo": datos_venta.get('codigo_orden', ''),
+        "cliente_nombre": cli.get('nombre_completo', cli.get('nombre', 'Consumidor Final')),
+        "telefono": cli.get('telefono', cli.get('celular', 'No registrado')),
+        "fecha": str(datos_venta.get('created_at', ''))[:10],
+        "tipo": cli.get('tipo_institucion', '')
+    }
+    
+    pdf = PDFVenta(datos_cabecera=cabecera)
+    pdf.add_page()
+    
+    pdf.set_fill_color(245, 166, 35) 
+    pdf.set_text_color(255, 255, 255) 
+    pdf.set_font("Arial", 'B', 9)
+    
+    w_cod, w_desc, w_cant, w_unit, w_tot = 18, 65, 15, 18, 20
+    
+    pdf.cell(w_cod, 8, "Codigo", 1, 0, 'C', True)
+    pdf.cell(w_desc, 8, "Descripcion", 1, 0, 'C', True)
+    pdf.cell(w_cant, 8, "Cant", 1, 0, 'C', True)
+    pdf.cell(w_unit, 8, "P.Unit", 1, 0, 'C', True)
+    pdf.cell(w_tot, 8, "Total", 1, 1, 'C', True)
+    pdf.ln(8)
+    
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Arial", '', 9)
+    
+    total = float(datos_venta.get('total_estimado', 0))
+    abono = float(datos_venta.get('abono_inicial', 0))
+    saldo = float(datos_venta.get('saldo_pendiente', 0))
+    
+    qr_data_string = f"VD: {cabecera['codigo']}\nCLIENTE: {cabecera['cliente_nombre']}\nTOTAL: ${total:.2f}\n"
+    
+    for item in datos_venta.get('items', []):
+        x_start, y_start = pdf.get_x(), pdf.get_y()
+        desc = limpiar_texto_pdf(item.get('nombre_producto', 'Producto Genérico'))
+        
+        pdf.set_xy(x_start + w_cod, y_start)
+        pdf.multi_cell(w_desc, 6, desc, 0, 'L')
+        row_height = max(8, pdf.get_y() - y_start)
+        
+        pdf.set_xy(x_start, y_start)
+        pdf.cell(w_cod, row_height, "VD-ITM", 0, 0, 'C')
+        
+        cx, cy = pdf.get_x(), pdf.get_y()
+        pdf.multi_cell(w_desc, 6, desc, 0, 'L')
+        pdf.set_xy(cx + w_desc, cy)
+        
+        cant = float(item.get('cantidad_total', 1))
+        c_txt = f"{int(cant)}" if cant.is_integer() else f"{cant:.2f}"
+        precio = float(item.get('precio_aplicado', 0))
+        subt = cant * precio
+        
+        pdf.cell(w_cant, row_height, c_txt, 0, 0, 'C')
+        pdf.cell(w_unit, row_height, f"${precio:.2f}", 0, 0, 'R')
+        pdf.cell(w_tot, row_height, f"${subt:.2f}", 0, 1, 'R')
+        
+        pdf.set_draw_color(220, 220, 220)
+        pdf.line(52, pdf.get_y(), 52 + w_cod + w_desc + w_cant + w_unit + w_tot, pdf.get_y())
+        pdf.set_draw_color(0,0,0)
+        qr_data_string += f"- {desc} ({c_txt})\n"
+
+    pdf.ln(5)
+    y = pdf.get_y()
+    if y > 220: 
+        pdf.add_page()
+        y = pdf.get_y()
+
+    pdf.set_xy(52, y)
+    pdf.set_font("Arial", 'B', 8)
+    pdf.cell(10, 5, "SON:", 0, 0)
+    pdf.set_font("Arial", 'I', 8)
+    
+    try: total_letras = num2words(total, lang='es').upper() + " DÓLARES"
+    except: total_letras = f"{total} DÓLARES"
+        
+    pdf.multi_cell(110, 5, limpiar_texto_pdf(total_letras), 0)
+    
+    x_totales = 140
+    pdf.set_xy(x_totales, y) 
+    pdf.set_font("Arial", '', 10)
+    subt_calc = total / 1.15
+    iva_calc = total - subt_calc
+    pdf.cell(20, 5, "Subtotal:", 0, 0, 'R'); pdf.cell(25, 5, f"${subt_calc:.2f}", 0, 1, 'R')
+    pdf.set_x(x_totales)
+    pdf.cell(20, 5, "IVA (15%):", 0, 0, 'R'); pdf.cell(25, 5, f"${iva_calc:.2f}", 0, 1, 'R')
+    pdf.set_x(x_totales)
+    pdf.set_font("Arial", 'B', 11)
+    pdf.set_text_color(18, 38, 122)
+    pdf.cell(20, 6, "TOTAL:", 0, 0, 'R'); pdf.cell(25, 6, f"${total:.2f}", 0, 1, 'R')
+    
+    pdf.set_x(x_totales)
+    pdf.set_font("Arial", '', 10)
+    pdf.set_text_color(0, 100, 0)
+    pdf.cell(20, 5, "Abono:", 0, 0, 'R'); pdf.cell(25, 5, f"${abono:.2f}", 0, 1, 'R')
+    pdf.set_x(x_totales)
+    pdf.set_text_color(200, 0, 0)
+    pdf.cell(20, 5, "Saldo:", 0, 0, 'R'); pdf.cell(25, 5, f"${saldo:.2f}", 0, 1, 'R')
+    
+    pdf.set_text_color(0,0,0)
+    pdf.ln(5)
+    
+    qr = qrcode.QRCode(version=1, box_size=5, border=1)
+    try: qr.add_data(qr_data_string.encode('utf-8').decode('latin-1'))
+    except: qr.add_data("Datos Venta")
+    qr.make(fit=True)
+    img_qr = qr.make_image(fill_color="black", back_color="white")
+    temp_qr_path = tempfile.mktemp(suffix='.png')
+    img_qr.save(temp_qr_path)
+    pdf.image(temp_qr_path, x=52, y=pdf.get_y() + 2, w=25)
+    
+    pdf.set_xy(75, pdf.get_y() + 7); pdf.set_font("Arial", '', 7); pdf.set_text_color(100, 100, 100)
+    pdf.multi_cell(65, 4, "Escanea para verificar\ndetalles de la compra.", 0, 'L')
+    pdf.set_text_color(0, 0, 0)
+
+    pos_firma = 263
+    if pdf.get_y() > 245: pdf.add_page(); pdf.set_y(pos_firma)
+    pdf.set_y(pos_firma); pdf.set_font('Arial', '', 8)
+    pdf.set_xy(55, pos_firma); pdf.cell(50, 0, '_______________________', 0, 1, 'C')
+    pdf.set_xy(55, pos_firma); pdf.cell(50, 5, 'Dpto. Ventas / Caja', 0, 0, 'C')
+    pdf.set_xy(120, pos_firma); pdf.cell(50, 0, '_______________________', 0, 1, 'C')
+    pdf.set_xy(120, pos_firma); pdf.cell(50, 5, 'Cliente Conforme', 0, 1, 'C')
+    pdf.set_xy(120, pos_firma + 4); pdf.set_font('Arial', 'B', 7)
+    pdf.cell(50, 5, limpiar_texto_pdf(cabecera['cliente_nombre'][:30]), 0, 1, 'C')
+    
+    return bytes(pdf.output())
+
 def obtener_fecha_actual():
     return datetime.now(LOCAL_TZ).date()
 
@@ -376,11 +563,13 @@ def render(supabase):
                                 id_orden = res_orden.data[0]['id']
 
                                 for item in st.session_state['carrito_vd']:
-                                    supabase.table('detalles_orden').insert({
-                                        "orden_id": str(id_orden),
+                                    # CORRECCIÓN: Guardamos directamente en 'items_orden' para unificar con Producción
+                                    supabase.table('items_orden').insert({
+                                        "orden_id": id_orden,
                                         "producto_id": item['id_prod'],
                                         "precio_aplicado": item['precio'],
-                                        "cantidad": int(item['cantidad']) if not item['es_impresion'] else 1 
+                                        "cantidad_total": item['cantidad'], # Guardamos la cantidad cobrable real
+                                        "familia_producto": "IMPRESION" if item['es_impresion'] else "GENERICO"
                                     }).execute()
                                     
                                     if item['es_impresion'] and item['archivos']:
@@ -420,19 +609,94 @@ def render(supabase):
                             st.error(f"❌ Error al procesar: {e}")
 
     # ==============================================================================
-    # TAB 2: HISTORIAL
+    # TAB 2: HISTORIAL Y AUDITORÍA DE VENTAS
     # ==============================================================================
     with tab2:
-        st.subheader(f"Ventas Rápidas del Día")
+        st.subheader("🧾 Historial de Ventas (Auditoría)")
+        
+        # 1. Filtros de Gerencia
+        col_f1, col_f2, col_bus = st.columns([1, 1, 2])
+        f_desde = col_f1.date_input("Desde", value=obtener_fecha_actual(), key="vd_f_des")
+        f_hasta = col_f2.date_input("Hasta", value=obtener_fecha_actual(), key="vd_f_has")
+        txt_bus = col_bus.text_input("🔍 Buscar Venta", placeholder="Código VD o Nombre...")
+
         try:
-            res_hist = supabase.table('ordenes').select('codigo_orden, total_estimado, abono_inicial, saldo_pendiente, estado').ilike('codigo_orden', 'VD-%').execute()
-            df_historial = pd.DataFrame(res_hist.data)
+            # Consultamos las ventas (VD-%) filtrando por fechas
+            query = supabase.table('ordenes').select('id, codigo_orden, total_estimado, abono_inicial, saldo_pendiente, estado, clientes(nombre_completo)').ilike('codigo_orden', 'VD-%')
+            query = query.gte('created_at', f"{f_desde}T00:00:00").lte('created_at', f"{f_hasta}T23:59:59")
             
-            if not df_historial.empty:
-                for col in ['total_estimado', 'abono_inicial', 'saldo_pendiente']:
-                    df_historial[col] = df_historial[col].apply(lambda x: f"${x:,.2f}")
-                st.dataframe(df_historial, use_container_width=True, hide_index=True)
+            res_hist = query.order('created_at', desc=True).execute()
+
+            if res_hist.data:
+                lista_ventas = []
+                for d in res_hist.data:
+                    nom_cli = d.get('clientes', {}).get('nombre_completo') if d.get('clientes') else "Consumidor Final"
+                    
+                    # Filtro de texto por código o cliente
+                    if txt_bus and txt_bus.lower() not in d['codigo_orden'].lower() and txt_bus.lower() not in nom_cli.lower():
+                        continue
+
+                    lista_ventas.append({
+                        "Código": d['codigo_orden'],
+                        "Cliente": nom_cli,
+                        "Estado": d['estado'],
+                        "Total": f"${float(d['total_estimado']):.2f}",
+                        "Abono": f"${float(d['abono_inicial']):.2f}",
+                        "Saldo": f"${float(d['saldo_pendiente']):.2f}"
+                    })
+
+                if lista_ventas:
+                    df_historial = pd.DataFrame(lista_ventas)
+                    # La tabla ahora es clickeable
+                    evt_vd = st.dataframe(df_historial, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+
+                    # 2. Desglose y Auditoría de la Venta Seleccionada
+                    if len(evt_vd.selection.rows) > 0:
+                        cod_sel = df_historial.iloc[evt_vd.selection.rows[0]]["Código"]
+                        st.divider()
+                        st.markdown(f"### 🔎 Detalle de Venta: {cod_sel}")
+
+                        with st.spinner("Cargando detalles de la caja..."):
+                            # Reutilizamos la función de reportes.py
+                            datos_venta = obtener_datos_orden(supabase, cod_sel)
+
+                        if datos_venta:
+                            c_info, c_btn = st.columns([2, 1])
+
+                            with c_info:
+                                st.write("**📦 Productos Entregados/Cobrados:**")
+                                for it in datos_venta.get('items', []):
+                                    precio = float(it.get('precio_aplicado', 0))
+                                    cant = float(it.get('cantidad_total', 1))
+                                    # Si es entero, lo mostramos sin decimales (ej: 2). Si es metro, con decimales (ej: 1.5)
+                                    cant_str = int(cant) if cant.is_integer() else f"{cant:.2f}m"
+                                    st.caption(f"- {cant_str}x {it.get('nombre_producto', 'Producto')} | Subtotal: ${cant*precio:.2f}")
+
+                                st.write("**💳 Trazabilidad del Pago:**")
+                                pagos = datos_venta.get('pagos', [])
+                                if pagos:
+                                    for p in pagos:
+                                        banco = p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo'
+                                        ref = p.get('numero_referencia') or 'N/A'
+                                        st.caption(f"- ${float(p['monto']):.2f} recibidos en {banco} (Ref: {ref})")
+                                else:
+                                    st.caption("- Venta a Crédito / Sin abono inicial registrado.")
+
+                            with c_btn:
+                                st.info("📄 Re-impresión de Recibo")
+                                # Generamos el PDF usando el nuevo motor basado en el diseño de cotizaciones
+                                pdf_bytes = generar_pdf_venta(datos_venta)
+                                st.download_button(
+                                    label="⬇️ Descargar Comprobante",
+                                    data=pdf_bytes,
+                                    file_name=f"Comprobante_{cod_sel}.pdf",
+                                    mime="application/pdf",
+                                    use_container_width=True,
+                                    type="primary"
+                                )
+                else:
+                    st.info("No hay ventas que coincidan con tu búsqueda en este rango de fechas.")
             else:
-                st.info("No hay ventas directas registradas hoy.")
+                st.info("No hay ventas registradas en este rango de fechas.")
         except Exception as e:
             st.error(f"Error al cargar historial: {e}")

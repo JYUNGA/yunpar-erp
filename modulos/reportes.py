@@ -106,6 +106,19 @@ def obtener_datos_orden(supabase_client, busqueda):
         res_items = supabase_client.table('items_orden').select('*').eq('orden_id', orden_id).execute()
         items = res_items.data
 
+        # CORRECCIÓN DE COMPATIBILIDAD: Si la tabla maestra está vacía, rescatamos las ventas viejas
+        if not items:
+            try:
+                res_det = supabase_client.table('detalles_orden').select('*').eq('orden_id', str(orden_id)).execute()
+                if res_det.data:
+                    for d in res_det.data:
+                        # Adaptamos el formato viejo al nuevo para que el PDF no colapse
+                        d['cantidad_total'] = d.get('cantidad', 1)
+                        d['familia_producto'] = 'GENERICO' 
+                        d['id'] = d.get('id_detalle', 0) # <-- FIX: Traducimos id_detalle a id para evitar el error
+                    items = res_det.data
+            except: pass
+
         for item in items:
             if item.get('producto_id'):
                 try:
@@ -1152,9 +1165,47 @@ def render_modulo_reportes(supabase_client):
                     st.write(f"**Cliente:** {nombre_cliente}")
                     st.write(f"**Estado:** {orden.get('estado', 'N/A')}")
                     st.write(f"**Fecha Entrega:** {orden.get('fecha_entrega', 'N/A')}")
+                    
                 with col_finanzas:
-                    st.write(f"**Total:** ${orden.get('total_estimado', 0)}")
-                    st.write(f"**Saldo:** ${orden.get('saldo_pendiente', 0)}")
+                    tot = float(orden.get('total_estimado', 0))
+                    sal = float(orden.get('saldo_pendiente', 0))
+                    
+                    # Calculamos el abono real sumando el historial de pagos
+                    pagos = orden.get('pagos', [])
+                    abono_real = sum([float(p.get('monto', 0)) for p in pagos])
+                    
+                    st.write(f"**Total de la Orden:** ${tot:.2f}")
+                    st.write(f"**Abonado (Pagos):** ${abono_real:.2f}")
+                    
+                    # Alerta visual de deudas
+                    if sal > 0:
+                        st.write(f"**Saldo Pendiente:** :red[**${sal:.2f}**]")
+                    else:
+                        st.write(f"**Saldo Pendiente:** :green[**${sal:.2f}**]")
+                        
+                # --- NUEVA SECCIÓN DE AUDITORÍA (Oculta por defecto para mantener limpio) ---
+                with st.expander("🔎 Auditoría Rápida (Productos y Trazabilidad de Pagos)", expanded=False):
+                    c_prod, c_pag = st.columns(2)
+                    with c_prod:
+                        st.markdown("**📦 Productos de la Orden:**")
+                        for it in orden.get('items', []):
+                            precio = float(it.get('precio_aplicado', 0))
+                            cant = float(it.get('cantidad_total', 1))
+                            cant_str = int(cant) if cant.is_integer() else f"{cant:.2f}m"
+                            st.caption(f"- {cant_str}x {it.get('nombre_producto', 'Producto')} | Subtotal: ${cant*precio:.2f}")
+
+                    with c_pag:
+                        st.markdown("**💳 Trazabilidad de Pagos:**")
+                        if pagos:
+                            for p in pagos:
+                                banco = p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo'
+                                ref = p.get('numero_referencia') or 'N/A'
+                                f_pago = p.get('fecha_pago', 'Sin fecha')
+                                # Extraer solo la fecha si viene con hora
+                                if f_pago and len(f_pago) >= 10: f_pago = f"{f_pago[8:10]}/{f_pago[5:7]}/{f_pago[0:4]}"
+                                st.caption(f"- ${float(p['monto']):.2f} en {banco} (Ref: {ref}) el {f_pago}")
+                        else:
+                            st.caption("No se han registrado pagos para esta orden.")
 
                 st.divider()
                 

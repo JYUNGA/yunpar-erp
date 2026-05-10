@@ -1,10 +1,14 @@
 import streamlit as st
 from supabase import create_client
 import time
+from datetime import datetime
+import pytz
+import google.generativeai as genai # <-- LA LIBRERÍA OFICIAL DE GEMINI
 
 # --- IMPORTACIÓN DE MÓDULOS ---
 # 1. AGREGAMOS 'ventas' a la lista de importaciones
-from modulos import clientes, productos, insumos, cotizaciones, produccion, finanzas, reportes, disenador, impresion, usuarios, ventas 
+from modulos import clientes, productos, insumos, cotizaciones, produccion, finanzas, reportes, disenador, impresion, usuarios, ventas, facturacion 
+
 
 # --- CONFIGURACIÓN GLOBAL ---
 st.set_page_config(page_title="YUNPAR ERP", page_icon="👕", layout="wide", initial_sidebar_state="expanded")
@@ -26,12 +30,12 @@ supabase = init_connection()
 # 2. AGREGAMOS "Ventas" a los roles de GERENTE y VENDEDORA
 PERMISOS = {
     "GERENTE": [
-        "Inicio", "Ventas", "Cotizaciones", "Producción", "Reportes", 
+        "Inicio", "Ventas", "Cotizaciones", "Producción", "Facturación", "Reportes", 
         "Diseño", "Impresión", "Caja y Finanzas", 
         "Clientes", "Productos", "Insumos", "Usuarios"
     ],
     "VENDEDORA": [
-        "Inicio", "Ventas", "Cotizaciones", "Producción", "Caja y Finanzas", "Clientes", "Reportes"
+        "Inicio", "Ventas", "Cotizaciones", "Producción", "Facturación", "Caja y Finanzas", "Clientes", "Reportes"
     ],
     "IMPRESION": [
         "Inicio", "Impresión", "Reportes"
@@ -80,14 +84,104 @@ def login():
                 else:
                     st.warning("⚠️ Ingresa usuario y contraseña.")
 
+# --- MOTOR DE INTELIGENCIA ARTIFICIAL (GEMINI) ---
+@st.cache_data(ttl=86400, show_spinner=False) 
+def obtener_mensaje_diario(rol_usuario, nombre, turno):
+    try:
+        genai.configure(api_key=st.secrets["gemini"]["api_key"])
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        
+        # PROMPT CON HUMOR: Cambiamos el dato curioso por un chiste corto y sano.
+        prompt = f"""
+        Eres la IA del ERP de YUNPAR (fábrica de uniformes). 
+        El usuario '{nombre}' (rol: {rol_usuario}) acaba de iniciar sesión en el turno de la {turno}.
+        
+        Escribe un mensaje de EXACTAMENTE DOS oraciones muy breves y directas:
+        1. Una frase de motivación extrema enfocada en su rol (máximo 15 palabras).
+        2. Un chiste muy corto, sano y divertido (máximo 20 palabras) para sacarle una sonrisa en el trabajo.
+        
+        REGLA DE ORO: NO LO SALUDES. PROHIBIDO decir "Hola", "Buenos días", "Buenas tardes" o "Buenas noches" porque el sistema ya lo saludó en el título. Ve directo a la motivación y remata con el chiste. Usa 2 emojis.
+        """
+        
+        respuesta = model.generate_content(prompt)
+        return respuesta.text
+    except Exception as e:
+        return f"¡A dar lo mejor en esta **{turno}**, {nombre}! 🚀"
+
 # --- ENRUTADOR DINÁMICO DE MÓDULOS ---
 def enrutador(opcion):
     if opcion == "Inicio":
-        st.title("📊 Tablero Principal")
-        st.info(f"Bienvenido al sistema ERP YUNPAR. Tu rol es: **{st.session_state['rol']}**")
-    elif opcion == "Ventas": ventas.render(supabase) # 3. AGREGAMOS LA RUTA AL ENRUTADOR
+        zona_horaria = pytz.timezone('America/Guayaquil')
+        hora_exacta = datetime.now(zona_horaria)
+        
+        # Unificamos el saludo y el turno de la IA para que coincidan perfectamente
+        if hora_exacta.hour < 12: 
+            saludo = "🌅 Buenos días"
+            turno_ia = "Mañana"
+        elif hora_exacta.hour < 19: 
+            saludo = "☀️ Buenas tardes"
+            turno_ia = "Tarde"
+        else: 
+            saludo = "🌙 Buenas noches"
+            turno_ia = "Noche"
+        
+        nombre_completo = st.session_state.get('usuario', 'Equipo')
+        nombre_pila = nombre_completo.split()[0] if nombre_completo else "Equipo"
+        rol_actual = st.session_state.get('rol', 'Colaborador')
+
+        # --- TARJETA DE BIENVENIDA PREMIUM (CSS) ---
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #0b2046 0%, #1a3c7a 100%); 
+                    padding: 35px 30px; 
+                    border-radius: 12px; 
+                    color: white; 
+                    box-shadow: 0 8px 20px rgba(0,0,0,0.15); 
+                    margin-bottom: 30px;
+                    border-left: 8px solid #ff4b4b;">
+            <h1 style="color: white; margin-bottom: 5px; font-size: 2.5rem; font-weight: 800;">{saludo}, {nombre_pila}!</h1>
+            <p style="font-size: 1.1rem; opacity: 0.85; margin-top: 0; font-weight: 300;">Panel General YUNPAR • Rol Asignado: <strong>{rol_actual}</strong></p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col_ia, col_info = st.columns([2.2, 1])
+        
+        with col_ia:
+            with st.spinner(f"Sincronizando IA para la {turno_ia}..."):
+                # Llamamos a la IA pasándole el turno
+                mensaje_ia = obtener_mensaje_diario(rol_actual, nombre_pila, turno_ia)
+            
+            # --- NUEVO DISEÑO DEL MENSAJE IA (Letra gigante, cursiva y de lectura rápida) ---
+            st.markdown(f"""
+            <div style="background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 10px; padding: 25px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
+                <h4 style="color: #ff4b4b; margin-top: 0; margin-bottom: 15px; font-weight: 700;">
+                    💡 Inspiración de la {turno_ia}
+                </h4>
+                <div style="font-size: 1.45rem; color: #2b3035; line-height: 1.6; font-style: italic; font-weight: 500;">
+                    {mensaje_ia}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col_info:
+            st.markdown("<h4 style='color: #1a3c7a; font-weight: 700;'>📌 Enfoque de tu Rol</h4>", unsafe_allow_html=True)
+            if rol_actual == "GERENTE":
+                st.success("📊 **Métricas.** Revisa saldos pendientes y controla el flujo del taller.")
+            elif rol_actual == "VENDEDORA":
+                st.warning("🛒 **Ventas.** Liquida órdenes entregadas y genera nuevas proformas.")
+            elif rol_actual == "DISEÑADOR":
+                st.error("🎨 **Diseño.** Sincroniza artes finales y envía archivos al plotter.")
+            elif rol_actual == "IMPRESION":
+                st.info("🖨️ **Plotter.** Descarga lotes de producción y mantén las máquinas a tope.")
+            else:
+                st.info("Revisa tus módulos en el menú lateral.")
+                
+            st.divider()
+            st.caption(f"📅 {hora_exacta.strftime('%d/%m/%Y')} | 🏭 YUNPAR ERP v2.5")
+
+    elif opcion == "Ventas": ventas.render(supabase)
     elif opcion == "Cotizaciones": cotizaciones.render(supabase)
     elif opcion == "Producción": produccion.render(supabase)
+    elif opcion == "Facturación": facturacion.render(supabase) # <-- Corrección de sangría y variables
     elif opcion == "Reportes": reportes.render_modulo_reportes(supabase)
     elif opcion == "Diseño": disenador.render(supabase)
     elif opcion == "Impresión": impresion.render(supabase)

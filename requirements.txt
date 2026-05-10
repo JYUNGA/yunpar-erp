@@ -10,3 +10,4 @@ Pillow
 requests
 openpyxl
 pytz
+google-generativeai
