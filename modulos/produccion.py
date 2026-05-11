@@ -1046,16 +1046,17 @@ def render(supabase):
                     
                     # 2. Datos Base (Comunes para ambas acciones)
                     cab = {
-                        "codigo_orden": cod, 
-                        "cliente_id": st.session_state['editando_cliente_id'], 
-                        "fecha_entrega": fecha_final, 
+                        "codigo_orden": str(cod), 
+                        # PURIFICACIÓN: Convertir a int nativo si existe, sino None
+                        "cliente_id": int(st.session_state['editando_cliente_id']) if st.session_state.get('editando_cliente_id') else None, 
+                        "fecha_entrega": str(fecha_final), 
                         "total_estimado": float(tot) if pd.notna(tot) else 0.0, 
                         "abono_inicial": float(mnt) if pd.notna(mnt) else 0.0, 
                         "saldo_pendiente": float(tot - mnt) if pd.notna(tot - mnt) else 0.0, 
                         "observaciones_generales": str(obs_g) if pd.notna(obs_g) else "",
-                        "disenador_asignado": disenador_sel,
-                        "url_boceto_vendedora": url_boc if pd.notna(url_boc) else None,
-                        "url_arte_final": url_art if pd.notna(url_art) else None
+                        "disenador_asignado": str(disenador_sel),
+                        "url_boceto_vendedora": str(url_boc) if pd.notna(url_boc) else None,
+                        "url_arte_final": str(url_art) if pd.notna(url_art) else None
                     }
                     
                     # 3. Lógica Diferenciada (AQUÍ ESTÁ LA MAGIA)
@@ -1111,16 +1112,16 @@ def render(supabase):
                         # 🟢 INTEGRACIÓN FINANZAS: Registrar el Abono completo en Pagos
                         if mnt > 0:
                             # Limpiar banco si lo dejaron en "Seleccionar..."
-                            banco_final = None if banco_destino == "Seleccionar..." else banco_destino
+                            banco_final = None if banco_destino == "Seleccionar..." else str(banco_destino)
                             
                             supabase.table('pagos').insert({
-                                "orden_id": id_o,
-                                "cliente_id": st.session_state['editando_cliente_id'],
-                                "monto": mnt,
-                                "metodo_pago": metodo_pago, 
+                                "orden_id": int(id_o), # Asegurar formato nativo
+                                "cliente_id": int(st.session_state['editando_cliente_id']) if st.session_state.get('editando_cliente_id') else None,
+                                "monto": float(mnt),
+                                "metodo_pago": str(metodo_pago), 
                                 "banco_destino": banco_final, 
-                                "numero_referencia": num_ref, 
-                                "fecha_pago": fecha_final
+                                "numero_referencia": str(num_ref) if num_ref else None, 
+                                "fecha_pago": str(fecha_final)
                             }).execute()
 
                     # 4. Guardar Items y Especificaciones
@@ -1130,13 +1131,12 @@ def render(supabase):
                         filas_fisicas = sum(int(d.get("_cantidad_manual", 1) if pd.notna(d.get("_cantidad_manual")) else 1) for d in it['detalles'])
 
                         item_data = {
-                            "orden_id": id_o, 
-                            "producto_id": it['obj_p']['id'], 
-                            "familia_producto": it['familia'], 
-                            "insumo_base_id": it['id_tela'], 
-                            # LA CLAVE DE FINANZAS: Guardar el valor facturable (metros), no las filas físicas
-                            "cantidad_total": it.get('cantidad_total_cobro', filas_fisicas), 
-                            "precio_aplicado": it['precio_venta']
+                            "orden_id": int(id_o), # Faltaba purificar el id de la orden
+                            "producto_id": int(it['obj_p']['id']), 
+                            "familia_producto": str(it['familia']), 
+                            "insumo_base_id": int(it['id_tela']) if it['id_tela'] else None, 
+                            "cantidad_total": float(it.get('cantidad_total_cobro', filas_fisicas)), 
+                            "precio_aplicado": float(it['precio_venta']) 
                         }
                         
                         ri = supabase.table('items_orden').insert(item_data).execute()
@@ -1162,23 +1162,24 @@ def render(supabase):
                                     es_terminado = True
                                     huellas_terminadas.remove(huella_actual) # Consumimos una memoria por si hay repetidos
 
+                                # PURIFICACIÓN ABSOLUTA: Destruimos la memoria de Pandas forzando los tipos de Python
                                 esp = {
-                                    "item_orden_id": ii, 
-                                    "nombre_jugador": d.get("nombre_jugador"), 
-                                    "numero_dorsal": str(d.get("numero_dorsal")) if d.get("numero_dorsal") else None, 
-                                    "talla_superior": d.get("talla_superior"), 
-                                    "talla_inferior": d.get("talla_inferior"), 
-                                    "talla_polines": d.get("talla_polines"), 
-                                    "color_polines": d.get("color_polines"), 
-                                    "es_arquero": d.get("es_arquero"), 
-                                    "genero": d.get("genero"), 
-                                    "observacion_individual": d.get("observacion_individual"),
-                                    "tipo_cuello_texto": d.get("tipo_cuello_texto"),
-                                    "ancho_cm": d.get("ancho_cm"),
-                                    "alto_cm": d.get("alto_cm"),
-                                    "calandra_si_no": d.get("calandra_si_no"),
-                                    "acabado": d.get("acabado"),
-                                    "diseno_terminado": es_terminado # <-- INYECTAMOS EL ESTADO
+                                    "item_orden_id": int(ii), 
+                                    "nombre_jugador": str(d.get("nombre_jugador")) if pd.notna(d.get("nombre_jugador")) and str(d.get("nombre_jugador")).strip() else None, 
+                                    "numero_dorsal": str(d.get("numero_dorsal")) if pd.notna(d.get("numero_dorsal")) and str(d.get("numero_dorsal")).strip() else None, 
+                                    "talla_superior": str(d.get("talla_superior")) if pd.notna(d.get("talla_superior")) and str(d.get("talla_superior")).strip() else None, 
+                                    "talla_inferior": str(d.get("talla_inferior")) if pd.notna(d.get("talla_inferior")) and str(d.get("talla_inferior")).strip() else None, 
+                                    "talla_polines": str(d.get("talla_polines")) if pd.notna(d.get("talla_polines")) and str(d.get("talla_polines")).strip() else None, 
+                                    "color_polines": str(d.get("color_polines")) if pd.notna(d.get("color_polines")) and str(d.get("color_polines")).strip() else None, 
+                                    "es_arquero": bool(d.get("es_arquero")), 
+                                    "genero": str(d.get("genero")) if pd.notna(d.get("genero")) and str(d.get("genero")).strip() else None, 
+                                    "observacion_individual": str(d.get("observacion_individual")) if pd.notna(d.get("observacion_individual")) else "",
+                                    "tipo_cuello_texto": str(d.get("tipo_cuello_texto")) if pd.notna(d.get("tipo_cuello_texto")) else "",
+                                    "ancho_cm": float(d.get("ancho_cm", 0.0)),
+                                    "alto_cm": float(d.get("alto_cm", 0.0)),
+                                    "calandra_si_no": bool(d.get("calandra_si_no")),
+                                    "acabado": str(d.get("acabado")) if pd.notna(d.get("acabado")) else "",
+                                    "diseno_terminado": bool(es_terminado)
                                 }
                                 batch_especs.append(esp)
                         
