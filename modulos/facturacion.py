@@ -19,13 +19,18 @@ def render(supabase):
         st.subheader("Órdenes Listas para Facturar")
         
         try:
-            # Traemos las órdenes que NO están marcadas como facturadas
-            res_pendientes = supabase.table('ordenes').select('id, codigo_orden, created_at, total_estimado, clientes(nombre_completo, cedula_ruc), estado_facturacion').is_('estado_facturacion', False).order('created_at', desc=True).limit(50).execute()
+            # AGREGAMOS 'saldo_pendiente' a la selección de columnas de la BD
+            res_pendientes = supabase.table('ordenes').select('id, codigo_orden, created_at, total_estimado, saldo_pendiente, clientes(nombre_completo, cedula_ruc), estado_facturacion').is_('estado_facturacion', False).order('created_at', desc=True).limit(50).execute()
             
             # Por si las órdenes viejas tienen el campo en "null" tras crear la columna
-            res_nulas = supabase.table('ordenes').select('id, codigo_orden, created_at, total_estimado, clientes(nombre_completo, cedula_ruc), estado_facturacion').is_('estado_facturacion', 'null').order('created_at', desc=True).limit(50).execute()
+            res_nulas = supabase.table('ordenes').select('id, codigo_orden, created_at, total_estimado, saldo_pendiente, clientes(nombre_completo, cedula_ruc), estado_facturacion').is_('estado_facturacion', 'null').order('created_at', desc=True).limit(50).execute()
             
             datos_combinados = (res_pendientes.data if res_pendientes.data else []) + (res_nulas.data if res_nulas.data else [])
+            
+            # --- FILTRO DE AUDITORÍA FINANCIERA ---
+            # Dejamos pasar únicamente las órdenes con saldo_pendiente menor o igual a 0 (100% pagadas)
+            if datos_combinados:
+                datos_combinados = [d for d in datos_combinados if float(d.get('saldo_pendiente', 0) or 0) <= 0]
             
             if datos_combinados:
                 lista_pend = []
