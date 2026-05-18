@@ -316,31 +316,12 @@ def render(supabase):
                 prods_raw = supabase.table('productos_catalogo').select("*").eq('activo', True).execute().data
                 df_p = pd.DataFrame(prods_raw)
                 
-                # ==============================================================
-                # 🛑 INICIO DE MODO DEBUG (AUDITORÍA VISUAL EN PANTALLA) 🛑
-                # ==============================================================
-                st.error("🚨 MODO DEBUG ACTIVADO: Analizando qué hace el filtro...")
-                col_debug1, col_debug2 = st.columns(2)
-                
-                # A. Mostramos lo que llega realmente de Supabase
-                col_debug1.write(f"📦 1. Total crudo desde BD: **{len(df_p)}**")
-                if not df_p.empty:
-                    col_debug1.dataframe(df_p[['codigo_referencia', 'descripcion', 'grupo_edad']].head(5))
-                
-                # --- 2. EL FILTRO EN CUESTIÓN ---
+                # --- 2. EL FILTRO ESTRICTO DE PANDAS ---
                 if not df_p.empty and 'grupo_edad' in df_p.columns:
                     # Forzamos todo a string, quitamos espacios ocultos y pasamos a mayúsculas
                     df_p['grupo_edad_limpio'] = df_p['grupo_edad'].fillna('').astype(str).str.strip().str.upper()
                     # Aplicamos el filtro: SOLO dejar los que digan exactamente VENTA
                     df_p = df_p[df_p['grupo_edad_limpio'] == 'VENTA']
-                
-                # B. Mostramos lo que sobrevive al filtro matemático
-                col_debug2.write(f"✂️ 2. Total después de filtrar: **{len(df_p)}**")
-                if not df_p.empty:
-                    col_debug2.dataframe(df_p[['codigo_referencia', 'descripcion', 'grupo_edad_limpio']].head(5))
-                # ==============================================================
-                # 🛑 FIN DE MODO DEBUG 🛑
-                # ==============================================================
 
                 if not df_p.empty:
                     cf1, cf2, cf3 = st.columns(3)
@@ -364,7 +345,7 @@ def render(supabase):
                     sel_p_key = st.selectbox("Seleccione el producto:", list(mapa_p.keys()))
                     prod_obj = mapa_p.get(sel_p_key, None)
                 else:
-                    st.warning("⚠️ El filtro dejó 0 productos. Al parecer ningún producto en la BD tiene la palabra 'VENTA'.")
+                    st.warning("⚠️ No se encontraron productos clasificados estrictamente para VENTA en la Base de Datos.")
                     prod_obj = None
 
             # --- LÓGICA DE TARIFAS E IMPRESIÓN ---
