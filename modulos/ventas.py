@@ -312,39 +312,59 @@ def render(supabase):
             st.subheader("2. Agregar Productos")
             
             with st.expander("🔍 Filtros de Búsqueda (Catálogo)", expanded=True):
-                # 1. Traemos TODOS los productos activos para que Pandas los analice sin perder ninguno
+                # --- 1. LECTURA CRUDA DESDE LA BASE DE DATOS ---
                 prods_raw = supabase.table('productos_catalogo').select("*").eq('activo', True).execute().data
                 df_p = pd.DataFrame(prods_raw)
                 
-                # 2. FILTRO ESTRICTO PANDAS (Destruye sin piedad cualquier fila que no sea VENTA)
-                if not df_p.empty and 'grupo_edad' in df_p.columns:
-                    # Limpiamos espacios ocultos y forzamos a mayúsculas para comparar exacto
-                    df_p['grupo_edad'] = df_p['grupo_edad'].fillna('').astype(str).str.strip().str.upper()
-                    df_p = df_p[df_p['grupo_edad'] == 'VENTA']
+                # ==============================================================
+                # 🛑 INICIO DE MODO DEBUG (AUDITORÍA VISUAL EN PANTALLA) 🛑
+                # ==============================================================
+                st.error("🚨 MODO DEBUG ACTIVADO: Analizando qué hace el filtro...")
+                col_debug1, col_debug2 = st.columns(2)
                 
+                # A. Mostramos lo que llega realmente de Supabase
+                col_debug1.write(f"📦 1. Total crudo desde BD: **{len(df_p)}**")
+                if not df_p.empty:
+                    col_debug1.dataframe(df_p[['codigo_referencia', 'descripcion', 'grupo_edad']].head(5))
+                
+                # --- 2. EL FILTRO EN CUESTIÓN ---
+                if not df_p.empty and 'grupo_edad' in df_p.columns:
+                    # Forzamos todo a string, quitamos espacios ocultos y pasamos a mayúsculas
+                    df_p['grupo_edad_limpio'] = df_p['grupo_edad'].fillna('').astype(str).str.strip().str.upper()
+                    # Aplicamos el filtro: SOLO dejar los que digan exactamente VENTA
+                    df_p = df_p[df_p['grupo_edad_limpio'] == 'VENTA']
+                
+                # B. Mostramos lo que sobrevive al filtro matemático
+                col_debug2.write(f"✂️ 2. Total después de filtrar: **{len(df_p)}**")
+                if not df_p.empty:
+                    col_debug2.dataframe(df_p[['codigo_referencia', 'descripcion', 'grupo_edad_limpio']].head(5))
+                # ==============================================================
+                # 🛑 FIN DE MODO DEBUG 🛑
+                # ==============================================================
+
                 if not df_p.empty:
                     cf1, cf2, cf3 = st.columns(3)
                     tp = cf1.selectbox("Prenda/Tipo", ["Todos"] + sorted(list(df_p['tipo_prenda'].dropna().unique())))
                     
                     df_filtrado_cat = df_p if tp == "Todos" else df_p[df_p['tipo_prenda'] == tp]
                     cat = cf2.selectbox("Categoría", ["Todos"] + sorted(list(df_filtrado_cat['linea_categoria'].dropna().unique())))
-                    eda = cf3.selectbox("Edad", ["Todos"] + sorted(list(df_p['grupo_edad'].dropna().unique())))
+                    
+                    # El dropdown de edad ahora SOLO debería tener la opción "Todos" y "VENTA"
+                    eda = cf3.selectbox("Edad", ["Todos"] + sorted(list(df_p['grupo_edad_limpio'].dropna().unique())))
                     
                     txt_p = st.text_input("Buscar texto...", placeholder="Cód o Nombre de producto")
 
                     df_fin = df_p.copy()
                     if tp != "Todos": df_fin = df_fin[df_fin['tipo_prenda'] == tp]
                     if cat != "Todos": df_fin = df_fin[df_fin['linea_categoria'] == cat]
-                    if eda != "Todos": df_fin = df_fin[df_fin['grupo_edad'] == eda]
+                    if eda != "Todos": df_fin = df_fin[df_fin['grupo_edad_limpio'] == eda]
                     if txt_p: df_fin = df_fin[df_fin['descripcion'].str.contains(txt_p, case=False) | df_fin['codigo_referencia'].str.contains(txt_p, case=False)]
 
-                    # 3. TRUCO DE AUDITORÍA VISUAL: Imprimimos la edad al final del nombre
-                    mapa_p = {f"{r['codigo_referencia']} | {r['descripcion']} 👉 (Edad BD: {r.get('grupo_edad', 'VACIO')})": r for r in df_fin.to_dict('records')}
-                    
+                    mapa_p = {f"{r['codigo_referencia']} | {r['descripcion']}": r for r in df_fin.to_dict('records')}
                     sel_p_key = st.selectbox("Seleccione el producto:", list(mapa_p.keys()))
                     prod_obj = mapa_p.get(sel_p_key, None)
                 else:
-                    st.warning("⚠️ No se encontraron productos clasificados estrictamente para VENTA.")
+                    st.warning("⚠️ El filtro dejó 0 productos. Al parecer ningún producto en la BD tiene la palabra 'VENTA'.")
                     prod_obj = None
 
             # --- LÓGICA DE TARIFAS E IMPRESIÓN ---
