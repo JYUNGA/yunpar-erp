@@ -312,13 +312,9 @@ def render(supabase):
             st.subheader("2. Agregar Productos")
             
             with st.expander("🔍 Filtros de Búsqueda (Catálogo)", expanded=True):
-                prods_raw = supabase.table('productos_catalogo').select("*").eq('activo', True).execute().data
+                # FILTRO INFALIBLE: La base de datos hace el trabajo pesado y SOLO trae los de "venta"
+                prods_raw = supabase.table('productos_catalogo').select("*").eq('activo', True).ilike('grupo_edad', '%venta%').execute().data
                 df_p = pd.DataFrame(prods_raw)
-                
-                # --- NUEVO FILTRO ESTRICTO ---
-                # Purificamos la tabla para dejar ÚNICAMENTE los que en "grupo_edad" digan "venta" (ignorando mayúsculas/minúsculas)
-                if not df_p.empty and 'grupo_edad' in df_p.columns:
-                    df_p = df_p[df_p['grupo_edad'].astype(str).str.strip().str.lower() == 'venta']
                 
                 if not df_p.empty:
                     cf1, cf2, cf3 = st.columns(3)
