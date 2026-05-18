@@ -315,6 +315,11 @@ def render(supabase):
                 prods_raw = supabase.table('productos_catalogo').select("*").eq('activo', True).execute().data
                 df_p = pd.DataFrame(prods_raw)
                 
+                # --- NUEVO FILTRO ESTRICTO ---
+                # Purificamos la tabla para dejar ÚNICAMENTE los que en "grupo_edad" digan "venta" (ignorando mayúsculas/minúsculas)
+                if not df_p.empty and 'grupo_edad' in df_p.columns:
+                    df_p = df_p[df_p['grupo_edad'].astype(str).str.strip().str.lower() == 'venta']
+                
                 if not df_p.empty:
                     cf1, cf2, cf3 = st.columns(3)
                     tp = cf1.selectbox("Prenda/Tipo", ["Todos"] + sorted(list(df_p['tipo_prenda'].dropna().unique())))
