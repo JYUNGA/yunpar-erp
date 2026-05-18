@@ -312,15 +312,14 @@ def render(supabase):
             st.subheader("2. Agregar Productos")
             
             with st.expander("🔍 Filtros de Búsqueda (Catálogo)", expanded=True):
-                # 1. Traemos TODOS los productos activos (Evitamos que la API ignore filtros)
+                # 1. Traemos TODOS los productos activos para que Pandas los analice sin perder ninguno
                 prods_raw = supabase.table('productos_catalogo').select("*").eq('activo', True).execute().data
                 df_p = pd.DataFrame(prods_raw)
                 
-                # 2. PURIFICACIÓN PANDAS EXTREMA
+                # 2. FILTRO ESTRICTO PANDAS (Destruye sin piedad cualquier fila que no sea VENTA)
                 if not df_p.empty and 'grupo_edad' in df_p.columns:
-                    # Convertimos a texto, borramos espacios fantasma y forzamos mayúsculas
+                    # Limpiamos espacios ocultos y forzamos a mayúsculas para comparar exacto
                     df_p['grupo_edad'] = df_p['grupo_edad'].fillna('').astype(str).str.strip().str.upper()
-                    # Dejamos pasar ÚNICAMENTE las filas que digan exactamente 'VENTA'
                     df_p = df_p[df_p['grupo_edad'] == 'VENTA']
                 
                 if not df_p.empty:
@@ -339,11 +338,13 @@ def render(supabase):
                     if eda != "Todos": df_fin = df_fin[df_fin['grupo_edad'] == eda]
                     if txt_p: df_fin = df_fin[df_fin['descripcion'].str.contains(txt_p, case=False) | df_fin['codigo_referencia'].str.contains(txt_p, case=False)]
 
-                    mapa_p = {f"{r['codigo_referencia']} | {r['descripcion']}": r for r in df_fin.to_dict('records')}
+                    # 3. TRUCO DE AUDITORÍA VISUAL: Imprimimos la edad al final del nombre
+                    mapa_p = {f"{r['codigo_referencia']} | {r['descripcion']} 👉 (Edad BD: {r.get('grupo_edad', 'VACIO')})": r for r in df_fin.to_dict('records')}
+                    
                     sel_p_key = st.selectbox("Seleccione el producto:", list(mapa_p.keys()))
                     prod_obj = mapa_p.get(sel_p_key, None)
                 else:
-                    st.warning("Catálogo vacío.")
+                    st.warning("⚠️ No se encontraron productos clasificados estrictamente para VENTA.")
                     prod_obj = None
 
             # --- LÓGICA DE TARIFAS E IMPRESIÓN ---
