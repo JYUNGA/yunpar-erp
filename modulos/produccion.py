@@ -127,7 +127,9 @@ def render(supabase):
             f_des = c_des.date_input("Desde", value=datetime.date.today()-datetime.timedelta(days=30))
             f_has = c_has.date_input("Hasta", value=datetime.date.today())
 
+        # Filtramos con ilike para traer exclusivamente códigos de taller (ORD-) e ignorar las ventas directas
         q = supabase.table('ordenes').select("*, clientes(id, nombre_completo, cedula_ruc, telefono)").order('created_at', desc=True)
+        q = q.ilike('codigo_orden', 'ORD-%')
         q = q.gte('created_at', str(f_des)).lte('created_at', str(f_has)+" 23:59:59")
         
         with st.spinner("Cargando órdenes..."):
