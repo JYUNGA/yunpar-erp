@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime
 import PyPDF2
 import io
+import time  # <--- AGREGA ESTA LÍNEA
 
 # ==========================================
 # UTILIDADES
@@ -325,20 +326,22 @@ def render(supabase):
         if specs_list:
             df_specs = pd.DataFrame(specs_list)
             
-            # NUEVO: Ajustamos las columnas para que quepa el 5to filtro
-            col_f1, col_f2, col_f3, col_f4, col_f_gen, col_f5 = st.columns([1.5, 1.5, 1.5, 1.5, 1.5, 1])
+            # Ajustamos las columnas a 7 espacios para incluir el selector de Cuello de forma estética
+            col_f1, col_f2, col_f3, col_f4, col_f_gen, col_f_cue, col_f5 = st.columns([1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1])
             
             lista_productos = ["Todos"] + list(df_specs['Producto'].unique())
             lista_telas_filtro = ["Todos"] + list(df_specs['Tela'].unique())
             lista_tsup = ["Todos"] + [t for t in df_specs['Talla Sup.'].unique() if t != "-"]
             lista_tinf = ["Todos"] + [t for t in df_specs['Talla Inf.'].unique() if t != "-"]
             lista_generos = ["Todos"] + [g for g in df_specs['Género'].unique() if g != "-"]
+            lista_cuellos = ["Todos"] + [c for c in df_specs['Cuello'].unique() if c != "-"] # Lista de cuellos únicos
             
             filtro_prod = col_f1.selectbox("Producto:", lista_productos)
             filtro_tela = col_f2.selectbox("Tela:", lista_telas_filtro)
             filtro_tsup = col_f3.selectbox("Talla Sup:", lista_tsup)
             filtro_tinf = col_f4.selectbox("Talla Inf:", lista_tinf)
             filtro_genero = col_f_gen.selectbox("Género:", lista_generos)
+            filtro_cuello = col_f_cue.selectbox("Cuello:", lista_cuellos) # Dropdown del nuevo filtro
             
             df_filtrado = df_specs.copy()
             if filtro_prod != "Todos": df_filtrado = df_filtrado[df_filtrado['Producto'] == filtro_prod]
@@ -346,6 +349,7 @@ def render(supabase):
             if filtro_tsup != "Todos": df_filtrado = df_filtrado[df_filtrado['Talla Sup.'] == filtro_tsup]
             if filtro_tinf != "Todos": df_filtrado = df_filtrado[df_filtrado['Talla Inf.'] == filtro_tinf]
             if filtro_genero != "Todos": df_filtrado = df_filtrado[df_filtrado['Género'] == filtro_genero]
+            if filtro_cuello != "Todos": df_filtrado = df_filtrado[df_filtrado['Cuello'] == filtro_cuello] # Inyección del filtro lógico
             
             # --- Agrupar filas idénticas, sumar cantidad y guardar IDs ---
             if df_filtrado.empty:
@@ -393,6 +397,37 @@ def render(supabase):
                     prendas_reales = df_agrupado['Cant.'].sum()
                     
                 col_f5.metric("👕 Prendas en vista:", int(prendas_reales))
+                
+                # --- NUEVO: BOTONES DE CONVERSIÓN DE TEXTO EN BLOQUE PARA DISEÑO ---
+                col_case1, col_case2, col_case_sp = st.columns([1.8, 1.8, 5])
+                
+                if col_case1.button("🔠 TODO MAYÚSCULAS", use_container_width=True):
+                    with st.spinner("Formateando nombres..."):
+                        try:
+                            for _, row in df_filtrado.iterrows():
+                                nombre_original = str(row.get('Jugador', '')).strip()
+                                id_db = row.get('ID_Esp')
+                                # Usamos 'nombre_jugador' tal cual está en tu SQL
+                                if nombre_original and nombre_original != "-" and id_db:
+                                    supabase.table('especificaciones_producto').update({"nombre_jugador": nombre_original.upper()}).eq('id', int(id_db)).execute()
+                            st.success("Nombres convertidos a MAYÚSCULAS.")
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e: st.error(f"Error al cambiar a mayúsculas: {e}")
+                        
+                if col_case2.button("🔤 Tipo Título", use_container_width=True):
+                    with st.spinner("Formateando nombres..."):
+                        try:
+                            for _, row in df_filtrado.iterrows():
+                                nombre_original = str(row.get('Jugador', '')).strip()
+                                id_db = row.get('ID_Esp')
+                                if nombre_original and nombre_original != "-" and id_db:
+                                    # .title() pone la primera letra en mayúscula y el resto en minúscula
+                                    supabase.table('especificaciones_producto').update({"nombre_jugador": nombre_original.title()}).eq('id', int(id_db)).execute()
+                            st.success("Nombres convertidos a Tipo Título.")
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e: st.error(f"Error al cambiar a tipo título: {e}")
                 
                 # --- NUEVA LÓGICA DE COLORES DE 4 ESTADOS ---
                 def estilo_filas(row):

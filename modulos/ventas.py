@@ -479,7 +479,8 @@ def render(supabase):
 
                     cantidad_cobro = st.number_input("Total Metros a Cobrar", value=float(largo_total_calculado), min_value=0.0, step=0.1)
                 else:
-                    cantidad_cobro = st.number_input("Cantidad", min_value=1.0, value=1.0, step=1.0)
+                    # Cambiado min_value y step para autorizar fracciones decimales en ventas directas
+                    cantidad_cobro = st.number_input("Cantidad", min_value=0.01, value=1.0, step=0.1, format="%.2f")
 
                 st.write("")
                 if st.button("➕ Agregar al Carrito", type="primary"):
@@ -704,6 +705,26 @@ def render(supabase):
                                     use_container_width=True,
                                     type="primary"
                                 )
+                                
+                                st.write("")
+                                # BOTÓN DE BORRADO ABSOLUTO: Elimina en cascada manual respetando las claves foráneas
+                                if st.button(f"🗑️ Eliminar Venta {cod_sel}", type="secondary", use_container_width=True):
+                                    try:
+                                        id_v = datos_venta.get('id')
+                                        if id_v:
+                                            # Eliminamos de pagos para restar de los ingresos contables reales
+                                            supabase.table('pagos').delete().eq('orden_id', id_v).execute()
+                                            supabase.table('archivos_impresion').delete().eq('orden_id', id_v).execute()
+                                            supabase.table('items_orden').delete().eq('orden_id', id_v).execute()
+                                            supabase.table('ordenes').delete().eq('id', id_v).execute()
+                                            
+                                            st.success(f"Venta {cod_sel} eliminada correctamente de finanzas y caja.")
+                                            time.sleep(1.5)
+                                            st.rerun()
+                                        else:
+                                            st.error("No se localizó el ID único de la transacción.")
+                                    except Exception as e:
+                                        st.error(f"Error crítico al eliminar venta: {e}")
                 else:
                     st.info("No hay ventas que coincidan con tu búsqueda en este rango de fechas.")
             else:
