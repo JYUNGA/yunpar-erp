@@ -11,3 +11,5 @@ requests
 openpyxl
 pytz
 google-generativeai
+xlrd
+openpyxl

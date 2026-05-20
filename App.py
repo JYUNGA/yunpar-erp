@@ -6,8 +6,8 @@ import pytz
 import google.generativeai as genai # <-- LA LIBRERÍA OFICIAL DE GEMINI
 
 # --- IMPORTACIÓN DE MÓDULOS ---
-# 1. AGREGAMOS 'ventas' a la lista de importaciones
-from modulos import clientes, productos, insumos, cotizaciones, produccion, finanzas, reportes, disenador, impresion, usuarios, ventas, facturacion 
+# Importamos el nuevo módulo de asistencia y nómina junto a los demás
+from modulos import clientes, productos, insumos, cotizaciones, produccion, finanzas, reportes, disenador, impresion, usuarios, ventas, facturacion, rh 
 
 
 # --- CONFIGURACIÓN GLOBAL ---
@@ -27,11 +27,11 @@ def init_connection():
 supabase = init_connection()
 
 # --- DICCIONARIO DE ROLES Y PERMISOS (RBAC) ---
-# 2. AGREGAMOS "Ventas" a los roles de GERENTE y VENDEDORA
+# Se añade "Asistencia y Nómina" como acceso EXCLUSIVO para el rol GERENTE
 PERMISOS = {
     "GERENTE": [
         "Inicio", "Ventas", "Cotizaciones", "Producción", "Facturación", "Reportes", 
-        "Diseño", "Impresión", "Caja y Finanzas", 
+        "Diseño", "Impresión", "Caja y Finanzas", "Asistencia y Nómina", 
         "Clientes", "Productos", "Insumos", "Usuarios"
     ],
     "VENDEDORA": [
@@ -41,7 +41,7 @@ PERMISOS = {
         "Inicio", "Impresión", "Reportes"
     ],
     "DISEÑADOR": [
-        "Inicio", "Diseño" # Producción habilitado para subir artes finales
+        "Inicio", "Diseño"
     ]
 }
 
@@ -190,6 +190,8 @@ def enrutador(opcion):
     elif opcion == "Productos": productos.render(supabase)
     elif opcion == "Insumos": insumos.render(supabase)
     elif opcion == "Usuarios": usuarios.render(supabase)
+    # Enlazamos la opción de navegación con la función render de tu archivo rh.py
+    elif opcion == "Asistencia y Nómina": rh.render(supabase)
 
 # --- FLUJO PRINCIPAL ---
 inicializar_estado()
