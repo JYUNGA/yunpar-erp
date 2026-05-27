@@ -10,10 +10,28 @@ import io
 # ==========================================
 
 def limpiar_texto_pdf(texto):
-    """Elimina emojis y caracteres especiales no soportados por FPDF (Helvetica)"""
+    """Reemplaza caracteres Unicode comunes por equivalentes latin-1 y elimina los que no soporta FPDF (Helvetica)"""
     if not texto: return ""
-    # El ignore elimina cualquier símbolo que rompa la codificación latin-1 del PDF
-    return str(texto).encode('latin-1', 'ignore').decode('latin-1')
+    t = str(texto)
+    # Reemplazar comillas tipográficas por ASCII antes de codificar (así no se pierde texto)
+    t = t.replace('\u2018', "'").replace('\u2019', "'")  # ' ' → '
+    t = t.replace('\u201c', '"').replace('\u201d', '"')  # " " → "
+    t = t.replace('\u2013', '-').replace('\u2014', '-')  # – — → -
+    t = t.replace('\u2026', '...')                        # … → ...
+    t = t.replace('\u2022', '-')                          # • → -
+    # El ignore elimina cualquier otro símbolo que rompa la codificación latin-1 del PDF
+    return t.encode('latin-1', 'ignore').decode('latin-1')
+
+def limpiar_objeto_pdf(obj):
+    """Recorre recursivamente diccionarios y listas limpiando todos los strings para FPDF."""
+    if isinstance(obj, dict):
+        return {k: limpiar_objeto_pdf(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [limpiar_objeto_pdf(v) for v in obj]
+    elif isinstance(obj, str):
+        return limpiar_texto_pdf(obj)
+    else:
+        return obj  # Deja enteros, flotantes, booleans y Nones intactos
 
 def formatear_fecha_es(fecha_str):
     if not fecha_str: return "Fecha no definida"
@@ -231,6 +249,7 @@ class PDFTaller(FPDF):
         self.set_text_color(0, 0, 0)
         
 def generar_comprobante_cliente(orden):
+    orden = limpiar_objeto_pdf(orden)  # <--- DESINFECCIÓN TOTAL AQUÍ
     pdf = PDFComprobante()
     pdf.add_page()
     items_financieros = agrupar_items_financiero(orden['items']) 
@@ -245,11 +264,11 @@ def generar_comprobante_cliente(orden):
 
     pdf.set_font("helvetica", "B", 10)
     cli = orden.get('clientes', {})
-    nombre_cliente = cli.get('nombre_completo', cli.get('nombre', 'Consumidor Final'))
-    telefono = cli.get('telefono', cli.get('celular', 'No registrado'))
-    correo = cli.get('correo', cli.get('email', 'No registrado'))
-    creador = orden.get('creador', 'No registrado')
-    disenador = orden.get('disenador_asignado', 'No asignado')
+    nombre_cliente = limpiar_texto_pdf(cli.get('nombre_completo', cli.get('nombre', 'Consumidor Final')))
+    telefono = limpiar_texto_pdf(cli.get('telefono', cli.get('celular', 'No registrado')))
+    correo = limpiar_texto_pdf(cli.get('correo', cli.get('email', 'No registrado')))
+    creador = limpiar_texto_pdf(orden.get('creador', 'No registrado'))
+    disenador = limpiar_texto_pdf(orden.get('disenador_asignado', 'No asignado'))
 
     ancho_etiqueta1 = 27; ancho_valor1 = 75; ancho_etiqueta2 = 31 # Aumentamos 5mm al ancho_valor1 para separar la columna 
     
@@ -286,7 +305,7 @@ def generar_comprobante_cliente(orden):
         
         for item in items_financieros:
             row = table.row(style=estilo_datos)
-            nombre_prod = str(item.get('nombre_producto', 'Producto no definido')).replace('│', '|').replace('—', '-') 
+            nombre_prod = limpiar_texto_pdf(str(item.get('nombre_producto', 'Producto no definido')).replace('│', '|').replace('—', '-'))
             row.cell(nombre_prod); row.cell(str(item.get('cantidad_total', 0)))
             
             precio = float(item.get('precio_aplicado', 0))
@@ -336,7 +355,7 @@ def generar_comprobante_cliente(orden):
                 row = t_pagos.row(style=estilo_datos_pagos)
                 f_pago = p.get('fecha_pago', '')
                 if f_pago and len(f_pago) >= 10: f_pago = f"{f_pago[8:10]}/{f_pago[5:7]}/{f_pago[2:4]}"
-                banco = p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo'
+                banco = limpiar_texto_pdf(p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo')
                 row.cell(f_pago); row.cell(str(banco)[:20]); row.cell(f"${float(p.get('monto', 0)):.2f}")
         
         y_after_table = pdf.get_y()
@@ -348,7 +367,7 @@ def generar_comprobante_cliente(orden):
         
         pdf.set_xy(110, start_y + 6)
         pdf.set_font("helvetica", "", 8)
-        observaciones = str(orden.get('observaciones_generales') or 'Ninguna').strip()
+        observaciones = limpiar_texto_pdf(str(orden.get('observaciones_generales') or 'Ninguna').strip())
         pdf.multi_cell(85, 4, observaciones)
         y_after_obs = pdf.get_y()
         
@@ -420,7 +439,7 @@ def generar_comprobante_cliente(orden):
                 row = t_pagos.row(style=estilo_datos_pagos)
                 f_pago = p.get('fecha_pago', '')
                 if f_pago and len(f_pago) >= 10: f_pago = f"{f_pago[8:10]}/{f_pago[5:7]}/{f_pago[0:4]}"
-                banco = p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo'
+                banco = limpiar_texto_pdf(p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo')
                 row.cell(f_pago); row.cell(str(banco)); row.cell(f"${float(p.get('monto', 0)):.2f}")
         necesita_nueva_hoja_anexo = True
 
@@ -443,7 +462,7 @@ def generar_comprobante_cliente(orden):
     estilo_datos_anexo = FontFace(fill_color=(255, 255, 255), color=(0, 0, 0), emphasis="")
 
     for item in items_anexo_taller:
-        nombre_prod = str(item.get('nombre_producto', 'Producto')).replace('│', '|').replace('—', '-')
+        nombre_prod = limpiar_texto_pdf(str(item.get('nombre_producto', 'Producto')).replace('│', '|').replace('—', '-'))
         tela = item.get('nombre_tela', 'Estándar')
         familia = item.get('familia_producto', 'GENERICO')
         especificaciones_crudas = item.get('especificaciones_producto', [])
@@ -557,26 +576,27 @@ def generar_comprobante_cliente(orden):
 # 4. HOJA DE PRODUCCIÓN TALLER (SOLUCIÓN DEFINITIVA DE TABLAS AISLADAS)
 # ==========================================
 def generar_hoja_produccion(orden):
+    orden = limpiar_objeto_pdf(orden)  # <--- DESINFECCIÓN TOTAL AQUÍ
     pdf = PDFTaller() 
     pdf.add_page()
     items_taller = agrupar_items_taller(orden['items'])
     
     # --- 1. CABECERA TALLER ---
     pdf.set_font("helvetica", "B", 26)
-    pdf.cell(100, 12, f"ORDEN: {orden['codigo_orden']}", border=False)
+    pdf.cell(100, 12, f"ORDEN: {limpiar_texto_pdf(orden['codigo_orden'])}", border=False)
     
     pdf.set_font("helvetica", "B", 14)
     pdf.set_text_color(200, 0, 0)
-    pdf.cell(0, 12, f"ENTREGA: {formatear_fecha_es(orden.get('fecha_entrega'))}", align="R", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 12, limpiar_texto_pdf(f"ENTREGA: {formatear_fecha_es(orden.get('fecha_entrega'))}"), align="R", new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(0, 0, 0)
     
     pdf.set_font("helvetica", "", 10)
-    creador = orden.get('creador', 'No registrado')
-    disenador = orden.get('disenador_asignado', 'No asignado')
+    creador = limpiar_texto_pdf(orden.get('creador', 'No registrado'))
+    disenador = limpiar_texto_pdf(orden.get('disenador_asignado', 'No asignado'))
     cli = orden.get('clientes', {})
-    nombre_cliente = cli.get('nombre_completo', cli.get('nombre', 'Consumidor Final'))
-    pdf.cell(0, 6, f"Diseñador: {disenador}  |  Asesor: {creador}", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 6, f"Cliente: {nombre_cliente}", new_x="LMARGIN", new_y="NEXT")
+    nombre_cliente = limpiar_texto_pdf(cli.get('nombre_completo', cli.get('nombre', 'Consumidor Final')))
+    pdf.cell(0, 6, limpiar_texto_pdf(f"Diseñador: {disenador}  |  Asesor: {creador}"), new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 6, limpiar_texto_pdf(f"Cliente: {nombre_cliente}"), new_x="LMARGIN", new_y="NEXT")
     
     if orden.get('alerta_cambios'):
         pdf.ln(2); pdf.set_font("helvetica", "B", 12); pdf.set_fill_color(255, 200, 200)
@@ -690,7 +710,7 @@ def generar_hoja_produccion(orden):
             y_base_fila = y_actual
             
             # 1. Obtenemos el texto del título sin recortar
-            tit_completo = tabla["titulo"]
+            tit_completo = limpiar_texto_pdf(tabla["titulo"])
             
             # 2. Matemáticas: Calculamos cuánto espacio Y ocupa el título con multi_cell
             # 'h' es la altura de cada línea (3.5mm)
@@ -729,15 +749,15 @@ def generar_hoja_produccion(orden):
                 datos_ord = sorted(tabla["datos"].items(), key=lambda x: orden_talla(x[0]))
                 for t, cant in datos_ord:
                     pdf.set_x(x)
-                    pdf.cell(20, 6, str(t), border=1, align="C")
+                    pdf.cell(20, 6, limpiar_texto_pdf(str(t)), border=1, align="C")
                     pdf.cell(20, 6, str(cant), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
                     tot_cant += cant
             else:
                 datos_ord = sorted(tabla["datos"].items(), key=lambda x: (orden_talla(x[0][0]), x[0][1]))
                 for (t, c), cant in datos_ord:
                     pdf.set_x(x)
-                    pdf.cell(15, 6, str(t), border=1, align="C")
-                    color_str = str(c)[:10] + "." if len(str(c)) > 10 else str(c)
+                    pdf.cell(15, 6, limpiar_texto_pdf(str(t)), border=1, align="C")
+                    color_str = limpiar_texto_pdf(str(c)[:10] + "." if len(str(c)) > 10 else str(c))
                     pdf.cell(20, 6, color_str, border=1, align="C")
                     pdf.cell(15, 6, str(cant), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
                     tot_cant += cant
@@ -783,9 +803,9 @@ def generar_hoja_produccion(orden):
 
     for item in items_taller:
         familia = item.get('familia_producto', 'GENERICO').upper()
-        nombre_prod = str(item.get('nombre_producto', familia)).replace('│', '|').replace('—', '-')
+        nombre_prod = limpiar_texto_pdf(str(item.get('nombre_producto', familia)).replace('│', '|').replace('—', '-'))
         especificaciones_crudas = item.get('especificaciones_producto', [])
-        tela = item.get('nombre_tela', 'Estándar') 
+        tela = limpiar_texto_pdf(item.get('nombre_tela', 'Estándar'))
         
         # AGRUPACIÓN DE IDÉNTICOS PARA AHORRAR ESPACIO
         agrupadas = {}
@@ -814,7 +834,7 @@ def generar_hoja_produccion(orden):
 
         pdf.set_font("helvetica", "B", 11)
         pdf.set_fill_color(220, 220, 220)
-        titulo_prod = f" PRODUCTO: {nombre_prod}   |   CANTIDAD TOTAL: {item.get('cantidad_total', 0)}\n TELA A USAR: {tela}"
+        titulo_prod = limpiar_texto_pdf(f" PRODUCTO: {nombre_prod}   |   CANTIDAD TOTAL: {item.get('cantidad_total', 0)}\n TELA A USAR: {tela}")
         pdf.multi_cell(0, 7, titulo_prod, border=1, fill=True, align="L")
 
         if not especificaciones:
@@ -865,19 +885,19 @@ def generar_hoja_produccion(orden):
                 
                 if familia == 'UNIFORME COMPLETO':
                     row.cell(c_fila)
-                    row.cell(str(esp.get('talla_superior') or '-').strip() or '-'); row.cell(str(esp.get('talla_inferior') or '-').strip() or '-')
+                    row.cell(limpiar_texto_pdf(str(esp.get('talla_superior') or '-').strip() or '-')); row.cell(limpiar_texto_pdf(str(esp.get('talla_inferior') or '-').strip() or '-'))
                     row.cell(nom_limpio); row.cell(num_limpio)
                     row.cell(cuello_limpio)
-                    if tiene_polines: row.cell(str(esp.get('talla_polines') or '-').strip() or '-')
+                    if tiene_polines: row.cell(limpiar_texto_pdf(str(esp.get('talla_polines') or '-').strip() or '-'))
                     row.cell(obs_limpia_txt)
                 elif familia == 'PRENDA SUPERIOR':
                     row.cell(c_fila)
-                    row.cell(str(esp.get('talla_superior') or '-').strip() or '-'); row.cell("-")
+                    row.cell(limpiar_texto_pdf(str(esp.get('talla_superior') or '-').strip() or '-')); row.cell("-")
                     row.cell(nom_limpio); row.cell(num_limpio)
                     row.cell(cuello_limpio); row.cell(obs_limpia_txt)
                 elif familia == 'PANTALONETA':
                     row.cell(c_fila)
-                    row.cell(str(esp.get('talla_inferior') or '-').strip() or '-'); row.cell(num_limpio)
+                    row.cell(limpiar_texto_pdf(str(esp.get('talla_inferior') or '-').strip() or '-')); row.cell(num_limpio)
                     row.cell(obs_limpia_txt)
                 elif familia == 'IMPRESION':
                     row.cell(c_fila)
@@ -906,7 +926,7 @@ def generar_hoja_produccion(orden):
         
         pdf.set_font("helvetica", "B", 11) # Texto en negrita
         # multi_cell permite que el texto baje de línea automáticamente si es muy largo
-        pdf.multi_cell(0, 8, f" {observaciones}", border=1, align="L")
+        pdf.multi_cell(0, 8, limpiar_texto_pdf(f" {observaciones}"), border=1, align="L")
         pdf.ln(5)
 
     return bytes(pdf.output())
