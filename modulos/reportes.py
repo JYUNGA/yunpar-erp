@@ -22,6 +22,17 @@ def limpiar_texto_pdf(texto):
     # El ignore elimina cualquier otro símbolo que rompa la codificación latin-1 del PDF
     return t.encode('latin-1', 'ignore').decode('latin-1')
 
+def limpiar_objeto_pdf(obj):
+    """Recorre recursivamente diccionarios y listas limpiando todos los strings para FPDF."""
+    if isinstance(obj, dict):
+        return {k: limpiar_objeto_pdf(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [limpiar_objeto_pdf(v) for v in obj]
+    elif isinstance(obj, str):
+        return limpiar_texto_pdf(obj)
+    else:
+        return obj  # Deja enteros, flotantes, booleans y Nones intactos
+
 def formatear_fecha_es(fecha_str):
     if not fecha_str: return "Fecha no definida"
     try:
@@ -238,6 +249,7 @@ class PDFTaller(FPDF):
         self.set_text_color(0, 0, 0)
         
 def generar_comprobante_cliente(orden):
+    orden = limpiar_objeto_pdf(orden)  # <--- DESINFECCIÓN TOTAL AQUÍ
     pdf = PDFComprobante()
     pdf.add_page()
     items_financieros = agrupar_items_financiero(orden['items']) 
@@ -564,6 +576,7 @@ def generar_comprobante_cliente(orden):
 # 4. HOJA DE PRODUCCIÓN TALLER (SOLUCIÓN DEFINITIVA DE TABLAS AISLADAS)
 # ==========================================
 def generar_hoja_produccion(orden):
+    orden = limpiar_objeto_pdf(orden)  # <--- DESINFECCIÓN TOTAL AQUÍ
     pdf = PDFTaller() 
     pdf.add_page()
     items_taller = agrupar_items_taller(orden['items'])
