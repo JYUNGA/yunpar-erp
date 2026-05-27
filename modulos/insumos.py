@@ -8,6 +8,23 @@ def render(supabase):
     st.title("🧵 Gestión de Insumos")
     tab1, tab2, tab3 = st.tabs(["🔍 Buscador y Edición", "➕ Nuevo Manual", "📂 Importar / Exportar"])
 
+    # --- CATEGORÍAS Y UNIDADES DINÁMICAS DESDE LA BD ---
+    try:
+        # Traemos ambos campos en un solo consulta para optimizar
+        res_datos = supabase.table('insumos').select("categoria, unidad_medida").execute()
+        cats_db = sorted(list(set([d['categoria'] for d in res_datos.data if d['categoria']])))
+        unds_db = sorted(list(set([d['unidad_medida'] for d in res_datos.data if d['unidad_medida']])))
+    except:
+        cats_db, unds_db = [], []
+
+    CATEGORIAS_BASE = ["TELA", "HILO", "PAPEL", "TINTA", "OTROS", "SERVICIOS"]
+    CATEGORIAS = sorted(list(set(cats_db + CATEGORIAS_BASE)))
+    OPCION_NUEVA_CAT = "➕ Nueva Categoría..."
+
+    UNIDADES_BASE = ["METRO", "KG", "ROLLO", "UNIDAD", "LITRO", "CARRETE"]
+    UNIDADES = sorted(list(set(unds_db + UNIDADES_BASE)))
+    OPCION_NUEVA_UND = "➕ Nueva Unidad..."
+
     # --- FUNCIONES AUXILIARES ---
     def generar_cod_insumo():
         try:
@@ -87,15 +104,19 @@ def render(supabase):
                 with st.form("edit_insumo_form"):
                     c_e1, c_e2, c_e3 = st.columns(3)
                     
-                    lista_cat = ["TELA", "HILO", "PAPEL", "TINTA", "OTROS", "SERVICIOS"]
-                    idx_cat = lista_cat.index(item['categoria']) if item['categoria'] in lista_cat else 0
-                    new_cat = c_e1.selectbox("Categoría", lista_cat, index=idx_cat)
+                    opciones_cat_edit = CATEGORIAS + [OPCION_NUEVA_CAT]
+                    idx_cat = opciones_cat_edit.index(item['categoria']) if item['categoria'] in opciones_cat_edit else 0
+                    new_cat_sel = c_e1.selectbox("Categoría", opciones_cat_edit, index=idx_cat)
+                    new_cat_extra = st.text_input("Nombre nueva categoría", key="edit_nueva_cat") if new_cat_sel == OPCION_NUEVA_CAT else ""
+                    new_cat = new_cat_extra.strip().upper() if new_cat_sel == OPCION_NUEVA_CAT else new_cat_sel
                     
                     new_nom = c_e2.text_input("Descripción", value=item['nombre'])
                     
-                    lista_und = ["METRO", "KG", "ROLLO", "UNIDAD", "LITRO", "CARRETE"]
-                    idx_und = lista_und.index(item['unidad_medida']) if item['unidad_medida'] in lista_und else 0
-                    new_und = c_e3.selectbox("Unidad", lista_und, index=idx_und)
+                    opciones_und_edit = UNIDADES + [OPCION_NUEVA_UND]
+                    idx_und = opciones_und_edit.index(item['unidad_medida']) if item['unidad_medida'] in opciones_und_edit else 0
+                    new_und_sel = c_e3.selectbox("Unidad", opciones_und_edit, index=idx_und)
+                    new_und_extra = st.text_input("Nombre nueva unidad", key="edit_nueva_und") if new_und_sel == OPCION_NUEVA_UND else ""
+                    new_und = new_und_extra.strip().upper() if new_und_sel == OPCION_NUEVA_UND else new_und_sel
                     
                     c_e4, c_e5 = st.columns(2)
                     new_cost = c_e4.number_input("Costo Unitario ($)", value=float(item['costo_unitario']), format="%.4f")
@@ -137,12 +158,18 @@ def render(supabase):
             n_nom = c2.text_input("Descripción del Material *")
             
             c3, c4, c5 = st.columns(3)
-            n_cat = c3.selectbox("Categoría", ["TELA", "HILO", "PAPEL", "TINTA", "OTROS"])
-            n_und = c4.selectbox("Unidad", ["METRO", "KG", "ROLLO", "UNIDAD", "LITRO"])
+            opciones_cat_new = CATEGORIAS + [OPCION_NUEVA_CAT]
+            n_cat_sel = c3.selectbox("Categoría", opciones_cat_new)
+            n_cat_extra = c3.text_input("Nueva categoría", key="new_nueva_cat") if n_cat_sel == OPCION_NUEVA_CAT else ""
+            n_cat = n_cat_extra.strip().upper() if n_cat_sel == OPCION_NUEVA_CAT else n_cat_sel
+            opciones_und_new = UNIDADES + [OPCION_NUEVA_UND]
+            n_und_sel = c4.selectbox("Unidad", opciones_und_new)
+            n_und_extra = c4.text_input("Nueva unidad", key="new_nueva_und") if n_und_sel == OPCION_NUEVA_UND else ""
+            n_und = n_und_extra.strip().upper() if n_und_sel == OPCION_NUEVA_UND else n_und_sel
             n_cos = c5.number_input("Costo Unitario ($)", min_value=0.0, format="%.4f")
             
             if st.form_submit_button("Guardar Material"):
-                if n_nom:
+                if n_nom and n_cat and n_und:
                     try:
                         supabase.table('insumos').insert({
                             "codigo_insumo": auto_cod, "categoria": n_cat, "nombre": n_nom.upper(),
@@ -150,7 +177,7 @@ def render(supabase):
                         }).execute()
                         st.success(f"Material {n_nom} creado con código {auto_cod}"); time.sleep(1.5); st.rerun()
                     except Exception as e: st.error(f"Error: {e}")
-                else: st.warning("Falta la descripción.")
+                else: st.warning("Falta la descripción, categoría o unidad.")
 
     # ==============================================================================
     # TAB 3: IMPORTAR / EXPORTAR

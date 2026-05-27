@@ -98,10 +98,13 @@ def render(supabase):
                     fechas_creacion = pd.to_datetime(df_filtrado['created_at'])
                     df_filtrado = df_filtrado[(fechas_creacion >= inicio) & (fechas_creacion <= fin)]
                 
+                # Calculamos el total abonado dinámicamente (Total - Saldo) para que las cuentas cuadren visualmente
+                df_filtrado['total_abonado'] = df_filtrado['total_estimado'].astype(float) - df_filtrado['saldo_pendiente'].astype(float)
+
                 st.markdown("👇 **Haz clic en la fila de la orden en la tabla para registrar su pago:**")
                 
                 evento_tabla = st.dataframe(
-                    df_filtrado[["id", "codigo_orden", "Cliente", "total_estimado", "abono_inicial", "saldo_pendiente", "estado"]], 
+                    df_filtrado[["id", "codigo_orden", "Cliente", "total_estimado", "total_abonado", "saldo_pendiente", "estado"]], 
                     use_container_width=True, 
                     hide_index=True,
                     selection_mode="single-row",
@@ -109,7 +112,7 @@ def render(supabase):
                     column_config={
                         "id": None, 
                         "total_estimado": st.column_config.NumberColumn("Total", format="$ %.2f"),
-                        "abono_inicial": st.column_config.NumberColumn("Abono", format="$ %.2f"),
+                        "total_abonado": st.column_config.NumberColumn("Total Abonado", format="$ %.2f"),
                         "saldo_pendiente": st.column_config.NumberColumn("Saldo", format="$ %.2f")
                     }
                 )
