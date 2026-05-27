@@ -10,10 +10,17 @@ import io
 # ==========================================
 
 def limpiar_texto_pdf(texto):
-    """Elimina emojis y caracteres especiales no soportados por FPDF (Helvetica)"""
+    """Reemplaza caracteres Unicode comunes por equivalentes latin-1 y elimina los que no soporta FPDF (Helvetica)"""
     if not texto: return ""
-    # El ignore elimina cualquier símbolo que rompa la codificación latin-1 del PDF
-    return str(texto).encode('latin-1', 'ignore').decode('latin-1')
+    t = str(texto)
+    # Reemplazar comillas tipográficas por ASCII antes de codificar (así no se pierde texto)
+    t = t.replace('\u2018', "'").replace('\u2019', "'")  # ' ' → '
+    t = t.replace('\u201c', '"').replace('\u201d', '"')  # " " → "
+    t = t.replace('\u2013', '-').replace('\u2014', '-')  # – — → -
+    t = t.replace('\u2026', '...')                        # … → ...
+    t = t.replace('\u2022', '-')                          # • → -
+    # El ignore elimina cualquier otro símbolo que rompa la codificación latin-1 del PDF
+    return t.encode('latin-1', 'ignore').decode('latin-1')
 
 def formatear_fecha_es(fecha_str):
     if not fecha_str: return "Fecha no definida"
@@ -245,11 +252,11 @@ def generar_comprobante_cliente(orden):
 
     pdf.set_font("helvetica", "B", 10)
     cli = orden.get('clientes', {})
-    nombre_cliente = cli.get('nombre_completo', cli.get('nombre', 'Consumidor Final'))
-    telefono = cli.get('telefono', cli.get('celular', 'No registrado'))
-    correo = cli.get('correo', cli.get('email', 'No registrado'))
-    creador = orden.get('creador', 'No registrado')
-    disenador = orden.get('disenador_asignado', 'No asignado')
+    nombre_cliente = limpiar_texto_pdf(cli.get('nombre_completo', cli.get('nombre', 'Consumidor Final')))
+    telefono = limpiar_texto_pdf(cli.get('telefono', cli.get('celular', 'No registrado')))
+    correo = limpiar_texto_pdf(cli.get('correo', cli.get('email', 'No registrado')))
+    creador = limpiar_texto_pdf(orden.get('creador', 'No registrado'))
+    disenador = limpiar_texto_pdf(orden.get('disenador_asignado', 'No asignado'))
 
     ancho_etiqueta1 = 27; ancho_valor1 = 75; ancho_etiqueta2 = 31 # Aumentamos 5mm al ancho_valor1 para separar la columna 
     
@@ -286,7 +293,7 @@ def generar_comprobante_cliente(orden):
         
         for item in items_financieros:
             row = table.row(style=estilo_datos)
-            nombre_prod = str(item.get('nombre_producto', 'Producto no definido')).replace('│', '|').replace('—', '-') 
+            nombre_prod = limpiar_texto_pdf(str(item.get('nombre_producto', 'Producto no definido')).replace('│', '|').replace('—', '-'))
             row.cell(nombre_prod); row.cell(str(item.get('cantidad_total', 0)))
             
             precio = float(item.get('precio_aplicado', 0))
@@ -336,7 +343,7 @@ def generar_comprobante_cliente(orden):
                 row = t_pagos.row(style=estilo_datos_pagos)
                 f_pago = p.get('fecha_pago', '')
                 if f_pago and len(f_pago) >= 10: f_pago = f"{f_pago[8:10]}/{f_pago[5:7]}/{f_pago[2:4]}"
-                banco = p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo'
+                banco = limpiar_texto_pdf(p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo')
                 row.cell(f_pago); row.cell(str(banco)[:20]); row.cell(f"${float(p.get('monto', 0)):.2f}")
         
         y_after_table = pdf.get_y()
@@ -348,7 +355,7 @@ def generar_comprobante_cliente(orden):
         
         pdf.set_xy(110, start_y + 6)
         pdf.set_font("helvetica", "", 8)
-        observaciones = str(orden.get('observaciones_generales') or 'Ninguna').strip()
+        observaciones = limpiar_texto_pdf(str(orden.get('observaciones_generales') or 'Ninguna').strip())
         pdf.multi_cell(85, 4, observaciones)
         y_after_obs = pdf.get_y()
         
@@ -420,7 +427,7 @@ def generar_comprobante_cliente(orden):
                 row = t_pagos.row(style=estilo_datos_pagos)
                 f_pago = p.get('fecha_pago', '')
                 if f_pago and len(f_pago) >= 10: f_pago = f"{f_pago[8:10]}/{f_pago[5:7]}/{f_pago[0:4]}"
-                banco = p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo'
+                banco = limpiar_texto_pdf(p.get('banco_destino') or p.get('metodo_pago') or 'Efectivo')
                 row.cell(f_pago); row.cell(str(banco)); row.cell(f"${float(p.get('monto', 0)):.2f}")
         necesita_nueva_hoja_anexo = True
 
@@ -443,7 +450,7 @@ def generar_comprobante_cliente(orden):
     estilo_datos_anexo = FontFace(fill_color=(255, 255, 255), color=(0, 0, 0), emphasis="")
 
     for item in items_anexo_taller:
-        nombre_prod = str(item.get('nombre_producto', 'Producto')).replace('│', '|').replace('—', '-')
+        nombre_prod = limpiar_texto_pdf(str(item.get('nombre_producto', 'Producto')).replace('│', '|').replace('—', '-'))
         tela = item.get('nombre_tela', 'Estándar')
         familia = item.get('familia_producto', 'GENERICO')
         especificaciones_crudas = item.get('especificaciones_producto', [])
@@ -571,10 +578,10 @@ def generar_hoja_produccion(orden):
     pdf.set_text_color(0, 0, 0)
     
     pdf.set_font("helvetica", "", 10)
-    creador = orden.get('creador', 'No registrado')
-    disenador = orden.get('disenador_asignado', 'No asignado')
+    creador = limpiar_texto_pdf(orden.get('creador', 'No registrado'))
+    disenador = limpiar_texto_pdf(orden.get('disenador_asignado', 'No asignado'))
     cli = orden.get('clientes', {})
-    nombre_cliente = cli.get('nombre_completo', cli.get('nombre', 'Consumidor Final'))
+    nombre_cliente = limpiar_texto_pdf(cli.get('nombre_completo', cli.get('nombre', 'Consumidor Final')))
     pdf.cell(0, 6, f"Diseñador: {disenador}  |  Asesor: {creador}", new_x="LMARGIN", new_y="NEXT")
     pdf.cell(0, 6, f"Cliente: {nombre_cliente}", new_x="LMARGIN", new_y="NEXT")
     
@@ -737,7 +744,7 @@ def generar_hoja_produccion(orden):
                 for (t, c), cant in datos_ord:
                     pdf.set_x(x)
                     pdf.cell(15, 6, str(t), border=1, align="C")
-                    color_str = str(c)[:10] + "." if len(str(c)) > 10 else str(c)
+                    color_str = limpiar_texto_pdf(str(c)[:10] + "." if len(str(c)) > 10 else str(c))
                     pdf.cell(20, 6, color_str, border=1, align="C")
                     pdf.cell(15, 6, str(cant), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
                     tot_cant += cant
@@ -783,9 +790,9 @@ def generar_hoja_produccion(orden):
 
     for item in items_taller:
         familia = item.get('familia_producto', 'GENERICO').upper()
-        nombre_prod = str(item.get('nombre_producto', familia)).replace('│', '|').replace('—', '-')
+        nombre_prod = limpiar_texto_pdf(str(item.get('nombre_producto', familia)).replace('│', '|').replace('—', '-'))
         especificaciones_crudas = item.get('especificaciones_producto', [])
-        tela = item.get('nombre_tela', 'Estándar') 
+        tela = limpiar_texto_pdf(item.get('nombre_tela', 'Estándar'))
         
         # AGRUPACIÓN DE IDÉNTICOS PARA AHORRAR ESPACIO
         agrupadas = {}
