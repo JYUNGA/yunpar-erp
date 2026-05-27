@@ -570,11 +570,11 @@ def generar_hoja_produccion(orden):
     
     # --- 1. CABECERA TALLER ---
     pdf.set_font("helvetica", "B", 26)
-    pdf.cell(100, 12, f"ORDEN: {orden['codigo_orden']}", border=False)
+    pdf.cell(100, 12, f"ORDEN: {limpiar_texto_pdf(orden['codigo_orden'])}", border=False)
     
     pdf.set_font("helvetica", "B", 14)
     pdf.set_text_color(200, 0, 0)
-    pdf.cell(0, 12, f"ENTREGA: {formatear_fecha_es(orden.get('fecha_entrega'))}", align="R", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 12, limpiar_texto_pdf(f"ENTREGA: {formatear_fecha_es(orden.get('fecha_entrega'))}"), align="R", new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(0, 0, 0)
     
     pdf.set_font("helvetica", "", 10)
@@ -582,8 +582,8 @@ def generar_hoja_produccion(orden):
     disenador = limpiar_texto_pdf(orden.get('disenador_asignado', 'No asignado'))
     cli = orden.get('clientes', {})
     nombre_cliente = limpiar_texto_pdf(cli.get('nombre_completo', cli.get('nombre', 'Consumidor Final')))
-    pdf.cell(0, 6, f"Diseñador: {disenador}  |  Asesor: {creador}", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 6, f"Cliente: {nombre_cliente}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 6, limpiar_texto_pdf(f"Diseñador: {disenador}  |  Asesor: {creador}"), new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 6, limpiar_texto_pdf(f"Cliente: {nombre_cliente}"), new_x="LMARGIN", new_y="NEXT")
     
     if orden.get('alerta_cambios'):
         pdf.ln(2); pdf.set_font("helvetica", "B", 12); pdf.set_fill_color(255, 200, 200)
@@ -697,7 +697,7 @@ def generar_hoja_produccion(orden):
             y_base_fila = y_actual
             
             # 1. Obtenemos el texto del título sin recortar
-            tit_completo = tabla["titulo"]
+            tit_completo = limpiar_texto_pdf(tabla["titulo"])
             
             # 2. Matemáticas: Calculamos cuánto espacio Y ocupa el título con multi_cell
             # 'h' es la altura de cada línea (3.5mm)
@@ -736,14 +736,14 @@ def generar_hoja_produccion(orden):
                 datos_ord = sorted(tabla["datos"].items(), key=lambda x: orden_talla(x[0]))
                 for t, cant in datos_ord:
                     pdf.set_x(x)
-                    pdf.cell(20, 6, str(t), border=1, align="C")
+                    pdf.cell(20, 6, limpiar_texto_pdf(str(t)), border=1, align="C")
                     pdf.cell(20, 6, str(cant), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
                     tot_cant += cant
             else:
                 datos_ord = sorted(tabla["datos"].items(), key=lambda x: (orden_talla(x[0][0]), x[0][1]))
                 for (t, c), cant in datos_ord:
                     pdf.set_x(x)
-                    pdf.cell(15, 6, str(t), border=1, align="C")
+                    pdf.cell(15, 6, limpiar_texto_pdf(str(t)), border=1, align="C")
                     color_str = limpiar_texto_pdf(str(c)[:10] + "." if len(str(c)) > 10 else str(c))
                     pdf.cell(20, 6, color_str, border=1, align="C")
                     pdf.cell(15, 6, str(cant), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
@@ -821,7 +821,7 @@ def generar_hoja_produccion(orden):
 
         pdf.set_font("helvetica", "B", 11)
         pdf.set_fill_color(220, 220, 220)
-        titulo_prod = f" PRODUCTO: {nombre_prod}   |   CANTIDAD TOTAL: {item.get('cantidad_total', 0)}\n TELA A USAR: {tela}"
+        titulo_prod = limpiar_texto_pdf(f" PRODUCTO: {nombre_prod}   |   CANTIDAD TOTAL: {item.get('cantidad_total', 0)}\n TELA A USAR: {tela}")
         pdf.multi_cell(0, 7, titulo_prod, border=1, fill=True, align="L")
 
         if not especificaciones:
@@ -872,19 +872,19 @@ def generar_hoja_produccion(orden):
                 
                 if familia == 'UNIFORME COMPLETO':
                     row.cell(c_fila)
-                    row.cell(str(esp.get('talla_superior') or '-').strip() or '-'); row.cell(str(esp.get('talla_inferior') or '-').strip() or '-')
+                    row.cell(limpiar_texto_pdf(str(esp.get('talla_superior') or '-').strip() or '-')); row.cell(limpiar_texto_pdf(str(esp.get('talla_inferior') or '-').strip() or '-'))
                     row.cell(nom_limpio); row.cell(num_limpio)
                     row.cell(cuello_limpio)
-                    if tiene_polines: row.cell(str(esp.get('talla_polines') or '-').strip() or '-')
+                    if tiene_polines: row.cell(limpiar_texto_pdf(str(esp.get('talla_polines') or '-').strip() or '-'))
                     row.cell(obs_limpia_txt)
                 elif familia == 'PRENDA SUPERIOR':
                     row.cell(c_fila)
-                    row.cell(str(esp.get('talla_superior') or '-').strip() or '-'); row.cell("-")
+                    row.cell(limpiar_texto_pdf(str(esp.get('talla_superior') or '-').strip() or '-')); row.cell("-")
                     row.cell(nom_limpio); row.cell(num_limpio)
                     row.cell(cuello_limpio); row.cell(obs_limpia_txt)
                 elif familia == 'PANTALONETA':
                     row.cell(c_fila)
-                    row.cell(str(esp.get('talla_inferior') or '-').strip() or '-'); row.cell(num_limpio)
+                    row.cell(limpiar_texto_pdf(str(esp.get('talla_inferior') or '-').strip() or '-')); row.cell(num_limpio)
                     row.cell(obs_limpia_txt)
                 elif familia == 'IMPRESION':
                     row.cell(c_fila)
@@ -913,7 +913,7 @@ def generar_hoja_produccion(orden):
         
         pdf.set_font("helvetica", "B", 11) # Texto en negrita
         # multi_cell permite que el texto baje de línea automáticamente si es muy largo
-        pdf.multi_cell(0, 8, f" {observaciones}", border=1, align="L")
+        pdf.multi_cell(0, 8, limpiar_texto_pdf(f" {observaciones}"), border=1, align="L")
         pdf.ln(5)
 
     return bytes(pdf.output())
