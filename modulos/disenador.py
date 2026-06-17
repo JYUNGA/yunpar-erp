@@ -66,27 +66,42 @@ def render(supabase):
     try:
         query = supabase.table("ordenes").select("id, codigo_orden, estado, fecha_entrega, alerta_cambios, detalle_cambios, cliente_id, created_at, url_boceto_vendedora, url_arte_final, url_diseno_final, observaciones_generales")
         
-        # Lógica de búsqueda adaptada
         if mostrar_historial:
-            query = query.neq("estado", "Entregado") # Muestra todo lo que no esté finalizado
+            query = query.neq("estado", "Entregado") 
         else:
             query = query.or_("estado.eq.Pendiente,estado.eq.En Diseño,alerta_cambios.eq.true")
             
         res_ordenes = query.order("created_at", desc=True).execute()
         ordenes_data = res_ordenes.data
+        
+        # MOVEMOS LA CONSULTA DE CLIENTES ADENTRO DEL TRY PARA PROTEGERLA
+        mapa_clientes = {}
+        if ordenes_data:
+            cliente_ids = list(set([d['cliente_id'] for d in ordenes_data if d.get('cliente_id')]))
+            if cliente_ids:
+                res_cli = supabase.table('clientes').select('id, nombre_completo').in_('id', cliente_ids).execute()
+                for c in res_cli.data: mapa_clientes[c['id']] = c.get('nombre_completo', 'Desconocido')
+                
     except Exception as e:
-        st.error(f"Error al conectar con Supabase: {e}")
-        return
+        # SISTEMA ANTI-CHOQUE: Si el usuario deselecciona muy rápido, reintenta en 0.5s silenciosamente
+        time.sleep(0.5)
+        try:
+            res_ordenes = query.order("created_at", desc=True).execute()
+            ordenes_data = res_ordenes.data
+            mapa_clientes = {}
+            if ordenes_data:
+                cliente_ids = list(set([d['cliente_id'] for d in ordenes_data if d.get('cliente_id')]))
+                if cliente_ids:
+                    res_cli = supabase.table('clientes').select('id, nombre_completo').in_('id', cliente_ids).execute()
+                    for c in res_cli.data: mapa_clientes[c['id']] = c.get('nombre_completo', 'Desconocido')
+        except:
+            st.warning("🔌 Conexión interrumpida por un clic rápido. La página se restaurará...")
+            time.sleep(1)
+            st.rerun()
 
     if not ordenes_data:
         st.success("🎉 ¡Bandeja limpia! No hay órdenes pendientes por diseñar.")
         return
-
-    cliente_ids = list(set([d['cliente_id'] for d in ordenes_data if d.get('cliente_id')]))
-    mapa_clientes = {}
-    if cliente_ids:
-        res_cli = supabase.table('clientes').select('id, nombre_completo').in_('id', cliente_ids).execute()
-        for c in res_cli.data: mapa_clientes[c['id']] = c.get('nombre_completo', 'Desconocido')
 
     df_ordenes = pd.DataFrame(ordenes_data)
     df_ordenes['Cliente'] = df_ordenes['cliente_id'].map(lambda x: mapa_clientes.get(x, 'Consumidor Final'))
@@ -398,8 +413,9 @@ def render(supabase):
                     
                 col_f5.metric("👕 Prendas en vista:", int(prendas_reales))
                 
-                # --- NUEVO: BOTONES DE CONVERSIÓN DE TEXTO EN BLOQUE PARA DISEÑO ---
-                col_case1, col_case2, col_case_sp = st.columns([1.8, 1.8, 5])
+                # --- NUEVO: BOTONES DE CONVERSIÓN DE TEXTO Y EXPORTACIÓN A PLUGIN ---
+                # Ajustamos las columnas para agregar el botón de Plugin
+                col_case1, col_case2, col_plugin, col_case_sp = st.columns([1.8, 1.8, 2.2, 2.8])
                 
                 if col_case1.button("🔠 TODO MAYÚSCULAS", use_container_width=True):
                     with st.spinner("Formateando nombres..."):
@@ -407,7 +423,6 @@ def render(supabase):
                             for _, row in df_filtrado.iterrows():
                                 nombre_original = str(row.get('Jugador', '')).strip()
                                 id_db = row.get('ID_Esp')
-                                # Usamos 'nombre_jugador' tal cual está en tu SQL
                                 if nombre_original and nombre_original != "-" and id_db:
                                     supabase.table('especificaciones_producto').update({"nombre_jugador": nombre_original.upper()}).eq('id', int(id_db)).execute()
                             st.success("Nombres convertidos a MAYÚSCULAS.")
@@ -422,12 +437,78 @@ def render(supabase):
                                 nombre_original = str(row.get('Jugador', '')).strip()
                                 id_db = row.get('ID_Esp')
                                 if nombre_original and nombre_original != "-" and id_db:
-                                    # .title() pone la primera letra en mayúscula y el resto en minúscula
                                     supabase.table('especificaciones_producto').update({"nombre_jugador": nombre_original.title()}).eq('id', int(id_db)).execute()
                             st.success("Nombres convertidos a Tipo Título.")
                             time.sleep(0.5)
                             st.rerun()
                         except Exception as e: st.error(f"Error al cambiar a tipo título: {e}")
+                        
+                # --- LÓGICA DEL BOTÓN PLUGIN PARA ILLUSTRATOR ---
+                # 1. Filtramos ESTRICTAMENTE solo prendas que tengan una talla superior real (excluye Banderas, Impresiones, etc)
+                mascara_validos = df_filtrado['Talla Sup.'].notna() & (df_filtrado['Talla Sup.'].str.strip() != '-') & (df_filtrado['Talla Sup.'].str.strip() != '')
+                df_plugin = df_filtrado[mascara_validos].copy()
+                
+                if not df_plugin.empty:
+                    import csv
+                    import io
+                    
+                    def acortar_cuello(c):
+                        c = str(c).upper().strip()
+                        # CORRECCIÓN: Evitamos que la "O" de nOrmal se confunda con cuellO redondO
+                        if "REDONDO" in c or c == "O": return "R"
+                        if "V" in c: return "V"
+                        if "POLO" in c: return "P"
+                        if "NERU" in c or "MAO" in c: return "N"
+                        if "CUADRADO" in c: return "C"
+                        if "SPORT" in c: return "S"
+                        return c[0] if c and c != "-" else ""
+                        
+                    def acortar_genero(g):
+                        g = str(g).upper().strip()
+                        if "MASCULINO" in g or "HOMBRE" in g: return "M"
+                        if "FEMENINO" in g or "MUJER" in g: return "F"
+                        if "NINO" in g or "NIÑO" in g: return "N"
+                        return "U"
+                    
+                    output = io.StringIO()
+                    writer = csv.writer(output)
+                    writer.writerow(["Tallas", "Nombre", "Numero", "Pantaloneta"])
+                    
+                    for _, row in df_plugin.iterrows():
+                        talla = str(row['Talla Sup.']).strip()
+                        gen = acortar_genero(row['Género'])
+                        cuello = acortar_cuello(row['Cuello'])
+                        
+                        # Combinación de metadatos (Ej: L-M-V)
+                        meta = f"{talla}-{gen}"
+                        if cuello: meta += f"-{cuello}"
+                        
+                        nombre = str(row['Jugador']).strip()
+                        if nombre == "-": nombre = ""
+                        
+                        dorsal = str(row['Dorsal']).strip()
+                        if dorsal == "-": dorsal = ""
+                        
+                        # TRUCO INFALIBLE: Añadimos un "espacio indivisible" (\xa0) al final. 
+                        # Excel y el Plugin lo tratarán 100% como Texto y NUNCA borrarán el 0 de '07'.
+                        if dorsal: dorsal = f"{dorsal}\xa0"
+                        
+                        writer.writerow([meta, nombre, dorsal, "NO"])
+                    
+                    csv_data = output.getvalue().encode('utf-8-sig') # Preserva tildes y ñ
+                    
+                    # Nomenclatura exacta para el archivo de salida
+                    cliente_limpio = str(orden['Cliente']).replace(" ", "_").replace("/", "-")
+                    nombre_archivo_csv = f"{orden['codigo_orden']}_{cliente_limpio}.csv"
+                    
+                    with col_plugin:
+                        st.download_button(
+                            label="🔌 Plugin Illustrator (CSV)",
+                            data=csv_data,
+                            file_name=nombre_archivo_csv,
+                            mime="text/csv",
+                            use_container_width=True
+                        )
                 
                 # --- NUEVA LÓGICA DE COLORES DE 4 ESTADOS ---
                 def estilo_filas(row):

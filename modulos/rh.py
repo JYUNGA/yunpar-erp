@@ -32,32 +32,51 @@ def extraer_mes_anio(contenido_texto):
         return match.group(1).replace('/', '-')
     return f"{datetime.now().year}-{datetime.now().month:02d}"
 
-def calcular_horas_netas(marcas_str, es_sabado):
-    meta_diaria = 4.5 if es_sabado else 8.5
+def calcular_horas_netas(marcas_str, es_sabado, es_domingo):
+    # Si es domingo, la meta es 0. Todo lo trabajado será extra y no hay falta injustificada.
+    meta_diaria = 0 if es_domingo else (4.5 if es_sabado else 8.5)
     
     if pd.isna(marcas_str) or str(marcas_str).strip() == "":
-        return 0.0, 0.0, meta_diaria, True
+        # Si es domingo y no hay marcas, no es falta. Si es otro día, sí es falta.
+        return 0.0, 0.0, meta_diaria, (not es_domingo)
     
     tiempos = re.findall(r'\d{2}:\d{2}', str(marcas_str))
     if len(tiempos) < 2:
-        return 0.0, 0.0, meta_diaria, True
+        return 0.0, 0.0, meta_diaria, (not es_domingo)
     
     t_objs = [datetime.strptime(t, "%H:%M") for t in tiempos]
     t_objs.sort()
     
+    # PASO 1: FILTRO ANTI-DOBLE MARCADEO EXACTO (Ej: 14:15, 14:15)
+    t_limpio_1 = [t_objs[0]]
+    for t in t_objs[1:]:
+        if t != t_limpio_1[-1]:
+            t_limpio_1.append(t)
+            
+    # PASO 2: FILTRO DE PROXIMIDAD (Regla de los 15 minutos)
+    # Si dos marcas están a menos de 15 minutos, la segunda es ruido (ej: 14:03, 14:05 ó 18:06, 18:15)
+    t_limpio_2 = [t_limpio_1[0]]
+    for t in t_limpio_1[1:]:
+        diff_minutos = (t - t_limpio_2[-1]).total_seconds() / 60.0
+        if diff_minutos < 15:
+            continue # Ignoramos esta marca, es un doble marcadeo con minutos de diferencia
+        t_limpio_2.append(t)
+            
     total_segundos = 0
-    if len(t_objs) % 2 == 0:
-        for i in range(0, len(t_objs), 2):
-            total_segundos += (t_objs[i+1] - t_objs[i]).total_seconds()
-    else:
-        total_segundos += (t_objs[-1] - t_objs[0]).total_seconds()
+    # LÓGICA DE PARES: Emparejar estrictamente de 2 en 2 (Entrada/Salida).
+    # Si después de filtrar quedan marcas impares, la última se ignora para no inflar horas.
+    for i in range(0, len(t_limpio_2) - 1, 2):
+        total_segundos += (t_limpio_2[i+1] - t_limpio_2[i]).total_seconds()
         
     horas_totales = total_segundos / 3600.0
     
     horas_extras = max(0.0, horas_totales - meta_diaria)
     horas_descuento = max(0.0, meta_diaria - horas_totales)
     
-    return round(horas_totales, 2), round(horas_extras, 2), round(horas_descuento, 2), (horas_totales == 0)
+    # Si es domingo y no trabajó, no se marca como falta
+    es_falta = (horas_totales == 0 and not es_domingo)
+    
+    return round(horas_totales, 2), round(horas_extras, 2), round(horas_descuento, 2), es_falta
 
 def render(supabase):
     if 'rol' not in st.session_state or st.session_state['rol'] not in ["GERENTE"]:
@@ -178,12 +197,12 @@ def render(supabase):
                             
                         cols_dias = [str(i) for i in range(1, 32) if str(i) in df_raw.columns]
                         df_melt = df_raw.melt(id_vars=['Employee ID', 'Name'], value_vars=cols_dias, var_name='Dia', value_name='Marcas')
-                        df_melt = df_melt.dropna(subset=['Marcas'])
-                        df_melt = df_melt[df_melt['Marcas'].astype(str).str.strip() != ""]
+                        # YA NO ELIMINAMOS LOS DÍAS VACÍOS PARA PODER REGISTRAR LAS FALTAS
                         df_melt = df_melt[pd.to_numeric(df_melt['Employee ID'], errors='coerce').notnull()] 
                         
                         map_emps = {e['biometrico_id']: e['nombre_completo'] for e in emps} if emps else {}
                         lista_asistencia = []
+                        hoy = datetime.now(LOCAL_TZ).date()
                         
                         for _, row in df_melt.iterrows():
                             bio_id_file = int(float(row['Employee ID']))
@@ -192,27 +211,57 @@ def render(supabase):
                             try:
                                 yyyy, mm = mes_anio_txt.split('-')
                                 fecha_real = date(int(yyyy), int(mm), int(row['Dia']))
-                            except: fecha_real = date.today()
+                            except: 
+                                continue # Si el día no es válido (ej 31 de abril), lo salta
                             
-                            if fecha_real.weekday() == 6: continue 
+                            # Si la fecha es futura, no la procesamos todavía
+                            if fecha_real > hoy: continue
                             
                             es_sabado = fecha_real.weekday() == 5
-                            h_tot, h_ext, h_des, es_falta = calcular_horas_netas(row['Marcas'], es_sabado)
-                            nombre_dia = DIAS_TEXTO[fecha_real.weekday()]
-                            meta_diaria = 4.5 if es_sabado else 8.5
+                            es_domingo = fecha_real.weekday() == 6
+                            meta_diaria = 0 if es_domingo else (4.5 if es_sabado else 8.5)
                             
-                            lista_asistencia.append({
-                                "id_bio": bio_id_file,
-                                "Empleado": map_emps[bio_id_file],
-                                "Fecha_BD": str(fecha_real),
-                                "Día de la Semana": f"{nombre_dia} {row['Dia']}",
-                                "Marcaciones": str(row['Marcas']).replace('\n', ' | '),
-                                "Horas Requeridas": float(meta_diaria),
-                                "Horas Trabajadas": float(h_tot),
-                                "Horas Extras": float(h_ext),
-                                "Horas Atraso": float(h_des),
-                                "¿Falta Injustificada?": bool(es_falta)
-                            })
+                            # Analizar si tiene marcas o no
+                            marcas_str = str(row['Marcas']).strip() if pd.notna(row['Marcas']) else ""
+                            
+                            if marcas_str == "" or marcas_str.lower() == "nan":
+                                # CASO 1: DÍA SIN MARCAS (FALTA O DESCANSO)
+                                if es_domingo:
+                                    continue # Domingos sin marcas no se registran
+                                
+                                # Es un día hábil sin marcas -> FALTA INJUSTIFICADA
+                                lista_asistencia.append({
+                                    "id_bio": bio_id_file,
+                                    "Empleado": map_emps[bio_id_file],
+                                    "Fecha_BD": str(fecha_real),
+                                    "Día de la Semana": f"🚨 FALTA - {DIAS_TEXTO[fecha_real.weekday()]} {row['Dia']}",
+                                    "Marcaciones": "SIN MARCAS",
+                                    "Horas Requeridas": float(meta_diaria),
+                                    "Horas Trabajadas": 0.0,
+                                    "Horas Extras": 0.0,
+                                    "Horas Atraso": float(meta_diaria), # Se descuenta el día completo
+                                    "¿Falta Injustificada?": True
+                                })
+                            else:
+                                # CASO 2: DÍA CON MARCAS (ASISTIÓ)
+                                if es_domingo: continue # La lógica de domingos con marca la procesaremos si es estrictamente necesario, por ahora saltamos
+                                
+                                h_tot, h_ext, h_des, es_falta = calcular_horas_netas(row['Marcas'], es_sabado, es_domingo)
+                                prefijo = "🚨 FALTA - " if es_falta else ""
+                                nombre_dia = f"{prefijo}{DIAS_TEXTO[fecha_real.weekday()]} {row['Dia']}"
+                                
+                                lista_asistencia.append({
+                                    "id_bio": bio_id_file,
+                                    "Empleado": map_emps[bio_id_file],
+                                    "Fecha_BD": str(fecha_real),
+                                    "Día de la Semana": nombre_dia,
+                                    "Marcaciones": marcas_str.replace('\n', ' | '),
+                                    "Horas Requeridas": float(meta_diaria),
+                                    "Horas Trabajadas": float(h_tot),
+                                    "Horas Extras": float(h_ext),
+                                    "Horas Atraso": float(h_des),
+                                    "¿Falta Injustificada?": bool(es_falta)
+                                })
                         
                         st.session_state['df_master_rh'] = pd.DataFrame(lista_asistencia)
                         st.session_state['periodo_cargado'] = nombre_archivo
@@ -278,7 +327,7 @@ def render(supabase):
                                     "Horas Trabajadas": st.column_config.NumberColumn("Horas Reales (Edita aquí)", format="%.2f", min_value=0.0, max_value=24.0),
                                     "Horas Extras": st.column_config.NumberColumn("Extras", format="%.2f", disabled=True),
                                     "Horas Atraso": st.column_config.NumberColumn("Atrasos", format="%.2f", disabled=True),
-                                    "¿Falta Injustificada?": st.column_config.CheckboxColumn("Falta", disabled=True)
+                                    "¿Falta Injustificada?": st.column_config.CheckboxColumn("Falta (Desmarcar si justificada)")
                                 },
                                 hide_index=True,
                                 use_container_width=True,
@@ -371,19 +420,28 @@ def render(supabase):
                     'horas_trabajadas': 'sum', 'horas_extras': 'sum', 'horas_descuento': 'sum', 'es_falta': 'sum'
                 }).reset_index()
                 
-                resumen['Valor Hora'] = resumen['Sueldo Base'] / 240.0
-                resumen['Bono Extras ($)'] = resumen['horas_extras'] * (resumen['Valor Hora'] * 1.5)
-                resumen['Descuentos ($)'] = resumen['horas_descuento'] * resumen['Valor Hora']
-                resumen['Neto a Pagar ($)'] = resumen['Sueldo Base'] + resumen['Bono Extras ($)'] - resumen['Descuentos ($)']
+                                # 1. Cálculo del valor hora (divisor legal 240)
+                resumen['Valor Hora'] = round(resumen['Sueldo Base'] / 240.0, 4) # 4 decimales para exactitud
                 
-                df_mostrar = resumen[['Nombre', 'Sueldo Base', 'horas_trabajadas', 'horas_extras', 'Bono Extras ($)', 'Descuentos ($)', 'Neto a Pagar ($)']]
-                df_mostrar.columns = ['Empleado', 'Sueldo Base ($)', 'Horas Reales', 'Horas Extras', 'Bono Extras (+ $)', 'Descuentos Atraso (- $)', 'Neto Total a Recibir ($)']
+                # 2. Cálculo de Descuentos por faltas/atrasos (Horas no trabajadas de la jornada exigida)
+                resumen['Descuentos ($)'] = round(resumen['horas_descuento'] * resumen['Valor Hora'], 2)
+                
+                # 3. Pago de Horas Extras (a x1 según lo acordado)
+                resumen['Bono Extras ($)'] = round(resumen['horas_extras'] * resumen['Valor Hora'], 2)
+                
+                # 4. Neto a Pagar: Sueldo completo - lo que faltó + lo que se quedó tiempo extra
+                resumen['Neto a Pagar ($)'] = round(resumen['Sueldo Base'] - resumen['Descuentos ($)'] + resumen['Bono Extras ($)'], 2)
+                
+                # Configuración de la tabla para mostrar en pantalla
+                df_mostrar = resumen[['Nombre', 'Sueldo Base', 'horas_descuento', 'Descuentos ($)', 'horas_extras', 'Bono Extras ($)', 'Neto a Pagar ($)']]
+                df_mostrar.columns = ['Empleado', 'Sueldo Base ($)', 'Hrs Atraso/Falta', 'Descuentos (- $)', 'Hrs Extras', 'Bono Extras (+ $)', 'Neto Total a Recibir ($)']
                 
                 st.markdown(f"### 📋 Reporte de Pagos para el periodo: {traducir_periodo(mes_pago)}")
+                st.caption("ℹ️ *Se asume el sueldo mensual íntegro, se descuentan los atrasos/faltas, y se suman las horas extras.*")
                 
                 st.dataframe(df_mostrar.style.format({
-                    'Sueldo Base ($)': "{:.2f}", 'Horas Reales': "{:.2f}", 'Horas Extras': "{:.2f}",
-                    'Bono Extras (+ $)': "{:.2f}", 'Descuentos Atraso (- $)': "{:.2f}", 'Neto Total a Recibir ($)': "{:.2f}"
+                    'Sueldo Base ($)': "{:.2f}", 'Hrs Atraso/Falta': "{:.2f}", 'Descuentos (- $)': "{:.2f}",
+                    'Hrs Extras': "{:.2f}", 'Bono Extras (+ $)': "{:.2f}", 'Neto Total a Recibir ($)': "{:.2f}"
                 }), use_container_width=True, hide_index=True)
                 
                 # --- NUEVA LÓGICA: GENERACIÓN DE ARCHIVO ZIP CONFIDENCIAL ---
@@ -429,7 +487,6 @@ def generar_zip_roles(resumen_df, df_diario, mes_pago):
             emp_id = row['empleado_id']
             nombre = row['Nombre']
             
-            # Instancia un PDF único exclusivo para este trabajador
             pdf = FPDF()
             pdf.add_page()
             
@@ -462,7 +519,7 @@ def generar_zip_roles(resumen_df, df_diario, mes_pago):
             pdf.cell(0, 8, f" ${row['Sueldo Base']:.2f}", border=1, ln=True)
             pdf.ln(6)
             
-            # --- RESUMEN MONETARIO ---
+            # --- RESUMEN MONETARIO (ACTUALIZADO) ---
             pdf.set_font("Arial", 'B', 12)
             pdf.cell(0, 10, "RUBROS ASOCIADOS AL PAGO", ln=True)
             pdf.set_font("Arial", '', 11)
@@ -470,13 +527,13 @@ def generar_zip_roles(resumen_df, df_diario, mes_pago):
             pdf.cell(120, 8, "Sueldo Base Mensual Acordado:")
             pdf.cell(0, 8, f"${row['Sueldo Base']:.2f}", align='R', ln=True)
             
-            pdf.cell(120, 8, f"Bono por Horas Extras Acumuladas ({row['horas_extras']:.2f} hrs):")
-            pdf.cell(0, 8, f"+ ${row['Bono Extras ($)']:.2f}", align='R', ln=True)
-            
             pdf.set_text_color(200, 0, 0)
-            pdf.cell(120, 8, f"Descuento por Atrasos e Inconsistencias ({row['horas_descuento']:.2f} hrs):")
+            pdf.cell(120, 8, f"Descuento por Atrasos/Faltas ({row['horas_descuento']:.2f} hrs):")
             pdf.cell(0, 8, f"- ${row['Descuentos ($)']:.2f}", align='R', ln=True)
             pdf.set_text_color(0, 0, 0)
+            
+            pdf.cell(120, 8, f"Bono por Horas Extras Acumuladas ({row['horas_extras']:.2f} hrs):")
+            pdf.cell(0, 8, f"+ ${row['Bono Extras ($)']:.2f}", align='R', ln=True)
             
             # Total Neto Liquido
             pdf.set_font("Arial", 'B', 12)
@@ -496,14 +553,14 @@ def generar_zip_roles(resumen_df, df_diario, mes_pago):
                 pdf.cell(64, 6, "Marcaciones Reales Reloj", border=1, align='C')
                 pdf.cell(34, 6, "Horas Calculadas", border=1, align='C')
                 pdf.cell(34, 6, "Sobretiempo (+)", border=1, align='C')
-                pdf.cell(34, 6, "Descuento (-)", border=1, align='C', ln=True)
+                pdf.cell(34, 6, "Atraso/Falta (-)", border=1, align='C', ln=True)
                 
                 pdf.set_font("Arial", '', 9)
                 for _, d_row in df_emp_diario.iterrows():
                     pdf.cell(24, 6, str(d_row['fecha']), border=1, align='C')
                     marcas_reales = str(d_row.get('observaciones', '---'))
-                    if marcas_reales == "None" or marcas_reales.strip() == "":
-                        marcas_reales = "---"
+                    if marcas_reales == "None" or marcas_reales.strip() == "" or marcas_reales == "nan":
+                        marcas_reales = "SIN MARCAS"
                     
                     pdf.cell(64, 6, f" {marcas_reales}", border=1)
                     pdf.cell(34, 6, f"{d_row['horas_trabajadas']:.2f} hrs", border=1, align='C')
@@ -518,7 +575,6 @@ def generar_zip_roles(resumen_df, df_diario, mes_pago):
             pdf.cell(95, 5, "Firma Autorizada Gerencia", align='C')
             pdf.cell(95, 5, "Recibi Conforme Colaborador", align='C', ln=True)
             
-            # Convierte el PDF a bytes e inyecta al archivo ZIP con un nombre limpio
             pdf_bytes = bytes(pdf.output())
             nombre_limpio = nombre.replace(" ", "_")
             zip_file.writestr(f"Rol_Pago_{nombre_limpio}_{mes_pago}.pdf", pdf_bytes)

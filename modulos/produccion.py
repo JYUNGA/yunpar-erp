@@ -732,15 +732,15 @@ def render(supabase):
                 
                 columnas_orden.append("Obs")
 
-                # Renderizar Editor
-                st.info(f"📋 **Llenando datos para:** {fam}")
-                edit_df = st.data_editor(
-                    st.session_state['df_temp_matriz'], 
-                    column_order=columnas_orden, 
-                    column_config=cols_cfg, 
-                    num_rows="dynamic", 
-                    use_container_width=True,
-                    key=f"ed_{st.session_state['reset_matrix_key']}"
+                # Crea un contenedor estable
+                with st.container(key="contenedor_editor_matriz"):
+                    edit_df = st.data_editor(
+                        st.session_state['df_temp_matriz'], 
+                        column_order=columnas_orden, 
+                        column_config=cols_cfg, 
+                        num_rows="dynamic", 
+                        use_container_width=True,
+                        key=f"ed_{st.session_state['reset_matrix_key']}"
                 )
 
                 # 5. Validación y Guardado
