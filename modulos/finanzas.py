@@ -75,12 +75,15 @@ def render(supabase):
             if res_cxc.data:
                 df_cxc = pd.DataFrame(res_cxc.data)
                 
-                cliente_ids = df_cxc['cliente_id'].dropna().unique().tolist()
+                # Extraer IDs de clientes
+                # Extraer IDs de clientes y convertirlos a enteros
+                cliente_ids = df_cxc['cliente_id'].dropna().astype(int).unique().tolist()
+
                 mapa_clientes = {}
                 if cliente_ids:
                     res_cli = supabase.table('clientes').select('id, nombre_completo').in_('id', cliente_ids).execute()
                     mapa_clientes = {c['id']: c.get('nombre_completo', 'Consumidor Final') for c in res_cli.data}
-                
+
                 df_cxc['Cliente'] = df_cxc['cliente_id'].map(lambda x: mapa_clientes.get(x, 'Consumidor Final'))
                 
                 with st.expander("🔍 Buscador Avanzado (Filtros)", expanded=False):
