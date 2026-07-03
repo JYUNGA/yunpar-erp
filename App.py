@@ -13,6 +13,18 @@ from modulos import clientes, productos, insumos, cotizaciones, produccion, fina
 # --- CONFIGURACIÓN GLOBAL ---
 st.set_page_config(page_title="YUNPAR ERP", page_icon="👕", layout="wide", initial_sidebar_state="expanded")
 
+# --- MANTENER SESIÓN ACTIVA (PING) ---
+st.markdown(
+    """
+    <script>
+        setInterval(function() {
+            fetch(window.location.href, { method: 'HEAD' });
+        }, 25000);
+    </script>
+    """,
+    unsafe_allow_html=True
+)
+
 # --- CONEXIÓN BASE DE DATOS ---
 @st.cache_resource
 def init_connection():

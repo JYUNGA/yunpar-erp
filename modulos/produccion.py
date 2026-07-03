@@ -741,93 +741,141 @@ def render(supabase):
                         num_rows="dynamic", 
                         use_container_width=True,
                         key=f"ed_{st.session_state['reset_matrix_key']}"
-                )
+                    )
 
-                # 5. Validación y Guardado
-                col_btn, col_check = st.columns([2, 2])
-                permitir_dups = col_check.checkbox("⚠️ Autorizar duplicados")
-                
-                if col_btn.button("➕ Agregar al Resumen", use_container_width=True):
-                    # Filtro inteligente
-                    condicion = pd.Series([False] * len(edit_df))
-                    
-                    # Validamos si llenaron Tallas, Medidas o Nombres
-                    if ver_cam: condicion |= edit_df['Camiseta'].notna()
-                    if ver_short: condicion |= edit_df['Pantaloneta'].notna()
-                    if ver_medidas: condicion |= edit_df['Largo (m)'] > 0 
-                    if ver_nombre: condicion |= edit_df['Nombre'].str.strip() != ""
-                    
-                    # Si es Genérico (no usa tallas ni nombres), validamos solo por la cantidad
-                    if fam == "GENERICO": condicion |= edit_df['Cantidad'] > 0
-                    
-                    df_final = edit_df[condicion].copy()
-                    
-                    if df_final.empty:
-                        st.error("⚠️ Debe ingresar datos válidos (Tallas, Largo o Cantidad) para continuar.")
+                    # --- BOTÓN PARA AUTORELLENAR POLINES (SOLO UNIFORME COMPLETO) ---
+                    if fam == "UNIFORME COMPLETO":
+                        col_auto, col_btn, col_check = st.columns([1, 1, 2])
+                        if col_auto.button("🔄 Autollenar Polines", use_container_width=True):
+                            # Usamos edit_df (el DataFrame actualizado del data_editor)
+                            df_actual = edit_df.copy()
+                            col_talla = None
+                            posibles_nombres = ["Camiseta", "Talla Sup.", "Talla Superior", "Talla S.", "Talla"]
+                            for nombre in posibles_nombres:
+                                if nombre in df_actual.columns:
+                                    col_talla = nombre
+                                    break
+                            if col_talla is None:
+                                st.error(f"❌ No se encontró la columna de talla superior. Columnas disponibles: {', '.join(df_actual.columns)}")
+                            else:
+                                def mapear_polin(talla):
+                                    if talla is None or str(talla).strip() == "":
+                                        return None
+                                    talla_str = str(talla).strip().upper()
+                                    if talla_str.isdigit():
+                                        num = int(talla_str)
+                                        if 24 <= num <= 30:
+                                            return "4-6"
+                                        elif 32 <= num <= 34:
+                                            return "6-8"
+                                        elif 36 <= num <= 42:
+                                            return "8-10"
+                                    if talla_str in ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL", "6XL", "7XL"]:
+                                        return "10-12"
+                                    return None
+
+                                actualizadas = 0
+                                for idx, row in df_actual.iterrows():
+                                    talla = row.get(col_talla)
+                                    if talla is not None and str(talla).strip() != "":
+                                        sugerido = mapear_polin(talla)
+                                        if sugerido:
+                                            df_actual.at[idx, "Talla Polin"] = sugerido
+                                            actualizadas += 1
+
+                                if actualizadas > 0:
+                                    st.session_state['df_temp_matriz'] = df_actual
+                                    st.toast(f"✅ {actualizadas} filas actualizadas con el polín sugerido.", icon="🔄")
+                                    st.rerun()
+                                else:
+                                    st.warning(f"⚠️ No se encontraron tallas válidas en la columna '{col_talla}'. Asegúrate de ingresar tallas como 'S', 'M', '34', '40', etc.")
                     else:
-                        errores = []
-                        if ver_nombre:
-                            nombres = df_final[df_final['Nombre'].str.strip() != ""]['Nombre']
-                            if nombres.duplicated().any(): errores.append(f"Nombres repetidos: {set(nombres[nombres.duplicated()].tolist())}")
+                        col_btn, col_check = st.columns([2, 2])
+
+                    # 5. Validación y Guardado
+                    permitir_dups = col_check.checkbox("⚠️ Autorizar duplicados")
+                    
+                    if col_btn.button("➕ Agregar al Resumen", use_container_width=True):
+                        # Filtro inteligente (usando edit_df actualizado)
+                        condicion = pd.Series([False] * len(edit_df), index=edit_df.index)
                         
-                        if errores and not permitir_dups:
-                            st.error("⛔ ERROR DE DUPLICADOS:")
-                            for e in errores: st.write(f"- {e}")
+                        if ver_cam: condicion |= edit_df['Camiseta'].notna()
+                        if ver_short: condicion |= edit_df['Pantaloneta'].notna()
+                        if ver_medidas: condicion |= edit_df['Largo (m)'] > 0 
+                        if ver_nombre: condicion |= edit_df['Nombre'].str.strip() != ""
+                        if fam == "GENERICO": condicion |= edit_df['Cantidad'] > 0
+                        
+                        df_final = edit_df[condicion].copy()
+                        
+                        if df_final.empty:
+                            st.error("⚠️ Debe ingresar datos válidos (Tallas, Largo o Cantidad) para continuar.")
                         else:
-                            # Cálculo de cantidad (CORRECCIÓN MATEMÁTICA)
-                            cantidad_grupo = 0.0
-                            if ver_medidas: 
-                                # Multiplicamos el largo de cada archivo por las veces que se imprimirá
-                                cantidad_grupo = (df_final['Largo (m)'] * df_final['Cantidad']).sum()
-                            elif ver_cant: 
-                                cantidad_grupo = df_final['Cantidad'].sum()
-                            else: 
-                                cantidad_grupo = len(df_final)
+                            errores = []
+                            if ver_nombre:
+                                nombres = df_final[df_final['Nombre'].str.strip() != ""]['Nombre']
+                                if nombres.duplicated().any():
+                                    errores.append(f"Nombres repetidos: {set(nombres[nombres.duplicated()].tolist())}")
+                            
+                            if errores and not permitir_dups:
+                                st.error("⛔ ERROR DE DUPLICADOS:")
+                                for e in errores:
+                                    st.write(f"- {e}")
+                            else:
+                                # Cálculo de cantidad
+                                cantidad_grupo = 0.0
+                                if ver_medidas: 
+                                    cantidad_grupo = (df_final['Largo (m)'] * df_final['Cantidad']).sum()
+                                elif ver_cant: 
+                                    cantidad_grupo = df_final['Cantidad'].sum()
+                                else: 
+                                    cantidad_grupo = len(df_final)
 
-                          # --- MAPEO A BASE DE DATOS (CON SANITIZACIÓN DE NAN) ---
-                            detalles_db = []
-                            for _, r in df_final.iterrows():
-                                # Limpiamos los NaN de Pandas que causan el error crítico
-                                cant = r.get("Cantidad", 1)
-                                cant = 1 if pd.isna(cant) else int(cant)
-                                
-                                ancho = r.get("Ancho (m)", 0.0)
-                                ancho = 0.0 if pd.isna(ancho) else float(ancho)
-                                
-                                alto = r.get("Largo (m)", 0.0)
-                                alto = 0.0 if pd.isna(alto) else float(alto)
-                                
-                                detalles_db.append({
-                                    "talla_superior": None if pd.isna(r.get("Camiseta")) else r.get("Camiseta"),
-                                    "talla_inferior": None if pd.isna(r.get("Pantaloneta")) else r.get("Pantaloneta"),
-                                    "nombre_jugador": "" if pd.isna(r.get("Nombre")) else r.get("Nombre", ""), 
-                                    "numero_dorsal": "" if pd.isna(r.get("Numero")) else r.get("Numero", ""),
-                                    "talla_polines": None if pd.isna(r.get("Talla Polin")) else r.get("Talla Polin"),
-                                    "color_polines": "" if pd.isna(r.get("Color Polin")) else r.get("Color Polin", ""),
-                                    "es_arquero": False if pd.isna(r.get("Arquero")) else r.get("Arquero", False),
-                                    "genero": None if pd.isna(r.get("Genero")) else r.get("Genero"),
-                                    "observacion_individual": "" if pd.isna(r.get("Obs")) else r.get("Obs", ""),
-                                    "tipo_cuello_texto": "" if pd.isna(r.get("Tipo Cuello")) else r.get("Tipo Cuello", ""),
-                                    "ancho_cm": ancho, 
-                                    "alto_cm": alto,  
-                                    "calandra_si_no": False if pd.isna(r.get("Calandrar")) else r.get("Calandrar", False),
-                                    "acabado": "" if pd.isna(r.get("Acabado")) else r.get("Acabado", ""),
-                                    "_cantidad_manual": cant 
+                                # --- MAPEO A BASE DE DATOS ---
+                                detalles_db = []
+                                for _, r in df_final.iterrows():
+                                    cant = r.get("Cantidad", 1)
+                                    cant = 1 if pd.isna(cant) else int(cant)
+                                    
+                                    ancho = r.get("Ancho (m)", 0.0)
+                                    ancho = 0.0 if pd.isna(ancho) else float(ancho)
+                                    
+                                    alto = r.get("Largo (m)", 0.0)
+                                    alto = 0.0 if pd.isna(alto) else float(alto)
+                                    
+                                    detalles_db.append({
+                                        "talla_superior": None if pd.isna(r.get("Camiseta")) else r.get("Camiseta"),
+                                        "talla_inferior": None if pd.isna(r.get("Pantaloneta")) else r.get("Pantaloneta"),
+                                        "nombre_jugador": "" if pd.isna(r.get("Nombre")) else r.get("Nombre", ""), 
+                                        "numero_dorsal": "" if pd.isna(r.get("Numero")) else r.get("Numero", ""),
+                                        "talla_polines": None if pd.isna(r.get("Talla Polin")) else r.get("Talla Polin"),
+                                        "color_polines": "" if pd.isna(r.get("Color Polin")) else r.get("Color Polin", ""),
+                                        "es_arquero": False if pd.isna(r.get("Arquero")) else r.get("Arquero", False),
+                                        "genero": None if pd.isna(r.get("Genero")) else r.get("Genero"),
+                                        "observacion_individual": "" if pd.isna(r.get("Obs")) else r.get("Obs", ""),
+                                        "tipo_cuello_texto": "" if pd.isna(r.get("Tipo Cuello")) else r.get("Tipo Cuello", ""),
+                                        "ancho_cm": ancho, 
+                                        "alto_cm": alto,  
+                                        "calandra_si_no": False if pd.isna(r.get("Calandrar")) else r.get("Calandrar", False),
+                                        "acabado": "" if pd.isna(r.get("Acabado")) else r.get("Acabado", ""),
+                                        "_cantidad_manual": cant 
+                                    })
+
+                                st.session_state['prod_items'].append({
+                                    "familia": fam, 
+                                    "obj_p": prod_obj, 
+                                    "id_tela": id_t, 
+                                    "detalles": detalles_db, 
+                                    "precio_venta": prec,
+                                    "cantidad_total_cobro": cantidad_grupo 
                                 })
-
-                            st.session_state['prod_items'].append({
-                                "familia": fam, "obj_p": prod_obj, "id_tela": id_t, 
-                                "detalles": detalles_db, "precio_venta": prec,
-                                "cantidad_total_cobro": cantidad_grupo 
-                            })
-                            
-                            st.session_state['restore_product_id'] = None
-                            st.session_state['restore_fabric_id'] = None
-                            st.session_state['restore_price'] = None
-                            
-                            st.session_state['reset_matrix_key_trigger'] = True
-                            st.session_state['reset_matrix_key'] += 1
-                            st.rerun()
+                                
+                                st.session_state['restore_product_id'] = None
+                                st.session_state['restore_fabric_id'] = None
+                                st.session_state['restore_price'] = None
+                                
+                                st.session_state['reset_matrix_key_trigger'] = True
+                                st.session_state['reset_matrix_key'] += 1
+                                st.rerun()
 
         # ==============================================================================
         # BLOQUE 4: RESUMEN Y GUARDADO (CON EDICIÓN CORREGIDA)
@@ -1035,6 +1083,11 @@ def render(supabase):
                 btn_disabled = True # Obliga a la vendedora a escribir algo si está editando
 
             if st.button("💾 GUARDAR ORDEN", type="primary", use_container_width=True, disabled=btn_disabled):
+                # --- VALIDACIÓN DE CLIENTE OBLIGATORIO ---
+                if not st.session_state.get('editando_cliente_id'):
+                    st.error("⚠️ **Debes seleccionar un cliente** antes de guardar la orden. Por favor, elige un cliente de la lista o crea uno nuevo.")
+                    st.stop()  # Detiene la ejecución del callback
+
                 try:
                     # 1. Definir si es NUEVA o EDICIÓN
                     es_edicion = True if st.session_state.get('editando_orden_id') else False
