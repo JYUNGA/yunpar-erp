@@ -625,12 +625,22 @@ def generar_hoja_produccion(orden):
                 resumenes_dinamicos[titulo_sup][t_sup] = resumenes_dinamicos[titulo_sup].get(t_sup, 0) + 1
             
             # Conteo Inferior Dinámico
-            if fam in ['UNIFORME COMPLETO', 'PANTALONETA'] and t_inf not in ['-', 'NONE', '']: 
-                titulo_inf = f"{tipo_prenda}" if fam == 'PANTALONETA' else f"{tipo_prenda} (INFERIOR)"
-                if es_arq: titulo_inf += " (ARQ)"
-                if titulo_inf not in resumenes_dinamicos: resumenes_dinamicos[titulo_inf] = {}
-                resumenes_dinamicos[titulo_inf][t_inf] = resumenes_dinamicos[titulo_inf].get(t_inf, 0) + 1
-            
+                if fam in ['UNIFORME COMPLETO', 'PANTALONETA'] and t_inf not in ['-', 'NONE', '']: 
+                    nombre_prod = str(item.get('nombre_producto', '')).strip().upper()
+                    
+                    # [Seguro]: Inspección estricta para separar las tablas de prendas inferiores
+                    if "FALDA SHORT" in nombre_prod:
+                        titulo_inf = "FALDA SHORT"
+                    elif "SHORT" in nombre_prod:
+                        titulo_inf = "SHORT"
+                    elif "FALDA" in nombre_prod:
+                        titulo_inf = "FALDA"
+                    else:
+                        titulo_inf = f"{tipo_prenda}" if fam == 'PANTALONETA' else f"{tipo_prenda} (INFERIOR)"
+                    
+                    if es_arq: titulo_inf += " (ARQ)"
+                    if titulo_inf not in resumenes_dinamicos: resumenes_dinamicos[titulo_inf] = {}
+                    resumenes_dinamicos[titulo_inf][t_inf] = resumenes_dinamicos[titulo_inf].get(t_inf, 0) + 1
             # Conteo Polines
             if fam == 'UNIFORME COMPLETO':
                 t_pol = str(esp.get('talla_polines') or '').strip().upper()
@@ -755,11 +765,31 @@ def generar_hoja_produccion(orden):
             else:
                 datos_ord = sorted(tabla["datos"].items(), key=lambda x: (orden_talla(x[0][0]), x[0][1]))
                 for (t, c), cant in datos_ord:
-                    pdf.set_x(x)
-                    pdf.cell(15, 6, limpiar_texto_pdf(str(t)), border=1, align="C")
-                    color_str = limpiar_texto_pdf(str(c)[:10] + "." if len(str(c)) > 10 else str(c))
-                    pdf.cell(20, 6, color_str, border=1, align="C")
-                    pdf.cell(15, 6, str(cant), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+                    color_str = limpiar_texto_pdf(str(c))
+                    pdf.set_font("helvetica", "", 8)
+                    
+                    # [Seguro]: Calculamos si el texto necesita más de una línea (margen interno de FPDF)
+                    if pdf.get_string_width(color_str) > 18:
+                        y_start = pdf.get_y()
+                        # Imprimir color con multi_cell para que genere los saltos de línea automáticamente
+                        pdf.set_xy(x + 15, y_start)
+                        pdf.multi_cell(20, 4, color_str, border=1, align="C")
+                        h = pdf.get_y() - y_start
+                        
+                        # Imprimir bordes laterales con la altura dinámica calculada
+                        pdf.set_xy(x, y_start)
+                        pdf.cell(15, h, limpiar_texto_pdf(str(t)), border=1, align="C")
+                        pdf.set_xy(x + 35, y_start)
+                        pdf.cell(15, h, str(cant), border=1, align="C")
+                        # Mover cursor al final de la fila
+                        pdf.set_xy(10, y_start + h)
+                    else:
+                        # Comportamiento normal si entra en una sola línea
+                        pdf.set_x(x)
+                        pdf.cell(15, 6, limpiar_texto_pdf(str(t)), border=1, align="C")
+                        pdf.cell(20, 6, color_str, border=1, align="C")
+                        pdf.cell(15, 6, str(cant), border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+                        
                     tot_cant += cant
                     
             # DIBUJAR FILA TOTAL (CON COLOR DINÁMICO)
