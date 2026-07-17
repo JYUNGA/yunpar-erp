@@ -843,6 +843,7 @@ def generar_hoja_produccion(orden):
             key = (
                 str(esp.get('talla_superior') or '').strip(),
                 str(esp.get('talla_inferior') or '').strip(),
+                str(esp.get('genero') or '').strip(), # [Seguro]: Nueva variable de aislamiento
                 str(esp.get('nombre_jugador') or '').strip(),
                 str(esp.get('numero_dorsal') or '').strip(),
                 str(esp.get('tipo_cuello_texto') or '').strip(),
@@ -874,29 +875,34 @@ def generar_hoja_produccion(orden):
         pdf.set_font("helvetica", "", 8) # Letra más pequeña para ahorrar hojas
         tiene_polines = any(bool(esp.get('talla_polines')) for esp in especificaciones) if familia == 'UNIFORME COMPLETO' else False
 
-        # Incluimos columna "C." (Cantidad)
+        # Incluimos columna "C." (Cantidad) y rebalanceamos a 190mm exactos
         if familia == 'UNIFORME COMPLETO' and tiene_polines:
-            cols = (10, 15, 15, 50, 15, 30, 20, 35) 
-            headers = ["C.", "T. Sup", "T. Inf", "Nombre / Ref.", "Num", "Cuello", "Polín", "Obs"]
+            cols = (9, 13, 13, 22, 43, 15, 25, 20, 30) 
+            headers = ["C.", "T. Sup", "T. Inf", "Género", "Nombre / Ref.", "Num", "Cuello", "Polín", "Obs"]
+            aligns = ("CENTER", "CENTER", "CENTER", "CENTER", "LEFT", "CENTER", "LEFT", "CENTER", "LEFT")
         elif familia in ['UNIFORME COMPLETO', 'PRENDA SUPERIOR']:
-            cols = (10, 20, 20, 55, 15, 30, 40)
-            headers = ["C.", "T. Sup", "T. Inf", "Nombre / Ref.", "Num", "Cuello", "Observación"] if familia == 'UNIFORME COMPLETO' else ["C.", "T. Sup", "-", "Nombre / Ref.", "Num", "Cuello", "Observación"]
+            cols = (10, 15, 15, 23, 47, 15, 30, 35)
+            headers = ["C.", "T. Sup", "T. Inf", "Género", "Nombre / Ref.", "Num", "Cuello", "Observación"] if familia == 'UNIFORME COMPLETO' else ["C.", "T. Sup", "-", "Género", "Nombre / Ref.", "Num", "Cuello", "Observación"]
+            aligns = ("CENTER", "CENTER", "CENTER", "CENTER", "LEFT", "CENTER", "LEFT", "LEFT")
         elif familia == 'PANTALONETA':
-            cols = (15, 25, 25, 125); headers = ["C.", "Talla Inf.", "Num", "Observación"]
+            cols = (12, 22, 23, 20, 113)
+            headers = ["C.", "Talla Inf.", "Género", "Num", "Observación"]
+            aligns = ("CENTER", "CENTER", "CENTER", "CENTER", "LEFT")
         elif familia == 'IMPRESION':
-            cols = (10, 30, 30, 40, 80); headers = ["C.", "Ancho (m)", "Largo (m)", "Acabado", "Obs / Calandrado"]
+            cols = (10, 30, 30, 40, 80)
+            headers = ["C.", "Ancho (m)", "Largo (m)", "Acabado", "Obs / Calandrado"]
+            aligns = ("CENTER", "CENTER", "CENTER", "LEFT", "LEFT")
         else:
-            cols = (15, 50, 125); headers = ["C.", "Acabado", "Observación"]
+            cols = (15, 50, 125)
+            headers = ["C.", "Acabado", "Observación"]
+            aligns = ("CENTER", "LEFT", "LEFT")
 
-        with pdf.table(col_widths=cols, text_align=("CENTER", "CENTER", "CENTER", "LEFT", "CENTER", "LEFT", "CENTER", "LEFT") if tiene_polines and familia == 'UNIFORME COMPLETO' else ("CENTER", "CENTER", "CENTER", "LEFT", "CENTER", "LEFT", "LEFT"), cell_fill_mode="ROWS") as table:
+        with pdf.table(col_widths=cols, text_align=aligns, cell_fill_mode="ROWS") as table:
             row = table.row(style=estilo_cabecera_taller)
             for h in headers: row.cell(h)
                 
             for esp in especificaciones:
-                # LÓGICA CONDICIONAL REAL: Leer el campo booleano 'es_arquero' de la BD
                 es_arquero_bd = esp.get('es_arquero', False)
-                
-                # Opcional: Mantenemos la búsqueda en texto por si alguna vez lo escriben en las observaciones y olvidan marcar el check
                 obs_limpia = str(esp.get('observacion_individual') or '').strip().upper()
                 
                 if es_arquero_bd or "ARQUERO" in obs_limpia:
@@ -904,7 +910,6 @@ def generar_hoja_produccion(orden):
                 else:
                     estilo_fila_actual = estilo_datos_taller
                 
-                # Aplicamos el estilo condicional a la fila entera
                 row = table.row(style=estilo_fila_actual)
                 c_fila = str(esp.get('cant_fila', 1))
                 
@@ -912,10 +917,13 @@ def generar_hoja_produccion(orden):
                 num_limpio = limpiar_texto_pdf(str(esp.get('numero_dorsal') or '').strip())
                 cuello_limpio = limpiar_texto_pdf(str(esp.get('tipo_cuello_texto') or '').strip())
                 obs_limpia_txt = limpiar_texto_pdf(str(esp.get('observacion_individual') or '').strip())
+                gen_limpio = limpiar_texto_pdf(str(esp.get('genero') or '').strip())
                 
                 if familia == 'UNIFORME COMPLETO':
                     row.cell(c_fila)
-                    row.cell(limpiar_texto_pdf(str(esp.get('talla_superior') or '-').strip() or '-')); row.cell(limpiar_texto_pdf(str(esp.get('talla_inferior') or '-').strip() or '-'))
+                    row.cell(limpiar_texto_pdf(str(esp.get('talla_superior') or '-').strip() or '-'))
+                    row.cell(limpiar_texto_pdf(str(esp.get('talla_inferior') or '-').strip() or '-'))
+                    row.cell(gen_limpio)
                     row.cell(nom_limpio); row.cell(num_limpio)
                     row.cell(cuello_limpio)
                     if tiene_polines: row.cell(limpiar_texto_pdf(str(esp.get('talla_polines') or '-').strip() or '-'))
@@ -923,11 +931,14 @@ def generar_hoja_produccion(orden):
                 elif familia == 'PRENDA SUPERIOR':
                     row.cell(c_fila)
                     row.cell(limpiar_texto_pdf(str(esp.get('talla_superior') or '-').strip() or '-')); row.cell("-")
+                    row.cell(gen_limpio)
                     row.cell(nom_limpio); row.cell(num_limpio)
                     row.cell(cuello_limpio); row.cell(obs_limpia_txt)
                 elif familia == 'PANTALONETA':
                     row.cell(c_fila)
-                    row.cell(limpiar_texto_pdf(str(esp.get('talla_inferior') or '-').strip() or '-')); row.cell(num_limpio)
+                    row.cell(limpiar_texto_pdf(str(esp.get('talla_inferior') or '-').strip() or '-'))
+                    row.cell(gen_limpio)
+                    row.cell(num_limpio)
                     row.cell(obs_limpia_txt)
                 elif familia == 'IMPRESION':
                     row.cell(c_fila)

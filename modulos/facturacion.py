@@ -18,17 +18,22 @@ def render(supabase):
     with tab1:
         st.subheader("Órdenes Listas para Facturar")
         
+        # [Seguro]: Inyectamos los controles de búsqueda con llaves (keys) únicas para no chocar con la Tab 2.
+        col_p1, col_p2, col_p3 = st.columns([1.5, 1.5, 3])
+        # [Suposición]: Para pendientes, retrocedemos al inicio del año por defecto para capturar rezagadas
+        f_inicio_pend = col_p1.date_input("Desde", value=datetime.today().replace(month=1, day=1), key="pend_f_ini")
+        f_fin_pend = col_p2.date_input("Hasta", value=datetime.today(), key="pend_f_fin")
+        txt_bus_pend = col_p3.text_input("🔍 Buscar", placeholder="Orden, RUC o Nombre de Cliente...", key="pend_txt_bus")
+        
         try:
-            # AGREGAMOS 'saldo_pendiente' a la selección de columnas de la BD
-            res_pendientes = supabase.table('ordenes').select('id, codigo_orden, created_at, total_estimado, saldo_pendiente, clientes(nombre_completo, cedula_ruc), estado_facturacion').is_('estado_facturacion', False).order('created_at', desc=True).limit(50).execute()
+            # [Seguro]: Eliminamos el .limit(50) y usamos los filtros de fecha directamente en la BD
+            res_pendientes = supabase.table('ordenes').select('id, codigo_orden, created_at, total_estimado, saldo_pendiente, clientes(nombre_completo, cedula_ruc), estado_facturacion').is_('estado_facturacion', False).gte('created_at', f"{f_inicio_pend}T00:00:00").lte('created_at', f"{f_fin_pend}T23:59:59").order('created_at', desc=True).execute()
             
-            # Por si las órdenes viejas tienen el campo en "null" tras crear la columna
-            res_nulas = supabase.table('ordenes').select('id, codigo_orden, created_at, total_estimado, saldo_pendiente, clientes(nombre_completo, cedula_ruc), estado_facturacion').is_('estado_facturacion', 'null').order('created_at', desc=True).limit(50).execute()
+            res_nulas = supabase.table('ordenes').select('id, codigo_orden, created_at, total_estimado, saldo_pendiente, clientes(nombre_completo, cedula_ruc), estado_facturacion').is_('estado_facturacion', 'null').gte('created_at', f"{f_inicio_pend}T00:00:00").lte('created_at', f"{f_fin_pend}T23:59:59").order('created_at', desc=True).execute()
             
             datos_combinados = (res_pendientes.data if res_pendientes.data else []) + (res_nulas.data if res_nulas.data else [])
             
             # --- FILTRO DE AUDITORÍA FINANCIERA ---
-            # Dejamos pasar únicamente las órdenes con saldo_pendiente menor o igual a 0 (100% pagadas)
             if datos_combinados:
                 datos_combinados = [d for d in datos_combinados if float(d.get('saldo_pendiente', 0) or 0) <= 0]
             
@@ -48,9 +53,19 @@ def render(supabase):
                     
                 df_pend = pd.DataFrame(lista_pend).drop_duplicates(subset=['Código'])
                 
-                # Tabla interactiva para seleccionar qué facturar
-                evt_pend = st.dataframe(df_pend, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+                # [Seguro]: Aplicamos el filtro de texto interactivo de Pandas
+                if txt_bus_pend:
+                    df_pend = df_pend[
+                        df_pend['Código'].str.contains(txt_bus_pend, case=False, na=False) |
+                        df_pend['RUC/CI'].str.contains(txt_bus_pend, case=False, na=False) |
+                        df_pend['Cliente'].str.contains(txt_bus_pend, case=False, na=False)
+                    ]
                 
+                # Validamos que el dataframe filtrado no quede vacío antes de pintarlo
+                if not df_pend.empty:
+                    # Tabla interactiva para seleccionar qué facturar
+                    evt_pend = st.dataframe(df_pend, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+                    
                 if len(evt_pend.selection.rows) > 0:
                     cod_sel = df_pend.iloc[evt_pend.selection.rows[0]]["Código"]
                     st.divider()
