@@ -609,38 +609,47 @@ def generar_hoja_produccion(orden):
     
     for item in items_taller:
         fam = str(item.get('familia_producto', '')).strip().upper() 
-        tipo_prenda = str(item.get('tipo_prenda') or '').strip().upper()
-        if not tipo_prenda: tipo_prenda = fam
         
+        # [Seguro]: Extraemos un título base limpio directamente del nombre del producto
+        # Ej: "PANT|VESTIR|TXS-XL" se convierte automáticamente en "PANT VESTIR"
+        nombre_crudo = str(item.get('nombre_producto') or fam).strip().upper().replace('│', '|')
+        partes = nombre_crudo.split('|')
+        titulo_base = partes[0].strip()
+        if len(partes) > 1:
+            p1 = partes[1].strip()
+            # Ignoramos la segunda parte si es un rango de tallas o género (ej. ADULTO, TXS, T2)
+            if not any(x in p1 for x in ['TX', 'XL', 'ADULTO', 'NIÑ', 'TALLA', 'SRTA']) and not (p1.startswith('T') and p1[1:2].isdigit()):
+                titulo_base += f" {p1}"
+                
+        if not titulo_base: titulo_base = fam
+
         for esp in item.get('especificaciones_producto', []):
             t_sup = str(esp.get('talla_superior') or '').strip().upper()
             t_inf = str(esp.get('talla_inferior') or '').strip().upper()
             es_arq = bool(esp.get("es_arquero", False))
             
-            # Conteo Superior Dinámico
-            if fam in ['UNIFORME COMPLETO', 'PRENDA SUPERIOR'] and t_sup not in ['-', 'NONE', '']: 
-                titulo_sup = f"{tipo_prenda} (SUPERIOR)" if fam == 'UNIFORME COMPLETO' else f"{tipo_prenda}"
-                if es_arq: titulo_sup += " (ARQ)"
-                if titulo_sup not in resumenes_dinamicos: resumenes_dinamicos[titulo_sup] = {}
-                resumenes_dinamicos[titulo_sup][t_sup] = resumenes_dinamicos[titulo_sup].get(t_sup, 0) + 1
+            tiene_sup = t_sup not in ['-', 'NONE', '', 'N/A', 'NAN', '0']
+            tiene_inf = t_inf not in ['-', 'NONE', '', 'N/A', 'NAN', '0']
             
-            # Conteo Inferior Dinámico
-                if fam in ['UNIFORME COMPLETO', 'PANTALONETA'] and t_inf not in ['-', 'NONE', '']: 
-                    nombre_prod = str(item.get('nombre_producto', '')).strip().upper()
-                    
-                    # [Seguro]: Inspección estricta para separar las tablas de prendas inferiores
-                    if "FALDA SHORT" in nombre_prod:
-                        titulo_inf = "FALDA SHORT"
-                    elif "SHORT" in nombre_prod:
-                        titulo_inf = "SHORT"
-                    elif "FALDA" in nombre_prod:
-                        titulo_inf = "FALDA"
-                    else:
-                        titulo_inf = f"{tipo_prenda}" if fam == 'PANTALONETA' else f"{tipo_prenda} (INFERIOR)"
-                    
-                    if es_arq: titulo_inf += " (ARQ)"
-                    if titulo_inf not in resumenes_dinamicos: resumenes_dinamicos[titulo_inf] = {}
-                    resumenes_dinamicos[titulo_inf][t_inf] = resumenes_dinamicos[titulo_inf].get(t_inf, 0) + 1
+            # Conteo Superior Universal (Eliminamos el hardcoding de familias)
+            if tiene_sup:
+                tit_s = f"{titulo_base} (SUPERIOR)" if (tiene_inf or fam == 'UNIFORME COMPLETO') else titulo_base
+                if es_arq: tit_s += " (ARQ)"
+                if tit_s not in resumenes_dinamicos: resumenes_dinamicos[tit_s] = {}
+                resumenes_dinamicos[tit_s][t_sup] = resumenes_dinamicos[tit_s].get(t_sup, 0) + 1
+                
+            # Conteo Inferior Universal (Eliminamos el hardcoding de familias)
+            if tiene_inf:
+                # Excepciones estrictas de tu requerimiento anterior
+                if "FALDA SHORT" in nombre_crudo: tit_i = "FALDA SHORT"
+                elif "SHORT" in nombre_crudo: tit_i = "SHORT"
+                elif "FALDA" in nombre_crudo: tit_i = "FALDA"
+                else: tit_i = f"{titulo_base} (INFERIOR)" if (tiene_sup or fam == 'UNIFORME COMPLETO') else titulo_base
+                
+                if es_arq: tit_i += " (ARQ)"
+                if tit_i not in resumenes_dinamicos: resumenes_dinamicos[tit_i] = {}
+                resumenes_dinamicos[tit_i][t_inf] = resumenes_dinamicos[tit_i].get(t_inf, 0) + 1
+            
             # Conteo Polines
             if fam == 'UNIFORME COMPLETO':
                 t_pol = str(esp.get('talla_polines') or '').strip().upper()

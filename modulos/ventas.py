@@ -375,9 +375,11 @@ def render(supabase):
                     
                     try:
                         res_telas_bd = supabase.table("insumos").select("nombre").execute()
-                        lista_telas_db = [t['nombre'] for t in res_telas_bd.data] if res_telas_bd.data else ["Estándar"]
+                        # [Seguro]: Inyectamos la opción en la posición 0 para que sea el valor por defecto en impresiones
+                        opcion_nula = "Ninguna / Sustrato del Cliente"
+                        lista_telas_db = [opcion_nula] + [t['nombre'] for t in res_telas_bd.data] if res_telas_bd.data else [opcion_nula, "Estándar"]
                     except:
-                        lista_telas_db = ["Estándar"]
+                        lista_telas_db = ["Ninguna / Sustrato del Cliente", "Estándar"]
                     lista_perfiles = ["Plotter 1", "Plotter 2", "DTF"]
 
                     # 1. Subida Automática
