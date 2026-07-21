@@ -99,10 +99,8 @@ def render(supabase):
                             st.write("Dirección:")
                             st.code(cli.get('ciudad', 'Sin dirección registrada'), language=None)
                             
+                            # [Seguro]: Extraemos los pagos para la nueva auditoría
                             pagos = datos_orden.get('pagos', [])
-                            metodo = pagos[0].get('metodo_pago', 'Efectivo') if pagos else "Efectivo"
-                            st.write("Forma de Pago:")
-                            st.code(metodo, language=None)
                             
                         # --- COLUMNA 2: RESUMEN DE PRODUCTOS A FACTURAR ---
                         with col_prod:
@@ -140,26 +138,125 @@ def render(supabase):
                             total_factura = float(datos_orden.get('total_estimado', 0))
                             st.metric("Total a Facturar", f"${total_factura:.2f}")
                             
-                            st.markdown("---")
-                            st.markdown("#### ✅ Confirmación de Emisión")
-                            st.caption("Una vez generada la factura en el sistema externo, ingresa aquí el número para limpiar esta orden de la bandeja de pendientes.")
+                        # ==========================================================
+                        # NUEVA SECCIÓN: AUDITORÍA Y CORRECCIÓN DE PAGOS
+                        # ==========================================================
+                        st.divider()
+                        st.markdown("#### 💳 Auditoría y Corrección de Pagos")
+                        st.caption("Verifica que los cobros registrados coincidan con la realidad. Modifica, agrega o elimina pagos si el asesor cometió un error al registrar el abono/saldo.")
+                        
+                        # [Probable]: Preparar los datos financieros en un formato amigable para edición
+                        lista_pagos = []
+                        for p in pagos:
+                            f_pago_str = p.get('fecha_pago') or str(datetime.today().date())
+                            # Transformamos el texto a objeto Date desde el principio para evitar el colapso
+                            try:
+                                fecha_obj = datetime.strptime(f_pago_str[:10], "%Y-%m-%d").date()
+                            except:
+                                fecha_obj = datetime.today().date()
+                                
+                            lista_pagos.append({
+                                "id_oculto": p.get("id"),
+                                "Fecha": fecha_obj,
+                                "Método": p.get("metodo_pago", "Efectivo"),
+                                "Banco": p.get("banco_destino", ""),
+                                "Referencia": p.get("numero_referencia", ""),
+                                "Monto ($)": float(p.get("monto", 0))
+                            })
+                        
+                        df_pagos = pd.DataFrame(lista_pagos)
+                        if df_pagos.empty:
+                            df_pagos = pd.DataFrame(columns=["id_oculto", "Fecha", "Método", "Banco", "Referencia", "Monto ($)"])
+                            # [Seguro]: Si la orden no tiene pagos, forzamos la columna vacía a tipo DateTime
+                            df_pagos["Fecha"] = pd.to_datetime(df_pagos["Fecha"]).dt.date
                             
-                            num_factura = st.text_input("N° de Factura (Ej: 001-001-000012345)")
-                            
-                            if st.button("Marcar Orden como FACTURADA", type="primary", use_container_width=True):
-                                if num_factura.strip():
-                                    try:
-                                        supabase.table('ordenes').update({
-                                            "estado_facturacion": True,
-                                            "numero_factura": num_factura.strip()
-                                        }).eq('id', datos_orden['id']).execute()
-                                        st.success(f"¡Listo! Orden {cod_sel} vinculada a la factura {num_factura} exitosamente.")
-                                        time.sleep(1.5)
+                        # El editor dinámico permite borrar filas enteras o agregar nuevas
+                        pagos_editados = st.data_editor(
+                            df_pagos,
+                            num_rows="dynamic",
+                            hide_index=True,
+                            use_container_width=True,
+                            column_config={
+                                "id_oculto": None, # Se oculta para no confundir al usuario
+                                "Fecha": st.column_config.DateColumn("Fecha", required=True),
+                                "Método": st.column_config.SelectboxColumn("Método", options=["Efectivo", "Transferencia", "Tarjeta", "Otro"], required=True),
+                                "Banco": st.column_config.SelectboxColumn("Banco", options=["", "JEP", "Pichincha", "Pacifico", "Austro", "Otro"]),
+                                "Referencia": st.column_config.TextColumn("Ref/Comprobante"),
+                                "Monto ($)": st.column_config.NumberColumn("Monto ($)", min_value=0.01, format="%.2f", required=True)
+                            },
+                            key=f"editor_pagos_{cod_sel}"
+                        )
+                        
+                        # Matemáticas de Validación
+                        total_pagado = pagos_editados["Monto ($)"].sum() if not pagos_editados.empty else 0.0
+                        descuadre = total_factura - total_pagado
+                        
+                        col_val1, col_val2 = st.columns([2, 1])
+                        
+                        with col_val1:
+                            if descuadre > 0:
+                                st.error(f"⚠️ Faltan pagos por registrar: **${descuadre:.2f}** pendientes de cobro.")
+                            elif descuadre < 0:
+                                st.warning(f"⚠️ Sobrecobro detectado: Hay **${abs(descuadre):.2f}** cobrados de más.")
+                            else:
+                                st.success("✅ Los pagos cubren el 100% de la orden exactamente.")
+                                
+                        with col_val2:
+                            # [Seguro]: El botón solo se activa si Streamlit detecta una modificación real en la tabla
+                            hubo_cambios = not df_pagos.equals(pagos_editados)
+                            if st.button("💾 Guardar Correcciones", type="secondary", disabled=not hubo_cambios, use_container_width=True):
+                                try:
+                                    with st.spinner("Actualizando libros contables..."):
+                                        # 1. Purga total del historial viejo de esta orden
+                                        supabase.table('pagos').delete().eq('orden_id', datos_orden['id']).execute()
+                                        
+                                        # 2. Inserción de la nueva realidad financiera
+                                        nuevos_pagos_db = []
+                                        for _, r in pagos_editados.iterrows():
+                                            nuevos_pagos_db.append({
+                                                "orden_id": datos_orden['id'],
+                                                "cliente_id": datos_orden['cliente_id'],
+                                                "monto": r["Monto ($)"],
+                                                "metodo_pago": r["Método"],
+                                                "banco_destino": r["Banco"] if r["Banco"] else None,
+                                                "numero_referencia": str(r["Referencia"]) if r.get("Referencia") else None,
+                                                "fecha_pago": str(r["Fecha"])
+                                            })
+                                        if nuevos_pagos_db:
+                                            supabase.table('pagos').insert(nuevos_pagos_db).execute()
+                                            
+                                        # 3. Corrección del saldo general de la orden
+                                        nuevo_saldo = descuadre if descuadre > 0 else 0.0
+                                        supabase.table('ordenes').update({"saldo_pendiente": nuevo_saldo}).eq('id', datos_orden['id']).execute()
+                                        
+                                        st.toast("Finanzas actualizadas", icon="✅")
+                                        time.sleep(1)
                                         st.rerun()
-                                    except Exception as e:
-                                        st.error(f"Error al guardar en base de datos: {e}")
-                                else:
-                                    st.warning("⚠️ Debes ingresar el número de la factura para poder continuar.")
+                                except Exception as e:
+                                    st.error(f"Error actualizando pagos: {e}")
+
+                        st.markdown("---")
+                        st.markdown("#### ✅ Confirmación de Emisión")
+                        st.caption("Ingresa aquí el número de factura para limpiar esta orden de la bandeja. (El botón se bloquea si hay deudas).")
+                        
+                        col_emit1, col_emit2 = st.columns([2, 1])
+                        num_factura = col_emit1.text_input("N° de Factura (Ej: 001-001-000012345)", label_visibility="collapsed", placeholder="N° de Factura (Ej: 001-001-000012345)")
+                        
+                        # [Suposición]: Asumo que no deseas facturar órdenes incompletas. El botón se bloquea si 'descuadre > 0'.
+                        if col_emit2.button("Marcar como FACTURADA", type="primary", use_container_width=True, disabled=(descuadre > 0)):
+                            if num_factura.strip():
+                                try:
+                                    supabase.table('ordenes').update({
+                                        "estado_facturacion": True,
+                                        "numero_factura": num_factura.strip()
+                                    }).eq('id', datos_orden['id']).execute()
+                                    st.success(f"¡Listo! Orden {cod_sel} vinculada a la factura {num_factura}.")
+                                    time.sleep(1.5)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error al guardar en base de datos: {e}")
+                            else:
+                                st.warning("⚠️ Debes ingresar el número de la factura para poder continuar.")
             else:
                 st.success("🎉 ¡No hay órdenes pendientes de facturar!")
         except Exception as e:

@@ -558,7 +558,10 @@ def render(supabase):
                         df_telas = df_ins[df_ins['categoria'].str.contains("TELA", case=False, na=False)]
                         if not df_telas.empty:
                             mapa_telas = {row['nombre']: row['id'] for _, row in df_telas.iterrows()}
-                            lista_telas = ["Seleccionar..."] + sorted(list(mapa_telas.keys()))
+                            
+                            # [Seguro]: Inyectamos la opción nula manteniendo el placeholder
+                            opcion_nula = "Ninguna / Sustrato del Cliente"
+                            lista_telas = ["Seleccionar...", opcion_nula] + sorted(list(mapa_telas.keys()))
                             
                             idx_tela_sel = 0
                             restore_fid = st.session_state.get('restore_fabric_id')
@@ -567,7 +570,9 @@ def render(supabase):
                                 if nombre_tela in lista_telas: idx_tela_sel = lista_telas.index(nombre_tela)
 
                             sel_t = st.selectbox("🧶 Seleccionar Tela", lista_telas, index=idx_tela_sel)
-                            id_t = mapa_telas[sel_t] if sel_t != "Seleccionar..." else None
+                            
+                            # [Seguro]: Si eligen "Seleccionar..." o "Ninguna", el ID que va a Supabase será None (Null)
+                            id_t = mapa_telas[sel_t] if sel_t not in ["Seleccionar...", opcion_nula] else None
                         else:
                             st.warning("No hay telas en Insumos"); id_t = None
                     except: id_t = None
