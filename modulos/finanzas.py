@@ -134,10 +134,14 @@ def render(supabase):
                     st.markdown(f"### 💰 Liquidar Orden: **{fila_datos['codigo_orden']}** ({fila_datos['Cliente']})")
 
                     with st.form(key="form_pago", clear_on_submit=True):
-                        col_monto, col_metodo, col_banco = st.columns(3)
+                        # [Seguro]: Amortizamos en 4 columnas para incluir de forma limpia el campo de referencia
+                        col_monto, col_metodo, col_banco, col_ref = st.columns([1.2, 1.2, 1.2, 1.4])
                         monto_a_pagar = col_monto.number_input("Monto a Pagar ($)", min_value=0.01, max_value=saldo_actual, value=saldo_actual)
                         metodo_pago = col_metodo.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Tarjeta", "Otro"])
                         banco_destino = col_banco.selectbox("Banco Destino", ["Seleccionar...", "JEP", "Pichincha", "Pacifico", "Austro"])
+                        
+                        # [Seguro]: Nuevo campo de texto para almacenar el número de comprobante/referencia
+                        num_referencia = col_ref.text_input("Nº Compr. / Ref.", placeholder="Ej: 0012345")
                         
                         submit_pago = st.form_submit_button("💾 Confirmar Pago", type="primary", use_container_width=True)
                         
@@ -146,6 +150,8 @@ def render(supabase):
                                 st.error("⚠️ Debes seleccionar a qué banco ingresó la transferencia.")
                             else:
                                 try:
+                                    # [Seguro]: Estructuramos el diccionario con la misma llave 'numero_referencia' 
+                                    # que usa el módulo de facturación y producción para guardar en la BD.
                                     data_pago = {
                                         "orden_id": orden_seleccionada_id,
                                         "cliente_id": int(fila_datos["cliente_id"]),
@@ -155,6 +161,9 @@ def render(supabase):
                                     }
                                     if banco_destino != "Seleccionar...":
                                         data_pago["banco_destino"] = banco_destino
+                                        
+                                    if num_referencia.strip():
+                                        data_pago["numero_referencia"] = num_referencia.strip()
 
                                     supabase.table("pagos").insert(data_pago).execute()
                                     
