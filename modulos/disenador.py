@@ -64,7 +64,8 @@ def render(supabase):
             submit_search = col4.form_submit_button("Filtrar Bandeja", use_container_width=True)
 
     try:
-        query = supabase.table("ordenes").select("id, codigo_orden, estado, fecha_entrega, alerta_cambios, detalle_cambios, cliente_id, created_at, url_boceto_vendedora, url_arte_final, url_diseno_final, observaciones_generales")
+        # [Seguro]: Añadimos 'creado_por_id' a la consulta principal
+        query = supabase.table("ordenes").select("id, codigo_orden, estado, fecha_entrega, alerta_cambios, detalle_cambios, cliente_id, creado_por_id, created_at, url_boceto_vendedora, url_arte_final, url_diseno_final, observaciones_generales")
         
         if mostrar_historial:
             query = query.neq("estado", "Entregado") 
@@ -74,13 +75,21 @@ def render(supabase):
         res_ordenes = query.order("created_at", desc=True).execute()
         ordenes_data = res_ordenes.data
         
-        # MOVEMOS LA CONSULTA DE CLIENTES ADENTRO DEL TRY PARA PROTEGERLA
         mapa_clientes = {}
+        mapa_vendedores = {}
         if ordenes_data:
+            # 1. Mapeo de Clientes
             cliente_ids = list(set([d['cliente_id'] for d in ordenes_data if d.get('cliente_id')]))
             if cliente_ids:
                 res_cli = supabase.table('clientes').select('id, nombre_completo').in_('id', cliente_ids).execute()
                 for c in res_cli.data: mapa_clientes[c['id']] = c.get('nombre_completo', 'Desconocido')
+                
+            # 2. Mapeo de Vendedoras (Usuarios)
+            vendedor_ids = list(set([d['creado_por_id'] for d in ordenes_data if d.get('creado_por_id')]))
+            if vendedor_ids:
+                res_ven = supabase.table('usuarios').select('id, nombre_completo').in_('id', vendedor_ids).execute()
+                if res_ven.data:
+                    for v in res_ven.data: mapa_vendedores[v['id']] = v.get('nombre_completo', 'Desconocido')
                 
     except Exception as e:
         # SISTEMA ANTI-CHOQUE: Si el usuario deselecciona muy rápido, reintenta en 0.5s silenciosamente
@@ -105,6 +114,7 @@ def render(supabase):
 
     df_ordenes = pd.DataFrame(ordenes_data)
     df_ordenes['Cliente'] = df_ordenes['cliente_id'].map(lambda x: mapa_clientes.get(x, 'Consumidor Final'))
+    df_ordenes['Vendedora'] = df_ordenes['creado_por_id'].map(lambda x: mapa_vendedores.get(x, 'No registrado'))
     
     if busqueda_cod: df_ordenes = df_ordenes[df_ordenes['codigo_orden'].str.contains(busqueda_cod, case=False, na=False)]
     if busqueda_cli: df_ordenes = df_ordenes[df_ordenes['Cliente'].str.contains(busqueda_cli, case=False, na=False)]
@@ -139,7 +149,7 @@ def render(supabase):
 
         st.divider()
         col_i1, col_i2, col_i3 = st.columns(3)
-        col_i1.markdown(f"**Orden:** `{orden['codigo_orden']}`\n\n**Cliente:** {orden['Cliente']}")
+        col_i1.markdown(f"**Orden:** `{orden['codigo_orden']}`\n\n**Cliente:** {orden['Cliente']}\n\n**Vendedora:** {orden.get('Vendedora', 'No registrado')}")
         col_i2.markdown(f"**Estado:** {orden['estado']}\n\n**Entrega:** {orden['fecha_entrega']}")
         
         with col_i3:
@@ -472,15 +482,17 @@ def render(supabase):
                     
                     output = io.StringIO()
                     writer = csv.writer(output)
-                    writer.writerow(["Tallas", "Nombre", "Numero", "Pantaloneta"])
+                    # [Seguro]: Ajuste de los encabezados tal como lo solicitaste
+                    writer.writerow(["Talla", "Nombre", "Numero", "Talla Pantaloneta", "Pantaloneta"])
                     
                     for _, row in df_plugin.iterrows():
-                        talla = str(row['Talla Sup.']).strip()
+                        talla_sup = str(row['Talla Sup.']).strip()
+                        talla_inf = str(row['Talla Inf.']).strip()
                         gen = acortar_genero(row['Género'])
                         cuello = acortar_cuello(row['Cuello'])
                         
-                        # Combinación de metadatos (Ej: L-M-V)
-                        meta = f"{talla}-{gen}"
+                        # Combinación de metadatos para la camiseta (Ej: L-M-V)
+                        meta = f"{talla_sup}-{gen}"
                         if cuello: meta += f"-{cuello}"
                         
                         nombre = str(row['Jugador']).strip()
@@ -489,11 +501,20 @@ def render(supabase):
                         dorsal = str(row['Dorsal']).strip()
                         if dorsal == "-": dorsal = ""
                         
-                        # TRUCO INFALIBLE: Añadimos un "espacio indivisible" (\xa0) al final. 
-                        # Excel y el Plugin lo tratarán 100% como Texto y NUNCA borrarán el 0 de '07'.
                         if dorsal: dorsal = f"{dorsal}\xa0"
                         
-                        writer.writerow([meta, nombre, dorsal, "NO"])
+                        # --- NUEVA LÓGICA DE PANTALONETA ---
+                        # [Seguro]: Si la tabla inferior no está vacía ni es un guión, es uniforme completo
+                        if talla_inf and talla_inf != "-":
+                            pantaloneta_str = "SI"
+                            # Si las tallas son idénticas, se omite. Si difieren, se escribe la inferior.
+                            talla_pantaloneta_str = "" if talla_sup == talla_inf else talla_inf
+                        else:
+                            # Prenda superior solitaria
+                            pantaloneta_str = "NO"
+                            talla_pantaloneta_str = ""
+                            
+                        writer.writerow([meta, nombre, dorsal, talla_pantaloneta_str, pantaloneta_str])
                     
                     csv_data = output.getvalue().encode('utf-8-sig') # Preserva tildes y ñ
                     
