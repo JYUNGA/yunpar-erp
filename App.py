@@ -7,7 +7,7 @@ import google.generativeai as genai # <-- LA LIBRERÍA OFICIAL DE GEMINI
 
 # --- IMPORTACIÓN DE MÓDULOS ---
 # Importamos el nuevo módulo de asistencia y nómina junto a los demás
-from modulos import clientes, productos, insumos, cotizaciones, produccion, finanzas, reportes, disenador, impresion, usuarios, ventas, facturacion, rh, apus
+from modulos import clientes, productos, insumos, cotizaciones, produccion, finanzas, reportes, disenador, impresion, usuarios, ventas, facturacion, rh, apus, polines
 
 
 # --- CONFIGURACIÓN GLOBAL ---
@@ -44,10 +44,10 @@ PERMISOS = {
     "GERENTE": [
         "Inicio", "Ventas", "Cotizaciones", "Producción", "Facturación", "Reportes", 
         "Diseño", "Impresión", "Caja y Finanzas", "Asistencia y Nómina", 
-        "Clientes", "Productos", "Insumos", "Usuarios", "Costos y APUs"
+        "Clientes", "Productos", "Insumos", "Usuarios", "Costos y APUs", "Polines"
     ],
     "VENDEDORA": [
-        "Inicio", "Ventas", "Cotizaciones", "Producción", "Facturación", "Caja y Finanzas", "Clientes", "Reportes"
+        "Inicio", "Ventas", "Cotizaciones", "Producción", "Facturación", "Caja y Finanzas", "Clientes", "Reportes", "Polines"
     ],
     "IMPRESION": [
         "Inicio", "Impresión", "Reportes"
@@ -205,6 +205,7 @@ def enrutador(opcion):
     # Enlazamos la opción de navegación con la función render de tu archivo rh.py
     elif opcion == "Asistencia y Nómina": rh.render(supabase)
     elif opcion == "Costos y APUs": apus.render(supabase)
+    elif opcion == "Polines": polines.render(supabase)
 
 # --- FLUJO PRINCIPAL ---
 inicializar_estado()
