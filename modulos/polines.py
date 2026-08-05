@@ -185,10 +185,9 @@ def render(supabase):
         if st.button("✅ Registrar Compra Realizada", type="primary", use_container_width=True):
             try:
                 with st.spinner("Actualizando base de datos..."):
-                    # Extraemos los IDs de las especificaciones que están en pantalla
-                    ids_a_marcar = df_join['id'].tolist()
+                    # [Seguro]: Corregimos la extracción para tomar el ID exacto de la especificación (id_esp)
+                    ids_a_marcar = df_join['id_esp'].tolist()
                     
-                    # Supabase requiere hacer updates en lotes si son muchos, o un in_
                     # Hacemos el update masivo:
                     supabase.table('especificaciones_producto').update(
                         {"polines_comprados": True}
