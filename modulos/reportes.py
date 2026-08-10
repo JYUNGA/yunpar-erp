@@ -714,12 +714,27 @@ def generar_hoja_produccion(orden):
             x = posiciones_x[col_actual]
             pdf.set_xy(x, y_actual)
             
-            # Prevención de salto de página
-            if y_actual > 250:
+            # Prevención de salto de página inteligente (Calcula el alto antes de dibujar)
+            # Altura = Título y margen (16) + Filas de datos (6 c/u) + Fila total (6)
+            filas_datos = len(tabla["datos"])
+            altura_estimada = 16 + (filas_datos * 6) + 6
+            
+            if (y_actual + altura_estimada) > 275:
                 pdf.add_page()
-                y_actual = pdf.get_y()
+                y_actual = 40 # Reinicio fijo para evadir la cabecera del logo
                 max_y = y_actual
                 pdf.set_xy(x, y_actual)
+                
+            # Asignación de Semántica de Colores
+            tit_upper = str(tabla["titulo"]).upper()
+            if "ARQ" in tit_upper:
+                r_c, g_c, b_c = 252, 228, 214 # Naranja suave para Arqueros
+            elif "(SUPERIOR)" in tit_upper or "(INFERIOR)" in tit_upper or "UNIF" in tit_upper:
+                r_c, g_c, b_c = 217, 225, 242 # Azul claro para Uniformes emparejados
+            elif tabla["tipo"] == "polin":
+                r_c, g_c, b_c = 231, 230, 230 # Gris claro para Polines
+            else:
+                r_c, g_c, b_c = 226, 239, 218 # Verde suave para Prendas sueltas
             
             # DIBUJAR TÍTULO (CORREGIDO: CÁLCULO DE LÍNEAS DINÁMICO)
             pdf.set_font("helvetica", "B", 8)
@@ -742,14 +757,8 @@ def generar_hoja_produccion(orden):
             pdf.set_xy(x, y_base_fila + 9.5)
             
             # DIBUJAR CABECERA (CON COLOR DINÁMICO)
-            if "(INFERIOR)" in tabla["titulo"]:
-                pdf.set_fill_color(80, 130, 180) # Azul acero para diferenciar prendas inferiores
-            elif tabla["tipo"] == "polin":
-                pdf.set_fill_color(100, 100, 100) # Gris oscuro para polines
-            else:
-                pdf.set_fill_color(*fill_cab) # Gris original para superiores
-                
-            pdf.set_text_color(255, 255, 255)
+            pdf.set_fill_color(r_c, g_c, b_c)
+            pdf.set_text_color(0, 0, 0) # Texto negro para que contraste con los tonos pastel
             
             if tabla["tipo"] == "normal":
                 pdf.cell(20, 6, "Talla", border=1, align="C", fill=True)
@@ -804,11 +813,7 @@ def generar_hoja_produccion(orden):
             # DIBUJAR FILA TOTAL (CON COLOR DINÁMICO)
             pdf.set_x(x)
             pdf.set_font("helvetica", "B", 8)
-            
-            if "(INFERIOR)" in tabla["titulo"]:
-                pdf.set_fill_color(176, 196, 222) # Azul claro para la fila total inferior
-            else:
-                pdf.set_fill_color(*fill_tot) # Gris original para las demás
+            pdf.set_fill_color(r_c, g_c, b_c) # Reutilizamos el mismo color de la cabecera
 
             if tabla["tipo"] == "normal":
                 pdf.cell(20, 6, "TOTAL", border=1, align="C", fill=True)
