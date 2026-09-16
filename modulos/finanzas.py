@@ -3,20 +3,28 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime, date
 
+
 def render(supabase):
     # ==========================================
     # 🔐 SISTEMA DE ROLES (RBAC)
     # ==========================================
-    rol_actual = st.session_state.get('rol', 'VENDEDORA').upper() 
+    rol_actual = st.session_state.get("rol", "VENDEDORA").upper()
 
     st.title("💸 Finanzas y Control de Caja")
-    st.markdown("Gestión de ingresos (Abonos/Pagos), egresos operativos y cuentas por cobrar.")
+    st.markdown(
+        "Gestión de ingresos (Abonos/Pagos), egresos operativos y cuentas por cobrar."
+    )
 
     # ==========================================
     # 🏗️ CONSTRUCCIÓN DINÁMICA DE PESTAÑAS
     # ==========================================
     if rol_actual == "GERENTE":
-        nombres_tabs = ["📊 Flujo de Caja", "⏳ Cuentas por Cobrar", "📤 Registrar Gasto", "📖 Libro Diario"]
+        nombres_tabs = [
+            "📊 Flujo de Caja",
+            "⏳ Cuentas por Cobrar",
+            "📤 Registrar Gasto",
+            "📖 Libro Diario",
+        ]
     else:
         nombres_tabs = ["⏳ Cuentas por Cobrar", "📤 Registrar Gasto"]
 
@@ -25,7 +33,7 @@ def render(supabase):
 
     hoy = date.today()
     primer_dia_mes = hoy.replace(day=1)
-    
+
     # ==========================================
     # TAB 1: FLUJO DE CAJA (Solo Gerente)
     # ==========================================
@@ -35,28 +43,65 @@ def render(supabase):
             col_f1, col_f2 = st.columns(2)
             f_inicio = col_f1.date_input("🗓️ Desde", value=primer_dia_mes)
             f_fin = col_f2.date_input("🗓️ Hasta", value=hoy)
-            
-            res_pagos = supabase.table("pagos").select("monto").gte("fecha_pago", f_inicio.isoformat()).lte("fecha_pago", f_fin.isoformat()).execute()
-            ingresos_rango = sum([float(p["monto"]) for p in res_pagos.data]) if res_pagos.data else 0.0
-            
-            res_egresos = supabase.table("egresos").select("monto").gte("fecha", f_inicio.isoformat()).lte("fecha", f_fin.isoformat()).execute()
-            egresos_rango = sum([float(e["monto"]) for e in res_egresos.data]) if res_egresos.data else 0.0
-            
+
+            # Añadimos .eq("anulado", False) para ignorar los registros invalidados
+            res_pagos = (
+                supabase.table("pagos")
+                .select("monto")
+                .gte("fecha_pago", f_inicio.isoformat())
+                .lte("fecha_pago", f_fin.isoformat())
+                .eq("anulado", False)
+                .execute()
+            )
+            ingresos_rango = (
+                sum([float(p["monto"]) for p in res_pagos.data])
+                if res_pagos.data
+                else 0.0
+            )
+
+            res_egresos = (
+                supabase.table("egresos")
+                .select("monto")
+                .gte("fecha", f_inicio.isoformat())
+                .lte("fecha", f_fin.isoformat())
+                .eq("anulado", False)
+                .execute()
+            )
+            egresos_rango = (
+                sum([float(e["monto"]) for e in res_egresos.data])
+                if res_egresos.data
+                else 0.0
+            )
+
             balance = ingresos_rango - egresos_rango
 
             col1, col2, col3 = st.columns(3)
             col1.metric("🟢 Ingresos del Periodo", f"${ingresos_rango:,.2f}")
             col2.metric("🔴 Egresos del Periodo", f"${egresos_rango:,.2f}")
-            col3.metric("⚖️ Balance", f"${balance:,.2f}", delta=f"${balance:,.2f}", delta_color="normal" if balance >= 0 else "inverse")
+            col3.metric(
+                "⚖️ Balance",
+                f"${balance:,.2f}",
+                delta=f"${balance:,.2f}",
+                delta_color="normal" if balance >= 0 else "inverse",
+            )
 
             st.divider()
-            df_grafico = pd.DataFrame({"Categoría": ["Ingresos", "Egresos"], "Monto": [ingresos_rango, egresos_rango]})
-            
+            df_grafico = pd.DataFrame(
+                {
+                    "Categoría": ["Ingresos", "Egresos"],
+                    "Monto": [ingresos_rango, egresos_rango],
+                }
+            )
+
             if ingresos_rango > 0 or egresos_rango > 0:
                 fig = px.bar(
-                    df_grafico, x="Categoría", y="Monto", color="Categoría",
-                    color_discrete_map={"Ingresos": "#2ecc71", "Egresos": "#e74c3c"}, text_auto='.2f',
-                    title=f"Comparativa: {f_inicio.strftime('%d/%m/%Y')} al {f_fin.strftime('%d/%m/%Y')}"
+                    df_grafico,
+                    x="Categoría",
+                    y="Monto",
+                    color="Categoría",
+                    color_discrete_map={"Ingresos": "#2ecc71", "Egresos": "#e74c3c"},
+                    text_auto=".2f",
+                    title=f"Comparativa: {f_inicio.strftime('%d/%m/%Y')} al {f_fin.strftime('%d/%m/%Y')}",
                 )
                 fig.update_layout(showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
@@ -69,116 +114,291 @@ def render(supabase):
     if "⏳ Cuentas por Cobrar" in mis_tabs:
         with mis_tabs["⏳ Cuentas por Cobrar"]:
             st.subheader("Órdenes con Saldo Pendiente")
-            
-            res_cxc = supabase.table("ordenes").select("id, codigo_orden, cliente_id, created_at, total_estimado, abono_inicial, saldo_pendiente, estado").gt("saldo_pendiente", 0).execute()
-            
+
+            # 1. Ajuste del umbral a >= 0.01 para ignorar la basura decimal e inclusión de creado_por_id
+            res_cxc = (
+                supabase.table("ordenes")
+                .select(
+                    "id, codigo_orden, cliente_id, creado_por_id, created_at, total_estimado, abono_inicial, saldo_pendiente, estado"
+                )
+                .gte("saldo_pendiente", 0.01)
+                .execute()
+            )
+
             if res_cxc.data:
                 df_cxc = pd.DataFrame(res_cxc.data)
-                
-                # Extraer IDs de clientes
-                # Extraer IDs de clientes y convertirlos a enteros
-                cliente_ids = df_cxc['cliente_id'].dropna().astype(int).unique().tolist()
 
+                # 2. Mapeo de Clientes
+                cliente_ids = (
+                    df_cxc["cliente_id"].dropna().astype(int).unique().tolist()
+                )
                 mapa_clientes = {}
                 if cliente_ids:
-                    res_cli = supabase.table('clientes').select('id, nombre_completo').in_('id', cliente_ids).execute()
-                    mapa_clientes = {c['id']: c.get('nombre_completo', 'Consumidor Final') for c in res_cli.data}
+                    res_cli = (
+                        supabase.table("clientes")
+                        .select("id, nombre_completo")
+                        .in_("id", cliente_ids)
+                        .execute()
+                    )
+                    mapa_clientes = {
+                        c["id"]: c.get("nombre_completo", "Consumidor Final")
+                        for c in res_cli.data
+                    }
+                df_cxc["Cliente"] = df_cxc["cliente_id"].map(
+                    lambda x: mapa_clientes.get(x, "Consumidor Final")
+                )
 
-                df_cxc['Cliente'] = df_cxc['cliente_id'].map(lambda x: mapa_clientes.get(x, 'Consumidor Final'))
-                
+                # 3. NUEVO: Mapeo de Vendedoras/Usuarios
+                vendedor_ids = (
+                    df_cxc["creado_por_id"].dropna().astype(int).unique().tolist()
+                )
+                mapa_vendedores = {}
+                if vendedor_ids:
+                    res_ven = (
+                        supabase.table("usuarios")
+                        .select("id, nombre_completo")
+                        .in_("id", vendedor_ids)
+                        .execute()
+                    )
+                    mapa_vendedores = {
+                        v["id"]: v.get("nombre_completo", "Desconocido")
+                        for v in res_ven.data
+                    }
+                df_cxc["Vendedora"] = df_cxc["creado_por_id"].map(
+                    lambda x: mapa_vendedores.get(x, "No asignado")
+                )
+
                 with st.expander("🔍 Buscador Avanzado (Filtros)", expanded=False):
                     col_b1, col_b2, col_b3 = st.columns([2, 2, 2])
-                    busqueda_cod = col_b1.text_input("Código de Orden", placeholder="Ej: 6429", key="bus_cod_cxc")
-                    busqueda_cli = col_b2.text_input("Nombre del Cliente", placeholder="Ej: Wilmer", key="bus_cli_cxc")
-                    busqueda_fechas = col_b3.date_input("Rango de Fechas (Creación)", value=[], format="DD/MM/YYYY", key="bus_fec_cxc")
-                
+                    busqueda_cod = col_b1.text_input(
+                        "Código de Orden", placeholder="Ej: 6429", key="bus_cod_cxc"
+                    )
+                    busqueda_cli = col_b2.text_input(
+                        "Nombre del Cliente o Vendedora",
+                        placeholder="Ej: Wilmer",
+                        key="bus_cli_cxc",
+                    )
+                    busqueda_fechas = col_b3.date_input(
+                        "Rango de Fechas (Creación)",
+                        value=[],
+                        format="DD/MM/YYYY",
+                        key="bus_fec_cxc",
+                    )
+
                 df_filtrado = df_cxc.copy()
-                if busqueda_cod: df_filtrado = df_filtrado[df_filtrado['codigo_orden'].str.contains(busqueda_cod, case=False, na=False)]
-                if busqueda_cli: df_filtrado = df_filtrado[df_filtrado['Cliente'].str.contains(busqueda_cli, case=False, na=False)]
+                if busqueda_cod:
+                    df_filtrado = df_filtrado[
+                        df_filtrado["codigo_orden"].str.contains(
+                            busqueda_cod, case=False, na=False
+                        )
+                    ]
+
+                # Aplicamos el filtro de texto tanto al nombre del cliente como al de la vendedora
+                if busqueda_cli:
+                    df_filtrado = df_filtrado[
+                        df_filtrado["Cliente"].str.contains(
+                            busqueda_cli, case=False, na=False
+                        )
+                        | df_filtrado["Vendedora"].str.contains(
+                            busqueda_cli, case=False, na=False
+                        )
+                    ]
+
                 if len(busqueda_fechas) == 2:
                     inicio = pd.to_datetime(busqueda_fechas[0])
-                    fin = pd.to_datetime(busqueda_fechas[1]).replace(hour=23, minute=59, second=59)
-                    fechas_creacion = pd.to_datetime(df_filtrado['created_at'])
-                    df_filtrado = df_filtrado[(fechas_creacion >= inicio) & (fechas_creacion <= fin)]
-                
-                # Calculamos el total abonado dinámicamente (Total - Saldo) para que las cuentas cuadren visualmente
-                df_filtrado['total_abonado'] = df_filtrado['total_estimado'].astype(float) - df_filtrado['saldo_pendiente'].astype(float)
+                    fin = pd.to_datetime(busqueda_fechas[1]).replace(
+                        hour=23, minute=59, second=59
+                    )
+                    fechas_creacion = pd.to_datetime(df_filtrado["created_at"])
+                    df_filtrado = df_filtrado[
+                        (fechas_creacion >= inicio) & (fechas_creacion <= fin)
+                    ]
 
-                st.markdown("👇 **Haz clic en la fila de la orden en la tabla para registrar su pago:**")
-                
+                df_filtrado["total_abonado"] = df_filtrado["total_estimado"].astype(
+                    float
+                ) - df_filtrado["saldo_pendiente"].astype(float)
+
+                st.markdown(
+                    "👇 **Haz clic en la fila de la orden en la tabla para registrar su pago:**"
+                )
+
+                # 4. Inclusión de la columna 'Vendedora' en la tabla interactiva
                 evento_tabla = st.dataframe(
-                    df_filtrado[["id", "codigo_orden", "Cliente", "total_estimado", "total_abonado", "saldo_pendiente", "estado"]], 
-                    use_container_width=True, 
+                    df_filtrado[
+                        [
+                            "id",
+                            "codigo_orden",
+                            "Cliente",
+                            "Vendedora",
+                            "total_estimado",
+                            "total_abonado",
+                            "saldo_pendiente",
+                            "estado",
+                        ]
+                    ],
+                    use_container_width=True,
                     hide_index=True,
                     selection_mode="single-row",
                     on_select="rerun",
                     column_config={
-                        "id": None, 
-                        "total_estimado": st.column_config.NumberColumn("Total", format="$ %.2f"),
-                        "total_abonado": st.column_config.NumberColumn("Total Abonado", format="$ %.2f"),
-                        "saldo_pendiente": st.column_config.NumberColumn("Saldo", format="$ %.2f")
-                    }
+                        "id": None,
+                        "Vendedora": st.column_config.TextColumn("Vendedora"),
+                        "total_estimado": st.column_config.NumberColumn(
+                            "Total", format="$ %.2f"
+                        ),
+                        "total_abonado": st.column_config.NumberColumn(
+                            "Total Abonado", format="$ %.2f"
+                        ),
+                        "saldo_pendiente": st.column_config.NumberColumn(
+                            "Saldo", format="$ %.2f"
+                        ),
+                    },
                 )
-                
+
                 filas_seleccionadas = evento_tabla.selection.rows
-                
+
                 if len(filas_seleccionadas) == 0:
-                    st.info("👆 Selecciona una orden en la tabla para habilitar las opciones de pago.")
+                    st.info(
+                        "👆 Selecciona una orden en la tabla para habilitar las opciones de pago."
+                    )
                 else:
                     indice_fila = filas_seleccionadas[0]
                     fila_datos = df_filtrado.iloc[indice_fila]
                     orden_seleccionada_id = int(fila_datos["id"])
                     saldo_actual = float(fila_datos["saldo_pendiente"])
-                    
+
                     st.divider()
-                    st.markdown(f"### 💰 Liquidar Orden: **{fila_datos['codigo_orden']}** ({fila_datos['Cliente']})")
+                    st.markdown(
+                        f"### 💰 Liquidar Orden: **{fila_datos['codigo_orden']}** ({fila_datos['Cliente']})"
+                    )
 
                     with st.form(key="form_pago", clear_on_submit=True):
                         # [Seguro]: Amortizamos en 4 columnas para incluir de forma limpia el campo de referencia
-                        col_monto, col_metodo, col_banco, col_ref = st.columns([1.2, 1.2, 1.2, 1.4])
-                        monto_a_pagar = col_monto.number_input("Monto a Pagar ($)", min_value=0.01, max_value=saldo_actual, value=saldo_actual)
-                        metodo_pago = col_metodo.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Tarjeta", "Otro"])
-                        banco_destino = col_banco.selectbox("Banco Destino", ["Seleccionar...", "JEP", "Pichincha", "Pacifico", "Austro"])
-                        
+                        col_monto, col_metodo, col_banco, col_ref = st.columns(
+                            [1.2, 1.2, 1.2, 1.4]
+                        )
+                        monto_a_pagar = col_monto.number_input(
+                            "Monto a Pagar ($)",
+                            min_value=0.01,
+                            max_value=saldo_actual,
+                            value=saldo_actual,
+                        )
+                        metodo_pago = col_metodo.selectbox(
+                            "Método de Pago",
+                            ["Efectivo", "Transferencia", "Tarjeta", "Otro"],
+                        )
+                        banco_destino = col_banco.selectbox(
+                            "Banco Destino",
+                            [
+                                "Seleccionar...",
+                                "JEP",
+                                "Pichincha",
+                                "Pacifico",
+                                "Austro",
+                            ],
+                        )
+
                         # [Seguro]: Nuevo campo de texto para almacenar el número de comprobante/referencia
-                        num_referencia = col_ref.text_input("Nº Compr. / Ref.", placeholder="Ej: 0012345")
-                        
-                        submit_pago = st.form_submit_button("💾 Confirmar Pago", type="primary", use_container_width=True)
-                        
+                        num_referencia = col_ref.text_input(
+                            "Nº Compr. / Ref.", placeholder="Ej: 0012345"
+                        )
+
+                        submit_pago = st.form_submit_button(
+                            "💾 Confirmar Pago",
+                            type="primary",
+                            use_container_width=True,
+                        )
+
                         if submit_pago:
-                            if metodo_pago == "Transferencia" and banco_destino == "Seleccionar...":
-                                st.error("⚠️ Debes seleccionar a qué banco ingresó la transferencia.")
+                            if (
+                                metodo_pago == "Transferencia"
+                                and banco_destino == "Seleccionar..."
+                            ):
+                                st.error(
+                                    "⚠️ Debes seleccionar a qué banco ingresó la transferencia."
+                                )
                             else:
                                 try:
-                                    # [Seguro]: Estructuramos el diccionario con la misma llave 'numero_referencia' 
+                                    # [Seguro]: Estructuramos el diccionario con la misma llave 'numero_referencia'
                                     # que usa el módulo de facturación y producción para guardar en la BD.
                                     data_pago = {
                                         "orden_id": orden_seleccionada_id,
                                         "cliente_id": int(fila_datos["cliente_id"]),
                                         "monto": monto_a_pagar,
                                         "metodo_pago": metodo_pago,
-                                        "fecha_pago": hoy.isoformat()
+                                        "fecha_pago": hoy.isoformat(),
                                     }
                                     if banco_destino != "Seleccionar...":
                                         data_pago["banco_destino"] = banco_destino
-                                        
+
                                     if num_referencia.strip():
-                                        data_pago["numero_referencia"] = num_referencia.strip()
+                                        data_pago["numero_referencia"] = (
+                                            num_referencia.strip()
+                                        )
 
+                                    # 1. Insertamos el dinero en la caja
                                     supabase.table("pagos").insert(data_pago).execute()
-                                    
-                                    nuevo_saldo = saldo_actual - monto_a_pagar
-                                    update_data = {"saldo_pendiente": nuevo_saldo}
-                                    
-                                    estado_actual = fila_datos.get("estado", "")
-                                    if nuevo_saldo <= 0: 
-                                        if estado_actual not in ["Listo para Impresión", "En Impresión", "En Diseño", "En Sublimación", "En Confección"]:
-                                            update_data["estado"] = "Lista para Entrega"
 
-                                    supabase.table("ordenes").update(update_data).eq("id", orden_seleccionada_id).execute()
-                                    
-                                    st.success(f"✅ Pago registrado con éxito. Nuevo saldo: ${nuevo_saldo:.2f}")
-                                    st.rerun() 
+                                    # 2. Consultamos la REALIDAD actual de la orden en la BD (evitando datos oxidados de la pantalla)
+                                    res_ord = (
+                                        supabase.table("ordenes")
+                                        .select("total_estimado, estado")
+                                        .eq("id", orden_seleccionada_id)
+                                        .single()
+                                        .execute()
+                                    )
+                                    tot_real = (
+                                        float(res_ord.data["total_estimado"])
+                                        if res_ord.data
+                                        else float(fila_datos["total_estimado"])
+                                    )
+                                    estado_actual = (
+                                        res_ord.data["estado"]
+                                        if res_ord.data
+                                        else fila_datos.get("estado", "")
+                                    )
+
+                                    # 3. Sumamos TODOS los pagos reales válidos de esta orden
+                                    res_pagos = (
+                                        supabase.table("pagos")
+                                        .select("monto")
+                                        .eq("orden_id", orden_seleccionada_id)
+                                        .eq("anulado", False)
+                                        .execute()
+                                    )
+                                    suma_pagos = (
+                                        sum([float(p["monto"]) for p in res_pagos.data])
+                                        if res_pagos.data
+                                        else 0.0
+                                    )
+
+                                    # 4. Calculamos el saldo absoluto
+                                    nuevo_saldo = tot_real - suma_pagos
+                                    saldo_guardar = (
+                                        nuevo_saldo if nuevo_saldo > 0 else 0.0
+                                    )  # Previene saldos negativos visuales
+
+                                    update_data = {"saldo_pendiente": saldo_guardar}
+
+                                    if saldo_guardar <= 0:
+                                        # (Opcional) Si importaste OrderState de config.py, usa las variables estáticas aquí
+                                        if estado_actual not in [
+                                            "LISTO PARA IMPRESIÓN",
+                                            "EN IMPRESIÓN",
+                                            "EN DISEÑO",
+                                            "EN SUBLIMACIÓN",
+                                            "EN CONFECCIÓN",
+                                        ]:
+                                            update_data["estado"] = "LISTA PARA ENTREGA"
+
+                                    supabase.table("ordenes").update(update_data).eq(
+                                        "id", orden_seleccionada_id
+                                    ).execute()
+
+                                    st.success(
+                                        f"✅ Pago registrado con éxito. Nuevo saldo: ${nuevo_saldo:.2f}"
+                                    )
+                                    st.rerun()
                                 except Exception as e:
                                     st.error(f"Error al registrar el pago: {e}")
             else:
@@ -190,32 +410,54 @@ def render(supabase):
     if "📤 Registrar Gasto" in mis_tabs:
         with mis_tabs["📤 Registrar Gasto"]:
             c_gasto, c_cat = st.columns([2, 1])
-            
+
             with c_gasto:
                 st.subheader("Registrar Nuevo Egreso Operativo")
-                
-                res_categorias = supabase.table("categorias_egreso").select("nombre").execute()
-                lista_categorias = [c["nombre"] for c in res_categorias.data] if res_categorias.data else ["Otros"]
+
+                res_categorias = (
+                    supabase.table("categorias_egreso").select("nombre").execute()
+                )
+                lista_categorias = (
+                    [c["nombre"] for c in res_categorias.data]
+                    if res_categorias.data
+                    else ["Otros"]
+                )
 
                 with st.form("form_egreso", clear_on_submit=True):
                     col1, col2 = st.columns(2)
                     fecha_gasto = col1.date_input("Fecha del Gasto", value=hoy)
                     categoria_gasto = col2.selectbox("Categoría", lista_categorias)
-                    
-                    descripcion_gasto = st.text_input("Descripción breve (Ej. Compra de hilos)")
-                    
+
+                    descripcion_gasto = st.text_input(
+                        "Descripción breve (Ej. Compra de hilos)"
+                    )
+
                     col3, col4, col5 = st.columns(3)
-                    monto_gasto = col3.number_input("Monto ($)", min_value=0.01, step=1.00, format="%.2f")
-                    metodo_gasto = col4.selectbox("Medio de Pago", ["Efectivo", "Transferencia", "Tarjeta"])
-                    banco_origen = col5.selectbox("Banco Origen", ["Seleccionar...", "JEP", "Pichincha", "Pacifico", "Austro"])
-                    
-                    submit_gasto = st.form_submit_button("📤 Guardar Egreso", type="primary", use_container_width=True)
-                    
+                    monto_gasto = col3.number_input(
+                        "Monto ($)", min_value=0.01, step=1.00, format="%.2f"
+                    )
+                    metodo_gasto = col4.selectbox(
+                        "Medio de Pago", ["Efectivo", "Transferencia", "Tarjeta"]
+                    )
+                    banco_origen = col5.selectbox(
+                        "Banco Origen",
+                        ["Seleccionar...", "JEP", "Pichincha", "Pacifico", "Austro"],
+                    )
+
+                    submit_gasto = st.form_submit_button(
+                        "📤 Guardar Egreso", type="primary", use_container_width=True
+                    )
+
                     if submit_gasto:
                         if not descripcion_gasto.strip():
                             st.warning("⚠️ Por favor, ingresa una descripción.")
-                        elif metodo_gasto == "Transferencia" and banco_origen == "Seleccionar...":
-                            st.error("⚠️ Debes seleccionar de qué banco salió el dinero.")
+                        elif (
+                            metodo_gasto == "Transferencia"
+                            and banco_origen == "Seleccionar..."
+                        ):
+                            st.error(
+                                "⚠️ Debes seleccionar de qué banco salió el dinero."
+                            )
                         else:
                             try:
                                 data_egreso = {
@@ -223,7 +465,7 @@ def render(supabase):
                                     "categoria": categoria_gasto,
                                     "descripcion": descripcion_gasto,
                                     "monto": monto_gasto,
-                                    "metodo_pago": metodo_gasto
+                                    "metodo_pago": metodo_gasto,
                                 }
                                 if banco_origen != "Seleccionar...":
                                     data_egreso["banco"] = banco_origen
@@ -233,7 +475,7 @@ def render(supabase):
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Error al registrar: {e}")
-                                
+
             with c_cat:
                 st.subheader("Gestión")
                 with st.expander("➕ Crear Nueva Categoría"):
@@ -241,19 +483,29 @@ def render(supabase):
                     if st.button("Guardar Categoría", use_container_width=True):
                         if nueva_cat:
                             try:
-                                supabase.table("categorias_egreso").insert({"nombre": nueva_cat.strip()}).execute()
+                                supabase.table("categorias_egreso").insert(
+                                    {"nombre": nueva_cat.strip()}
+                                ).execute()
                                 st.toast("Categoría añadida", icon="✅")
                                 st.rerun()
                             except:
                                 st.error("Error al crear. Quizá ya existe.")
-                
+
                 st.divider()
                 st.markdown("##### 🕒 Últimos 10 Registros")
-                st.caption("Revisa aquí para evitar registrar el mismo gasto dos veces.")
-                
+                st.caption(
+                    "Revisa aquí para evitar registrar el mismo gasto dos veces."
+                )
+
                 try:
-                    res_ultimos = supabase.table("egresos").select("fecha, descripcion, monto").order("created_at", desc=True).limit(10).execute()
-                    
+                    res_ultimos = (
+                        supabase.table("egresos")
+                        .select("fecha, descripcion, monto")
+                        .order("created_at", desc=True)
+                        .limit(10)
+                        .execute()
+                    )
+
                     if res_ultimos.data:
                         df_ultimos = pd.DataFrame(res_ultimos.data)
                         st.dataframe(
@@ -263,8 +515,10 @@ def render(supabase):
                             column_config={
                                 "fecha": "Fecha",
                                 "descripcion": "Descripción",
-                                "monto": st.column_config.NumberColumn("Monto", format="$ %.2f")
-                            }
+                                "monto": st.column_config.NumberColumn(
+                                    "Monto", format="$ %.2f"
+                                ),
+                            },
                         )
                     else:
                         st.info("No hay egresos recientes.")
@@ -277,13 +531,13 @@ def render(supabase):
     if "📖 Libro Diario" in mis_tabs:
         with mis_tabs["📖 Libro Diario"]:
             st.subheader("Libro Diario y Cuadre de Caja")
-            
+
             fecha_input = st.date_input(
-                "🗓️ Selecciona fecha única o un rango de fechas:", 
-                value=(hoy, hoy), 
-                key="fecha_diario_filtro"
+                "🗓️ Selecciona fecha única o un rango de fechas:",
+                value=(hoy, hoy),
+                key="fecha_diario_filtro",
             )
-            
+
             if isinstance(fecha_input, tuple):
                 if len(fecha_input) == 2:
                     f_ini_diario, f_fin_diario = fecha_input
@@ -295,35 +549,79 @@ def render(supabase):
                 f_ini_diario = f_fin_diario = fecha_input
 
             col_ing_diario, col_egr_diario = st.columns(2)
-            
-            res_pagos_dia = supabase.table("pagos").select("id, orden_id, monto, metodo_pago, banco_destino").gte("fecha_pago", f_ini_diario.isoformat()).lte("fecha_pago", f_fin_diario.isoformat()).execute()
-            res_egresos_dia = supabase.table("egresos").select("id, categoria, descripcion, monto, metodo_pago, banco").gte("fecha", f_ini_diario.isoformat()).lte("fecha", f_fin_diario.isoformat()).execute()
-            
+
+            res_pagos_dia = (
+                supabase.table("pagos")
+                .select("id, orden_id, monto, metodo_pago, banco_destino")
+                .gte("fecha_pago", f_ini_diario.isoformat())
+                .lte("fecha_pago", f_fin_diario.isoformat())
+                .eq("anulado", False)
+                .execute()
+            )
+            # Añadimos origen_modulo a la consulta
+            res_egresos_dia = (
+                supabase.table("egresos")
+                .select(
+                    "id, categoria, descripcion, monto, metodo_pago, banco, origen_modulo"
+                )
+                .gte("fecha", f_ini_diario.isoformat())
+                .lte("fecha", f_fin_diario.isoformat())
+                .eq("anulado", False)
+                .execute()
+            )
+
             with col_ing_diario:
                 st.markdown("#### 🟢 Ingresos")
                 if res_pagos_dia.data:
                     df_ingresos_dia = pd.DataFrame(res_pagos_dia.data)
-                    
+
                     # 1. Limpiamos: quitamos nulos, pasamos a entero y quitamos duplicados
-                    ordenes_ids = df_ingresos_dia['orden_id'].dropna().astype(int).unique().tolist()
-                    
+                    ordenes_ids = (
+                        df_ingresos_dia["orden_id"]
+                        .dropna()
+                        .astype(int)
+                        .unique()
+                        .tolist()
+                    )
+
                     if ordenes_ids:
-                        res_ords = supabase.table("ordenes").select("id, codigo_orden").in_("id", ordenes_ids).execute()
+                        res_ords = (
+                            supabase.table("ordenes")
+                            .select("id, codigo_orden")
+                            .in_("id", ordenes_ids)
+                            .execute()
+                        )
                         if res_ords.data:
-                            mapa_ords = {o['id']: o['codigo_orden'] for o in res_ords.data}
-                            df_ingresos_dia['Orden'] = df_ingresos_dia['orden_id'].map(mapa_ords)
+                            mapa_ords = {
+                                o["id"]: o["codigo_orden"] for o in res_ords.data
+                            }
+                            df_ingresos_dia["Orden"] = df_ingresos_dia["orden_id"].map(
+                                mapa_ords
+                            )
                     else:
                         # Si no hay IDs válidos (todos eran nulos), creamos la columna vacía para que no falle luego
-                        df_ingresos_dia['Orden'] = "Sin Orden"
-                    
-                    df_ingresos_dia['Medio'] = df_ingresos_dia.apply(
-                        lambda x: f"{x['metodo_pago']} ({x['banco_destino']})" if pd.notna(x.get('banco_destino')) and x.get('banco_destino') else x['metodo_pago'], axis=1
+                        df_ingresos_dia["Orden"] = "Sin Orden"
+
+                    df_ingresos_dia["Medio"] = df_ingresos_dia.apply(
+                        lambda x: (
+                            f"{x['metodo_pago']} ({x['banco_destino']})"
+                            if pd.notna(x.get("banco_destino"))
+                            and x.get("banco_destino")
+                            else x["metodo_pago"]
+                        ),
+                        axis=1,
                     )
-                    
-                    df_mostrar_ing = df_ingresos_dia[['Orden', 'monto', 'Medio']] if 'Orden' in df_ingresos_dia.columns else df_ingresos_dia[['monto', 'Medio']]
-                    st.dataframe(df_mostrar_ing, use_container_width=True, hide_index=True)
-                    
-                    total_ing_dia = df_ingresos_dia['monto'].astype(float).sum()
+
+                    df_mostrar_ing = (
+                        df_ingresos_dia[["Orden", "monto", "Medio"]]
+                        if "Orden" in df_ingresos_dia.columns
+                        else df_ingresos_dia[["monto", "Medio"]]
+                    )
+                    st.dataframe(
+                        df_mostrar_ing, use_container_width=True, hide_index=True
+                    )
+
+                    total_ing_dia = df_ingresos_dia["monto"].astype(float).sum()
                     st.success(f"**Total Ingresos: ${total_ing_dia:,.2f}**")
                 else:
                     st.info("No hay ingresos en este periodo.")
@@ -333,77 +631,135 @@ def render(supabase):
                 st.markdown("#### 🔴 Egresos")
                 if res_egresos_dia.data:
                     df_egresos_dia = pd.DataFrame(res_egresos_dia.data)
-                    
-                    df_egresos_dia['Medio'] = df_egresos_dia.apply(
-                        lambda x: f"{x['metodo_pago']} ({x['banco']})" if pd.notna(x.get('banco')) and x.get('banco') else x['metodo_pago'], axis=1
+
+                    df_egresos_dia["Medio"] = df_egresos_dia.apply(
+                        lambda x: (
+                            f"{x['metodo_pago']} ({x['banco']})"
+                            if pd.notna(x.get("banco")) and x.get("banco")
+                            else x["metodo_pago"]
+                        ),
+                        axis=1,
                     )
-                    
+
                     # 1. SI ES GERENTE, LA TABLA ES INTERACTIVA
                     if rol_actual == "GERENTE":
-                        st.caption("👇 Haz clic en la fila del egreso que deseas anular.")
-                        
+                        st.caption(
+                            "👇 Haz clic en la fila del egreso que deseas anular."
+                        )
+
                         evento_tabla_egresos = st.dataframe(
-                            df_egresos_dia[['id', 'categoria', 'descripcion', 'monto', 'Medio']], 
-                            use_container_width=True, 
+                            df_egresos_dia[
+                                ["id", "categoria", "descripcion", "monto", "Medio"]
+                            ],
+                            use_container_width=True,
                             hide_index=True,
                             selection_mode="single-row",
                             on_select="rerun",
-                            key="tabla_anular_egresos", # Llave única para mayor estabilidad en el renderizado
+                            key="tabla_anular_egresos",  # Llave única para mayor estabilidad en el renderizado
                             column_config={
-                                "id": None, # Ocultamos el ID visualmente
-                                "monto": st.column_config.NumberColumn("monto", format="$ %.2f")
-                            }
+                                "id": None,  # Ocultamos el ID visualmente
+                                "monto": st.column_config.NumberColumn(
+                                    "monto", format="$ %.2f"
+                                ),
+                            },
                         )
-                        
+
                         # Mostramos notificaciones si venimos de un borrado exitoso o fallido
-                        if 'toast_exito' in st.session_state:
-                            st.success(st.session_state.pop('toast_exito'))
-                        if 'toast_error' in st.session_state:
-                            st.error(st.session_state.pop('toast_error'))
+                        if "toast_exito" in st.session_state:
+                            st.success(st.session_state.pop("toast_exito"))
+                        if "toast_error" in st.session_state:
+                            st.error(st.session_state.pop("toast_error"))
 
                         filas_sel = evento_tabla_egresos.selection.rows
-                        
+
                         if len(filas_sel) > 0:
                             # Extraemos los datos exactos de la fila
                             fila_egreso = df_egresos_dia.iloc[filas_sel[0]]
-                            id_egreso = str(fila_egreso['id']).strip() 
-                            
-                            st.markdown("---")
-                            st.markdown("##### 🗑️ Anular Egreso Seleccionado")
-                            st.warning(f"Vas a eliminar: **{fila_egreso['descripcion']}** por **${fila_egreso['monto']:.2f}**")
-                            
-                            # Callback: Ejecuta el borrado ANTES del ciclo de recarga de Streamlit
-                            def procesar_eliminacion(id_a_borrar):
-                                try:
-                                    # Supabase devuelve en .data los registros afectados
-                                    respuesta = supabase.table("egresos").delete().eq("id", id_a_borrar).execute()
-                                    if respuesta.data: 
-                                        st.session_state['toast_exito'] = "✅ Gasto eliminado exitosamente. La caja ha sido actualizada."
-                                    else:
-                                        st.session_state['toast_error'] = "⚠️ No se encontró el registro en la BD. Es posible que ya haya sido borrado."
-                                except Exception as e:
-                                    st.session_state['toast_error'] = f"Error técnico al borrar en BD: {e}"
+                            id_egreso = str(fila_egreso["id"]).strip()
 
-                            # Botón modificado para usar el callback on_click
-                            st.button(
-                                "🚨 Confirmar y Eliminar", 
-                                type="primary", 
-                                key="btn_borrar_gasto", 
-                                use_container_width=True,
-                                on_click=procesar_eliminacion,
-                                args=(id_egreso,)
-                            )
-                    
+                            st.markdown("---")
+                            st.markdown("##### 🚫 Anular Egreso Seleccionado")
+
+                            origen_gasto = fila_egreso.get("origen_modulo")
+
+                            if origen_gasto == "NOMINA":
+                                st.error(
+                                    "🔒 Este egreso corresponde a un pago de Sueldos/Nómina."
+                                )
+                                st.info(
+                                    "Para anular o corregir este pago, diríjase al módulo de 'Asistencia y Nómina'. No se permite la alteración directa desde Finanzas para proteger la integridad del rol de pagos."
+                                )
+                            else:
+                                st.warning(
+                                    f"Vas a anular: **{fila_egreso['descripcion']}** por **${fila_egreso['monto']:.2f}**"
+                                )
+
+                                # Callback: Ejecuta el borrado lógico (UPDATE)
+                                def procesar_eliminacion(id_a_borrar):
+                                    try:
+                                        usuario_actual = st.session_state.get(
+                                            "id_usuario", None
+                                        )
+                                        fecha_ahora = datetime.now().isoformat()
+
+                                        # Hacemos un UPDATE en lugar de DELETE
+                                        respuesta = (
+                                            supabase.table("egresos")
+                                            .update(
+                                                {
+                                                    "anulado": True,
+                                                    "anulado_por_id": usuario_actual,
+                                                    "fecha_anulacion": fecha_ahora,
+                                                    "motivo_anulacion": "Anulado manualmente desde Libro Diario",
+                                                }
+                                            )
+                                            .eq("id", id_a_borrar)
+                                            .execute()
+                                        )
+
+                                        if respuesta.data:
+                                            st.session_state["toast_exito"] = (
+                                                "✅ Gasto anulado exitosamente. La caja ha sido actualizada."
+                                            )
+                                        else:
+                                            st.session_state["toast_error"] = (
+                                                "⚠️ No se encontró el registro en la BD. Es posible que ya haya sido anulado."
+                                            )
+                                    except Exception as e:
+                                        st.session_state["toast_error"] = (
+                                            f"Error técnico al anular en BD: {e}"
+                                        )
+
+                                st.button(
+                                    "🚨 Confirmar y Anular",
+                                    type="primary",
+                                    key="btn_borrar_gasto",
+                                    use_container_width=True,
+                                    on_click=procesar_eliminacion,
+                                    args=(id_egreso,),
+                                )
+
                     # 2. SI ES VENDEDORA, LA TABLA ES ESTATICA (NO PUEDE CLICAR)
                     else:
-                        st.dataframe(df_egresos_dia[['categoria', 'descripcion', 'monto', 'Medio']], use_container_width=True, hide_index=True)
+                        st.dataframe(
+                            df_egresos_dia[
+                                ["categoria", "descripcion", "monto", "Medio"]
+                            ],
+                            use_container_width=True,
+                            hide_index=True,
+                        )
 
-                    total_egr_dia = df_egresos_dia['monto'].astype(float).sum()
+                    total_egr_dia = df_egresos_dia["monto"].astype(float).sum()
                     st.error(f"**Total Egresos: ${total_egr_dia:,.2f}**")
                 else:
                     st.info("No hay egresos en este periodo.")
                     total_egr_dia = 0.0
-                    
+
             st.divider()
             cierre_caja = total_ing_dia - total_egr_dia
-            st.metric("Cierre de Caja del Periodo", f"${cierre_caja:,.2f}", delta=f"${cierre_caja:,.2f}", delta_color="normal" if cierre_caja >= 0 else "inverse")
+            st.metric(
+                "Cierre de Caja del Periodo",
+                f"${cierre_caja:,.2f}",
+                delta=f"${cierre_caja:,.2f}",
+                delta_color="normal" if cierre_caja >= 0 else "inverse",
+            )
