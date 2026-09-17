@@ -67,11 +67,11 @@ def agrupar_items_financiero(items):
         if key not in agrupados:
             agrupados[key] = {
                 'nombre_producto': prod, 'nombre_tela': tela, 'familia_producto': fam,
-                'precio_aplicado': precio, 'cantidad_total': int(item.get('cantidad_total', 0)),
+                'precio_aplicado': precio, 'cantidad_total': float(item.get('cantidad_total', 0.0)),
                 'especificaciones_producto': list(item.get('especificaciones_producto', []))
             }
         else:
-            agrupados[key]['cantidad_total'] += int(item.get('cantidad_total', 0))
+            agrupados[key]['cantidad_total'] += float(item.get('cantidad_total', 0.0))
             agrupados[key]['especificaciones_producto'].extend(item.get('especificaciones_producto', []))
     return list(agrupados.values())
 
@@ -86,11 +86,11 @@ def agrupar_items_taller(items):
         if key not in agrupados:
             agrupados[key] = {
                 'nombre_producto': prod, 'nombre_tela': tela, 'familia_producto': fam,
-                'cantidad_total': int(item.get('cantidad_total', 0)),
+                'cantidad_total': float(item.get('cantidad_total', 0.0)),
                 'especificaciones_producto': list(item.get('especificaciones_producto', []))
             }
         else:
-            agrupados[key]['cantidad_total'] += int(item.get('cantidad_total', 0))
+            agrupados[key]['cantidad_total'] += float(item.get('cantidad_total', 0.0))
             agrupados[key]['especificaciones_producto'].extend(item.get('especificaciones_producto', []))
     return list(agrupados.values())
 
@@ -314,12 +314,21 @@ def generar_comprobante_cliente(orden):
             else:
                 row.cell(f"${precio:.2f}"); row.cell(f"${item.get('cantidad_total', 0) * precio:.2f}")
 
+    # 1. Extracción de totales y cálculo real de pagos
+    total_orden = float(orden.get('total_estimado', 0))
+    saldo_orden = float(orden.get('saldo_pendiente', 0))
+    pagos_registrados = orden.get('pagos', [])
+    abono_real = sum([float(p.get('monto', 0)) for p in pagos_registrados])
+
     pdf.ln(2); pdf.set_font("helvetica", "B", 10) # Letra más pequeña y menos salto
     x_offset = 150 
-    pdf.set_x(x_offset); pdf.cell(25, 5, "Total:", align="R"); pdf.cell(20, 5, f"${orden.get('total_estimado', 0):.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_x(x_offset); pdf.cell(25, 5, "Abono:", align="R"); pdf.cell(20, 5, f"${orden.get('abono_inicial', 0):.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_x(x_offset); pdf.cell(25, 5, "Total:", align="R"); pdf.cell(20, 5, f"${total_orden:.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
+    
+    # 2. Imprimimos la suma real de todos los abonos en lugar del estático
+    pdf.set_x(x_offset); pdf.cell(25, 5, "Total Abonado:", align="R"); pdf.cell(20, 5, f"${abono_real:.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
+    
     pdf.set_x(x_offset); pdf.cell(25, 5, "Saldo:", align="R"); pdf.set_text_color(200, 0, 0) 
-    pdf.cell(20, 5, f"${orden.get('saldo_pendiente', 0):.2f}", align="R", new_x="LMARGIN", new_y="NEXT"); pdf.set_text_color(0, 0, 0) 
+    pdf.cell(20, 5, f"${saldo_orden:.2f}", align="R", new_x="LMARGIN", new_y="NEXT"); pdf.set_text_color(0, 0, 0) 
     
     pdf.ln(2) # Reducido de 10 a 2 para pegar la tabla de pagos hacia arriba
     # --- 1. LÓGICA ESTRICTA DE PRIORIDAD DE IMÁGENES ---
