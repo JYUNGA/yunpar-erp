@@ -11,7 +11,7 @@ from config import OrderState, transicionar_estado
 # UTILIDADES
 # ==========================================
 def orden_talla(talla):
-    """Enseña al sistema a ordenar tallas lógicamente"""
+    """Enseña al sistema a ordenar tallas lógicamente (Niños -> Adultos)"""
     if not talla or pd.isna(talla):
         return 99
     t = str(talla).strip().upper()
@@ -52,6 +52,10 @@ def orden_talla(talla):
         "XXXL": 36,
         "4XL": 37,
         "5XL": 38,
+        "6XL": 39,
+        "7XL": 40,
+        "8XL": 41,
+        "9XL": 42,  # <-- Corrección e Integración
     }
     return mapping.get(t, 99)
 

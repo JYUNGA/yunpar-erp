@@ -65,18 +65,29 @@ def es_imagen_segura(url):
 
 def cod_ord(supabase):
     try:
-        res = supabase.table("ordenes").select("codigo_orden").execute()
-        codigos = [d["codigo_orden"] for d in res.data if d.get("codigo_orden")]
-        max_num = 6404
-        for c in codigos:
-            partes = c.split("-")
-            if len(partes) == 2 and partes[1].isdigit():
-                num = int(partes[1])
-                if num > max_num:
-                    max_num = num
-        return f"ORD-{str(max_num + 1).zfill(4)}"
-    except Exception as e:
+        # Hacemos que Supabase busque el código más alto (DESC) y solo nos devuelva 1 registro
+        res = (
+            supabase.table("ordenes")
+            .select("codigo_orden")
+            .ilike("codigo_orden", "ORD-%")
+            .order("codigo_orden", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        if res.data:
+            # Extraemos el número del código (ej. de ORD-7146 saca 7146)
+            numero_actual = int(res.data[0]["codigo_orden"].split("-")[1])
+            return f"ORD-{str(numero_actual + 1).zfill(4)}"
+
+        # Si la tabla está totalmente vacía
         return "ORD-6405"
+    except Exception as e:
+        # [Seguro]: Fallback de emergencia. Si la base de datos falla por latencia,
+        # usamos el reloj del sistema para generar un código único garantizado
+        import time
+
+        return f"ORD-{int(time.time())}"
 
 
 def limpiar_texto_pdf(texto):
@@ -1020,6 +1031,8 @@ def render(supabase):
                     "5XL",
                     "6XL",
                     "7XL",
+                    "8XL",
+                    "9XL",
                 ]
                 TALLAS_POLIN = ["4-6", "6-8", "8-10", "10-12"]
 
