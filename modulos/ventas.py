@@ -889,6 +889,12 @@ def render(supabase):
                             ],
                         )
 
+                    # --- NUEVO: Campo de Notas de Facturación ---
+                    notas_facturacion = st.text_area(
+                        "📝 Notas para Facturación (Opcional)",
+                        placeholder="Ej: Facturar a la empresa X, no al consumidor final.",
+                    )
+
                     if st.button(
                         "✅ Procesar Venta", use_container_width=True, type="primary"
                     ):
@@ -924,6 +930,7 @@ def render(supabase):
                                     "fecha_entrega": fecha_entrega_seleccionada.isoformat(),
                                     "created_at": f"{fecha_venta_seleccionada.isoformat()}T12:00:00",
                                     "creado_por_id": id_creador,
+                                    "notas_facturacion": notas_facturacion,  # <-- NUEVO CAMPO
                                 }
                                 res_orden = (
                                     supabase.table("ordenes")

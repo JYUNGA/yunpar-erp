@@ -146,6 +146,34 @@ def render(supabase):
                             st.caption(
                                 "💡 Pasa el mouse sobre el recuadro para copiar rápidamente."
                             )
+
+                            # --- 1. IDENTIFICACIÓN Y COMUNICACIÓN CORPORATIVA ---
+                            vendedora_nombre = datos_orden.get(
+                                "creador", "No registrado"
+                            )
+                            st.info(f"🧑‍💼 **Atendido por:** {vendedora_nombre}")
+
+                            # REEMPLAZA ESTE NÚMERO POR EL WHATSAPP DE TU EMPRESA
+                            tel_empresa = "593999999999"
+
+                            msg = f"Hola, necesito ayuda con la factura de la orden {cod_sel}. Fue atendida por {vendedora_nombre}."
+                            st.link_button(
+                                f"💬 Consultar a matriz por WhatsApp",
+                                f"https://wa.me/{tel_empresa}?text={msg.replace(' ', '%20')}",
+                                use_container_width=True,
+                            )
+
+                            # --- 2. NOTAS DE FACTURACIÓN (ALERTA VISUAL AISLADA) ---
+                            notas_fac = datos_orden.get("notas_facturacion")
+                            if notas_fac and str(notas_fac).strip().lower() not in [
+                                "none",
+                                "null",
+                                "",
+                            ]:
+                                st.warning(
+                                    f"📝 **Instrucciones para Facturación:**\n{notas_fac}"
+                                )
+
                             cli = datos_orden.get("clientes", {})
 
                             # Utilizamos st.code para texto negro legible y botón de copiado nativo
@@ -186,7 +214,6 @@ def render(supabase):
                                 language=None,
                             )
 
-                            # [Seguro]: Extraemos los pagos para la nueva auditoría
                             pagos = datos_orden.get("pagos", [])
 
                         # --- COLUMNA 2: RESUMEN DE PRODUCTOS A FACTURAR ---

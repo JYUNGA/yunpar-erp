@@ -426,6 +426,10 @@ def render(supabase):
                     st.session_state["editando_obs_g"] = row_seleccionada.get(
                         "observaciones_generales", ""
                     )
+                    # --- NUEVO: Cargamos las notas de facturación a la memoria ---
+                    st.session_state["editando_notas_fac"] = row_seleccionada.get(
+                        "notas_facturacion", ""
+                    )
 
                     try:
                         f_db = row_seleccionada.get("fecha_entrega")
@@ -1651,9 +1655,19 @@ def render(supabase):
 
             with c_obs:
                 st.markdown("### 📝 Notas y Actualizaciones")
+
+                # --- NUEVO: Campo aislado para facturación ---
+                val_notas_fac = st.session_state.get("editando_notas_fac", "")
+                notas_fac = st.text_area(
+                    "🧾 Notas de Facturación (SRI)",
+                    value=val_notas_fac,
+                    height=60,
+                    help="Instrucciones sobre cómo emitir la factura. Visible también en Facturación.",
+                )
+
                 val_obs = st.session_state.get("editando_obs_g", "")
                 obs_g = st.text_area(
-                    "Observaciones Generales de la Orden",
+                    "Observaciones Generales del Taller",
                     value=val_obs,
                     height=100,
                     placeholder="Escriba aquí notas de confección o instrucciones generales...",
@@ -1729,6 +1743,9 @@ def render(supabase):
                         "observaciones_generales": (
                             str(obs_g) if pd.notna(obs_g) else ""
                         ),
+                        "notas_facturacion": (
+                            str(notas_fac) if pd.notna(notas_fac) else ""
+                        ),  # <-- NUEVO CAMPO
                         "disenador_asignado": str(disenador_sel),
                         "url_boceto_vendedora": (
                             str(url_boc) if pd.notna(url_boc) else None
@@ -1854,13 +1871,30 @@ def render(supabase):
                     else:
                         id_usuario_actual = st.session_state.get("id_usuario", 1)
 
-                        cab["estado"] = OrderState.PENDIENTE  # Reemplazo crítico
+                        cab["estado"] = OrderState.PENDIENTE
                         cab["alerta_cambios"] = False
                         cab["detalle_cambios"] = ""
                         cab["creado_por_id"] = id_usuario_actual
 
-                        res_o = supabase.table("ordenes").insert(cab).execute()
-                        id_o = res_o.data[0]["id"]
+                        # --- NUEVO: SISTEMA AUTÓNOMO DE REINTENTOS PARA COLISIONES ---
+                        intentos = 3
+                        for i in range(intentos):
+                            try:
+                                res_o = supabase.table("ordenes").insert(cab).execute()
+                                id_o = res_o.data[0]["id"]
+                                break  # Si guardó con éxito, rompemos el bucle
+                            except Exception as error_db:
+                                # 23505 es el código exacto de PostgreSQL para llave duplicada
+                                if "23505" in str(error_db) and i < intentos - 1:
+                                    # El código chocó. Recalculamos uno nuevo, actualizamos el paquete y esperamos
+                                    cod = cod_ord(supabase)
+                                    cab["codigo_orden"] = str(cod)
+                                    time.sleep(
+                                        0.8
+                                    )  # Pausa estratégica para que la otra vendedora termine de guardar
+                                else:
+                                    raise error_db  # Si es otro tipo de error, colapsa normalmente
+                        # -------------------------------------------------------------
 
                         # Inyectar el primer estado en el historial
                         transicionar_estado(

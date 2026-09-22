@@ -115,11 +115,13 @@ def render(supabase):
         if mostrar_historial:
             query = query.neq("estado", "Entregado")
         else:
+            # Usamos ilike (case-insensitive) y comodines % para atrapar "PENDIENTE", "Pendiente", "PENDIENTE DISEÑO", "En Diseño", "EN DISEÑO", etc.
             query = query.or_(
-                "estado.eq.Pendiente,estado.eq.En Diseño,alerta_cambios.eq.true"
+                "estado.ilike.%pendiente%,estado.ilike.%diseño%,alerta_cambios.eq.true"
             )
 
-        res_ordenes = query.order("created_at", desc=True).execute()
+        # Frena la descarga en 100 registros para mantener la agilidad del módulo
+        res_ordenes = query.order("created_at", desc=True).limit(100).execute()
         ordenes_data = res_ordenes.data
 
         mapa_clientes = {}
@@ -162,7 +164,8 @@ def render(supabase):
         # SISTEMA ANTI-CHOQUE: Si el usuario deselecciona muy rápido, reintenta en 0.5s silenciosamente
         time.sleep(0.5)
         try:
-            res_ordenes = query.order("created_at", desc=True).execute()
+            # Frena la descarga en 100 registros para mantener la agilidad del módulo
+            res_ordenes = query.order("created_at", desc=True).limit(100).execute()
             ordenes_data = res_ordenes.data
             mapa_clientes = {}
             if ordenes_data:
@@ -257,17 +260,35 @@ def render(supabase):
                     f"🚨 **ALERTA DE CAMBIO:** {orden.get('detalle_cambios', 'Se hizo una modificación sin especificar.')}"
                 )
 
-            if orden["estado"] == "Pendiente":
+            # Aseguramos que atrape cualquier variante de la palabra pendiente
+            estado_actual_upper = str(orden["estado"]).upper()
+            if "PENDIENTE" in estado_actual_upper:
                 if st.button("Tomar Orden (Pasar a 'En Diseño')", type="primary"):
                     usuario_actual = st.session_state.get("id_usuario", None)
-                    # Usar la función centralizada en lugar del UPDATE directo
+
+                    # 1. Actualizamos la tabla principal obligatoriamente
+                    nuevo_estado = "EN DISEÑO"
+                    supabase.table("ordenes").update({"estado": nuevo_estado}).eq(
+                        "id", order_id
+                    ).execute()
+
+                    # 2. Registramos en el historial de trazabilidad
                     transicionar_estado(
                         supabase,
                         order_id,
-                        OrderState.EN_DISENO,
+                        (
+                            OrderState.EN_DISENO
+                            if hasattr(OrderState, "EN_DISENO")
+                            else nuevo_estado
+                        ),
                         usuario_actual,
                         estado_anterior=orden["estado"],
                     )
+
+                    # 3. Limpiamos la memoria para que el sistema recargue la bandeja correctamente
+                    st.session_state["orden_diseno_actual"] = None
+                    st.toast("Orden asignada correctamente", icon="🎨")
+                    time.sleep(0.5)
                     st.rerun()
 
         # --- IMÁGENES DE REFERENCIA ---
