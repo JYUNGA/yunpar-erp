@@ -252,25 +252,144 @@ def render(supabase):
         st.session_state["cot_items"] = []
 
     if st.session_state["vista_cot"] == "LISTA":
-        c_tit, c_btn = st.columns([3, 1])
-        c_tit.title("📑 Cotizaciones")
-        if c_btn.button(
-            "➕ NUEVA COTIZACIÓN", type="primary", use_container_width=True
-        ):
-            st.session_state["vista_cot"] = "EDITOR"
-            st.session_state["modo_edicion_cot"] = False
-            st.session_state["cot_items"] = []
-            st.session_state["cot_obs_temp"] = ""
-            st.session_state["cliente_id_edicion"] = None
-            st.rerun()
+        st.title("📑 Catálogo y Cotizaciones")
 
-        with st.container(border=True):
-            col_fil1, col_fil2, col_fil3 = st.columns(3)
-            h_f_txt = col_fil1.text_input("🔍 Buscar Cliente / Código")
-            h_f_ini = col_fil2.date_input(
-                "Desde", value=datetime.date.today() - datetime.timedelta(days=30)
+        # --- NUEVA ARQUITECTURA MÓVIL: Separación de intenciones ---
+        tab_rapida, tab_formal = st.tabs(
+            ["🔎 Precios Rápidos", "📋 Cotizaciones Formales"]
+        )
+
+        # 1. MÓDULO DE CONSULTA ÁGIL (Pensado 100% para celular)
+        with tab_rapida:
+            st.markdown("🔍 **Búsqueda Ágil de Precios**")
+
+            # Traemos los datos incluyendo los campos de categorización (Una sola consulta rápida)
+            prods_raw = (
+                supabase.table("productos_catalogo")
+                .select(
+                    "codigo_referencia, descripcion, tipo_prenda, linea_categoria, grupo_edad, precio_unitario, precio_docena, precio_mayorista"
+                )
+                .eq("activo", True)
+                .execute()
+                .data
             )
-            h_f_fin = col_fil3.date_input("Hasta", value=datetime.date.today())
+
+            if prods_raw:
+                df_cat = pd.DataFrame(prods_raw)
+
+                # Buscador principal (Siempre visible)
+                txt_rapido = st.text_input(
+                    "Palabra clave o código:",
+                    placeholder="Ej: Camiseta, 001, Polo...",
+                    label_visibility="collapsed",
+                )
+
+                # Filtros ocultos en un acordeón (Ahorra espacio en celular)
+                with st.expander(
+                    "⚙️ Filtros avanzados (Prenda, Categoría, Edad)", expanded=False
+                ):
+                    f_col1, f_col2, f_col3 = st.columns(3)
+
+                    lista_tp = ["Todos"] + sorted(
+                        [
+                            str(x)
+                            for x in df_cat["tipo_prenda"].dropna().unique()
+                            if str(x).strip()
+                        ]
+                    )
+                    lista_cat = ["Todos"] + sorted(
+                        [
+                            str(x)
+                            for x in df_cat["linea_categoria"].dropna().unique()
+                            if str(x).strip()
+                        ]
+                    )
+                    lista_edad = ["Todos"] + sorted(
+                        [
+                            str(x)
+                            for x in df_cat["grupo_edad"].dropna().unique()
+                            if str(x).strip()
+                        ]
+                    )
+
+                    filtro_tp = f_col1.selectbox("Prenda", lista_tp)
+                    filtro_cat = f_col2.selectbox("Categoría", lista_cat)
+                    filtro_edad = f_col3.selectbox("Edad", lista_edad)
+
+                # Proceso de filtrado secuencial
+                df_f = df_cat.copy()
+
+                if txt_rapido:
+                    df_f = df_f[
+                        df_f["descripcion"].str.contains(
+                            txt_rapido, case=False, na=False
+                        )
+                        | df_f["codigo_referencia"].str.contains(
+                            txt_rapido, case=False, na=False
+                        )
+                    ]
+                if filtro_tp != "Todos":
+                    df_f = df_f[df_f["tipo_prenda"] == filtro_tp]
+                if filtro_cat != "Todos":
+                    df_f = df_f[df_f["linea_categoria"] == filtro_cat]
+                if filtro_edad != "Todos":
+                    df_f = df_f[df_f["grupo_edad"] == filtro_edad]
+
+                # Renderizado de Tarjetas: Solo mostramos resultados si el usuario interactuó con algo
+                if (
+                    txt_rapido
+                    or filtro_tp != "Todos"
+                    or filtro_cat != "Todos"
+                    or filtro_edad != "Todos"
+                ):
+                    if not df_f.empty:
+                        # Limitamos a 15 para no colapsar la memoria del celular si hay muchos
+                        st.caption(
+                            f"Se encontraron {len(df_f)} resultados (Mostrando primeros 15):"
+                        )
+
+                        for _, row in df_f.head(15).iterrows():
+                            with st.container(border=True):
+                                st.markdown(
+                                    f"**[{row['codigo_referencia']}]** {row['descripcion']}"
+                                )
+                                c1, c2, c3 = st.columns(3)
+                                # Usamos format exacto para evitar números con muchos decimales
+                                c1.metric(
+                                    "Unitario", f"${float(row['precio_unitario']):.2f}"
+                                )
+                                c2.metric(
+                                    "Docena", f"${float(row['precio_docena']):.2f}"
+                                )
+                                c3.metric(
+                                    "Mayor", f"${float(row['precio_mayorista']):.2f}"
+                                )
+                    else:
+                        st.info("No hay productos con esta combinación de filtros.")
+            else:
+                st.warning("No hay productos activos en el catálogo.")
+
+        # 2. MÓDULO TRADICIONAL DE COTIZACIONES
+        with tab_formal:
+            c_tit, c_btn = st.columns([3, 2])
+            c_tit.subheader("Historial")
+            if c_btn.button(
+                "➕ NUEVA COTIZACIÓN", type="primary", use_container_width=True
+            ):
+                st.session_state["vista_cot"] = "EDITOR"
+                st.session_state["modo_edicion_cot"] = False
+                st.session_state["cot_items"] = []
+                st.session_state["cot_obs_temp"] = ""
+                st.session_state["cliente_id_edicion"] = None
+                st.rerun()
+
+            with st.container(border=True):
+                col_fil1, col_fil2, col_fil3 = st.columns(3)
+                h_f_txt = col_fil1.text_input("🔍 Buscar Cliente / Código")
+                h_f_ini = col_fil2.date_input(
+                    "Desde", value=datetime.date.today() - datetime.timedelta(days=30)
+                )
+                h_f_fin = col_fil3.date_input("Hasta", value=datetime.date.today())
 
         query = (
             supabase.table("cotizaciones").select("*").order("created_at", desc=True)

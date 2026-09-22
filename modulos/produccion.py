@@ -1240,6 +1240,8 @@ def render(supabase):
                                         "5XL",
                                         "6XL",
                                         "7XL",
+                                        "8XL",
+                                        "9XL",
                                     ]:
                                         return "10-12"
                                     return None
