@@ -589,28 +589,34 @@ def render(supabase):
 
                     if st.form_submit_button("Guardar Cliente"):
                         if f_ruc and f_nom:
-                            res_c = (
-                                supabase.table("clientes")
-                                .insert(
-                                    {
-                                        "cedula_ruc": f_ruc,
-                                        "nombre_completo": f_nom.upper(),
-                                        "telefono": f_tel,
-                                        "email": f_ema,
-                                        "ciudad": f_ciu,
-                                        "tipo_institucion": f_tip,
-                                        "genero": f_gen,
-                                    }
+                            try:
+                                res_c = (
+                                    supabase.table("clientes")
+                                    .insert(
+                                        {
+                                            "cedula_ruc": f_ruc.strip(),
+                                            "nombre_completo": f_nom.strip().upper(),
+                                            "telefono": f_tel,
+                                            "email": f_ema,
+                                            "ciudad": f_ciu,
+                                            "tipo_institucion": f_tip,
+                                            "genero": f_gen,
+                                        }
+                                    )
+                                    .execute()
                                 )
-                                .execute()
-                            )
-                            if res_c.data:
-                                st.session_state["editando_cliente_id"] = res_c.data[0][
-                                    "id"
-                                ]
-                                st.success("Cliente guardado")
-                                time.sleep(0.5)
-                                st.rerun()
+                                if res_c.data:
+                                    st.session_state["editando_cliente_id"] = (
+                                        res_c.data[0]["id"]
+                                    )
+                                    st.success("Cliente guardado correctamente.")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                            except Exception as e:
+                                # Atrapamos el error de Supabase y evitamos el colapso rojo
+                                st.warning(
+                                    "⚠️ No se pudo guardar el cliente. Es muy probable que este RUC/Cédula ya esté registrado en el sistema."
+                                )
                         else:
                             st.error("RUC y Nombre obligatorios")
 
