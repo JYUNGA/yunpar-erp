@@ -75,16 +75,15 @@ def render(supabase):
             )
 
     try:
-        # Traemos órdenes listas para impresión, en impresión o con alertas
+        # Traemos órdenes usando ILIKE para atrapar cualquier variante de "impresion"
         res_ordenes = (
             supabase.table("ordenes")
             .select(
                 "id, codigo_orden, estado, fecha_entrega, alerta_cambios, cliente_id, created_at, url_arte_final, observaciones_generales"
             )
-            .or_(
-                "estado.eq.Listo para Impresión,estado.eq.En Impresión,alerta_cambios.eq.true"
-            )
+            .or_("estado.ilike.%impresi%,alerta_cambios.eq.true")
             .order("created_at", desc=True)
+            .limit(100)  # Límite de seguridad
             .execute()
         )
         ordenes_data = res_ordenes.data
@@ -181,8 +180,9 @@ def render(supabase):
                 "⚠️ Esta orden tiene una Alerta de Cambios activa. Revisa bien las notas."
             )
 
-        # Pasar a "En Impresión" usando configuración centralizada
-        if orden_actual["estado"] == OrderState.LISTO_IMPRESION:
+        # Pasar a "En Impresión" asegurando que reaccione sin importar cómo esté escrito
+        estado_superior = str(orden_actual["estado"]).upper()
+        if "LISTO" in estado_superior and "IMPRESI" in estado_superior:
             if st.button("Iniciar Impresión (Pasar a 'En Impresión')", type="primary"):
                 usuario_actual = st.session_state.get("id_usuario", None)
                 transicionar_estado(

@@ -837,7 +837,11 @@ def render(supabase):
                     st.markdown("💰 **Finanzas**")
                     tipo_flujo = st.radio(
                         "Destino de la Orden",
-                        ["Entrega Inmediata", "Pasa a Cola de Producción/Impresión"],
+                        [
+                            "Entrega Inmediata",
+                            "Pasar a Cola de Diseño",
+                            "Pasar Directo a Impresión (Plotter)",
+                        ],
                     )
 
                     # --- NUEVO: Selector de Modalidad de Pago ---
@@ -910,12 +914,13 @@ def render(supabase):
                             st.stop()
 
                         codigo_vd = generar_codigo_vd(supabase)
-                        # Estandarización de estados iniciales
-                        estado_orden = (
-                            OrderState.ENTREGADO
-                            if tipo_flujo == "Entrega Inmediata"
-                            else OrderState.LISTO_IMPRESION
-                        )
+                        # Estandarización de estados iniciales según el destino real
+                        if tipo_flujo == "Entrega Inmediata":
+                            estado_orden = OrderState.ENTREGADO
+                        elif tipo_flujo == "Pasar a Cola de Diseño":
+                            estado_orden = OrderState.PENDIENTE
+                        else:
+                            estado_orden = OrderState.LISTO_IMPRESION
 
                         try:
                             with st.spinner("Registrando venta y enviando archivos..."):
@@ -1133,6 +1138,49 @@ def render(supabase):
                                     )
 
                             with c_btn:
+                                # --- NUEVO: Botón de Rescate y Corrección de Flujo ---
+                                with st.popover(
+                                    "🔄 Corregir Destino", use_container_width=True
+                                ):
+                                    st.markdown("¿Te equivocaste de cola?")
+                                    opciones_estado = {
+                                        "Marcar como Entregado": OrderState.ENTREGADO,
+                                        "Mover a Diseño": OrderState.PENDIENTE,
+                                        "Mover a Impresión": OrderState.LISTO_IMPRESION,
+                                    }
+                                    sel_est = st.selectbox(
+                                        "Nuevo Destino:",
+                                        list(opciones_estado.keys()),
+                                        label_visibility="collapsed",
+                                    )
+
+                                    if st.button(
+                                        "Aplicar Cambio",
+                                        type="primary",
+                                        use_container_width=True,
+                                    ):
+                                        nuevo_est = opciones_estado[sel_est]
+                                        # 1. Actualizar el estado en la base de datos
+                                        supabase.table("ordenes").update(
+                                            {"estado": nuevo_est}
+                                        ).eq("id", datos_venta["id"]).execute()
+
+                                        # 2. Guardar en el historial de trazabilidad
+                                        id_creador = st.session_state.get(
+                                            "id_usuario", None
+                                        )
+                                        transicionar_estado(
+                                            supabase,
+                                            datos_venta["id"],
+                                            nuevo_est,
+                                            id_creador,
+                                            notas="Corrección manual de destino desde Historial de Ventas",
+                                        )
+
+                                        st.success("Destino actualizado correctamente.")
+                                        time.sleep(1)
+                                        st.rerun()
+
                                 st.info("📄 Re-impresión de Recibo")
                                 # Generamos el PDF usando el nuevo motor basado en el diseño de cotizaciones
                                 pdf_bytes = generar_pdf_venta(datos_venta)
