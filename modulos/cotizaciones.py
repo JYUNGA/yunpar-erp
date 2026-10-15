@@ -561,11 +561,19 @@ def render(supabase):
                             "application/pdf",
                         )
 
-                    if b3.button("🗑️ Borrar", use_container_width=True):
-                        supabase.table("cotizaciones").delete().eq(
-                            "id", int(row_sel["id"])
-                        ).execute()
-                        st.toast("Eliminado")
+                    confirmar_borrar = b3.checkbox(
+                        "¿Seguro?", key=f"confirm_cot_{row_sel['id']}"
+                    )
+                    if b3.button(
+                        "🗑️ Borrar",
+                        use_container_width=True,
+                        disabled=not confirmar_borrar,
+                    ):
+                        # Borrado lógico: marcamos como ANULADO en vez de eliminar.
+                        supabase.table("cotizaciones").update(
+                            {"estado": "ANULADO"}
+                        ).eq("id", int(row_sel["id"])).execute()
+                        st.toast("Cotización anulada")
                         time.sleep(1)
                         st.rerun()
 
@@ -783,7 +791,12 @@ def render(supabase):
                         pin = st.text_input(
                             "🔑 Autorización Requerida", type="password"
                         )
-                        if pin != "1234":  # Pin de ejemplo, ajustar según secrets
+                        pin_ok = False
+                        try:
+                            pin_ok = bool(pin) and pin == st.secrets["admin"]["pin_gerencia"]
+                        except Exception:
+                            pin_ok = False
+                        if not pin_ok:
                             st.warning(
                                 "Requiere PIN para aplicar tarifa de volumen con pocas unidades"
                             )
@@ -810,7 +823,7 @@ def render(supabase):
         if st.session_state["cot_items"]:
             st.markdown("### Detalle de Items")
             st.info(
-                "💡 Para eliminar un ítem: Selecciona el recuadro a la izquierda del código y presiona la tecla 'Suprimir' o 'Delete' en tu teclado."
+                "💡 Edita la cantidad directamente en la tabla. Para eliminar un ítem usa el botón de abajo."
             )
 
             # Preparar datos
@@ -867,6 +880,28 @@ def render(supabase):
                         )
 
                 st.session_state["cot_items"] = new_items
+                st.rerun()
+
+            # Eliminación táctil (sin depender de la tecla Delete, ideal para móvil)
+            st.divider()
+            st.markdown("#### 🗑️ Eliminar ítem")
+            opciones_del = [
+                f"{i + 1}. {it['codigo']} | {it['descripcion']} (x{it['cantidad']})"
+                for i, it in enumerate(st.session_state["cot_items"])
+            ]
+            sel_del = st.selectbox(
+                "Selecciona el ítem a eliminar:",
+                opciones_del,
+                key="cot_del_sel",
+            )
+            if st.button(
+                "🗑️ Eliminar ítem seleccionado",
+                type="secondary",
+                use_container_width=True,
+            ):
+                idx_del = opciones_del.index(sel_del)
+                st.session_state["cot_items"].pop(idx_del)
+                st.toast("Ítem eliminado", icon="🗑️")
                 st.rerun()
 
             # --- El resto de tu lógica de totales y guardado se mantiene igual ---

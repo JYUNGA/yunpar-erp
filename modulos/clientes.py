@@ -49,9 +49,13 @@ def render(supabase):
     with tab1:
         st.subheader("🔍 Directorio de Clientes")
 
-        # 1. Cargar Datos
+        # 1. Cargar Datos (solo activos)
         response = (
-            supabase.table("clientes").select("*").order("nombre_completo").execute()
+            supabase.table("clientes")
+            .select("*")
+            .eq("activo", True)
+            .order("nombre_completo")
+            .execute()
         )
         df_clientes = pd.DataFrame(response.data)
 
@@ -207,21 +211,33 @@ def render(supabase):
                         except Exception as e:
                             st.error(f"Error al actualizar: {e}")
 
-                    # LOGICA ELIMINAR
+                    # LOGICA ELIMINAR (doble confirmación + borrado lógico)
+                    _clave_confirm = f"confirm_eliminar_cli_{datos['id']}"
+                    if st.session_state.get(_clave_confirm, False):
+                        st.warning(
+                            "⚠️ ¿Confirmas la desactivación? Presiona de nuevo 'Eliminar Cliente'."
+                        )
+
                     if col_delete.form_submit_button("🗑️ Eliminar Cliente"):
-                        try:
-                            supabase.table("clientes").delete().eq(
-                                "id", int(datos["id"])
-                            ).execute()
-                            st.warning(
-                                f"Cliente {datos['nombre_completo']} eliminado permanentemente."
-                            )
-                            time.sleep(1.5)
+                        if not st.session_state.get(_clave_confirm, False):
+                            st.session_state[_clave_confirm] = True
                             st.rerun()
-                        except Exception as e:
-                            st.error(
-                                f"No se puede eliminar: Probablemente tiene órdenes o cotizaciones asociadas. Error: {e}"
-                            )
+                        else:
+                            st.session_state.pop(_clave_confirm, None)
+                            try:
+                                # Borrado lógico: desactivamos en vez de eliminar.
+                                supabase.table("clientes").update(
+                                    {"activo": False}
+                                ).eq("id", int(datos["id"])).execute()
+                                st.warning(
+                                    f"Cliente {datos['nombre_completo']} desactivado. Ya no aparecerá en las listas."
+                                )
+                                time.sleep(1.5)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(
+                                    f"No se pudo desactivar. Verifica que la columna 'activo' exista (ejecuta migracion_fase1.sql). Error: {e}"
+                                )
 
     # ==============================================================================
     # TAB 2: NUEVO CLIENTE (FORMULARIO COMPLETO)

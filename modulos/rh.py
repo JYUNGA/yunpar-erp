@@ -817,10 +817,17 @@ def render(supabase):
                         ],
                     )
 
+                confirmar_liq = st.checkbox(
+                    "Confirmo que deseo liquidar la nómina del mes (acción irreversible)",
+                    value=False,
+                    key=f"confirm_liq_{mes_pago}",
+                )
+
                 if st.button(
                     "💰 Liquidar Mes y Enviar a Finanzas",
                     type="primary",
                     use_container_width=True,
+                    disabled=not confirmar_liq,
                 ):
                     # Validación estricta para evitar pagos fantasma
                     if (
@@ -831,6 +838,20 @@ def render(supabase):
                             "⚠️ Para transferencias o cheques, debes seleccionar obligatoriamente de qué banco sale el dinero."
                         )
                     else:
+                        # Guard anti doble liquidación: verificamos que el mes no esté ya liquidado.
+                        res_ya = (
+                            supabase.table("rh_liquidaciones")
+                            .select("id")
+                            .eq("mes", mes_pago)
+                            .limit(1)
+                            .execute()
+                        )
+                        if res_ya.data:
+                            st.error(
+                                f"⚠️ La nómina de {mes_pago} ya fue liquidada. No se registrará nuevamente."
+                            )
+                            st.stop()
+
                         with st.spinner(
                             "Registrando egresos individuales y enlazando contabilidad..."
                         ):
@@ -841,7 +862,7 @@ def render(supabase):
                                     .insert(
                                         {
                                             "empleado_id": int(row["empleado_id"]),
-                                            "mes_anio": mes_pago,
+                                            "mes": mes_pago,
                                             "total_pagado": float(
                                                 row["Neto a Pagar ($)"]
                                             ),

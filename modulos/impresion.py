@@ -58,6 +58,323 @@ def render(supabase):
         st.session_state["orden_impresion_actual"] = None
 
     # ==========================================
+    # HISTORIAL DE IMPRESIONES (aporte de Andrés)
+    # ==========================================
+    with st.expander("📚 Historial de Impresiones", expanded=False):
+        try:
+            historial_data = []
+            inicio = 0
+            tamano_lote = 1000
+
+            while True:
+                res_historial = (
+                    supabase.table("archivos_impresion")
+                    .select("*")
+                    .eq("estado_impresion", "Impreso")
+                    .range(inicio, inicio + tamano_lote - 1)
+                    .execute()
+                )
+                lote = res_historial.data or []
+                historial_data.extend(lote)
+                if len(lote) < tamano_lote:
+                    break
+                inicio += tamano_lote
+                if inicio >= 5000:
+                    break
+
+            if not historial_data:
+                st.info("Todavía no existen archivos registrados como impresos.")
+            else:
+                df_archivos_hist = pd.DataFrame(historial_data)
+                # Evitar filas sin orden (generarían un grupo NaN en el resumen)
+                df_archivos_hist = df_archivos_hist.dropna(subset=["orden_id"])
+
+                orden_ids = sorted(
+                    {
+                        int(a)
+                        for a in df_archivos_hist["orden_id"].dropna().unique()
+                    }
+                )
+
+                mapa_ordenes = {}
+                if orden_ids:
+                    res_ordenes = (
+                        supabase.table("ordenes")
+                        .select("id, codigo_orden, cliente_id, fecha_entrega")
+                        .in_("id", orden_ids)
+                        .execute()
+                    )
+                    for orden in res_ordenes.data or []:
+                        mapa_ordenes[orden["id"]] = orden
+
+                cliente_ids = sorted(
+                    {
+                        o.get("cliente_id")
+                        for o in mapa_ordenes.values()
+                        if o.get("cliente_id")
+                    }
+                )
+                mapa_clientes = {}
+                if cliente_ids:
+                    res_clientes = (
+                        supabase.table("clientes")
+                        .select("id, nombre_completo")
+                        .in_("id", cliente_ids)
+                        .execute()
+                    )
+                    for cliente in res_clientes.data or []:
+                        mapa_clientes[cliente["id"]] = cliente.get(
+                            "nombre_completo", "Consumidor Final"
+                        )
+
+                mapa_impresion = {}
+                usuarios_ids = set()
+                if orden_ids:
+                    try:
+                        res_estados = (
+                            supabase.table("historial_estados")
+                            .select("*")
+                            .in_("orden_id", orden_ids)
+                            .execute()
+                        )
+                        estados_data = res_estados.data or []
+                        for historial in estados_data:
+                            notas = str(historial.get("notas", "")).upper()
+                            estado_anterior = str(
+                                historial.get("estado_anterior", "")
+                            ).upper()
+                            estado_nuevo = str(
+                                historial.get("estado_nuevo", "")
+                            ).upper()
+                            es_fin_impresion = (
+                                (
+                                    "IMPRES" in notas
+                                    and ("FINALIZ" in notas or "LOTE" in notas)
+                                )
+                                or (
+                                    "IMPRES" in estado_anterior
+                                    and (
+                                        "SUBLIM" in estado_nuevo
+                                        or "ENTREGA" in estado_nuevo
+                                    )
+                                )
+                            )
+                            if not es_fin_impresion:
+                                continue
+                            fecha_valor = None
+                            for campo_fecha in [
+                                "created_at",
+                                "fecha_cambio",
+                                "fecha",
+                                "updated_at",
+                            ]:
+                                if historial.get(campo_fecha):
+                                    fecha_valor = historial.get(campo_fecha)
+                                    break
+                            fecha_dt = pd.to_datetime(
+                                fecha_valor, errors="coerce", utc=True
+                            )
+                            orden_id_hist = historial.get("orden_id")
+                            usuario_id_hist = historial.get("cambiado_por")
+                            if usuario_id_hist:
+                                usuarios_ids.add(usuario_id_hist)
+                            anterior = mapa_impresion.get(orden_id_hist)
+                            if anterior is None or (
+                                pd.notna(fecha_dt)
+                                and (
+                                    pd.isna(anterior["fecha"])
+                                    or fecha_dt > anterior["fecha"]
+                                )
+                            ):
+                                mapa_impresion[orden_id_hist] = {
+                                    "fecha": fecha_dt,
+                                    "usuario_id": usuario_id_hist,
+                                }
+                    except Exception:
+                        mapa_impresion = {}
+
+                mapa_usuarios = {}
+                if usuarios_ids:
+                    try:
+                        res_usuarios = (
+                            supabase.table("usuarios")
+                            .select("id, nombre_completo")
+                            .in_("id", list(usuarios_ids))
+                            .execute()
+                        )
+                        for usuario in res_usuarios.data or []:
+                            mapa_usuarios[usuario["id"]] = usuario.get(
+                                "nombre_completo", "Desconocido"
+                            )
+                    except Exception:
+                        mapa_usuarios = {}
+
+                df_archivos_hist["longitud_impresa_num"] = pd.to_numeric(
+                    df_archivos_hist.get("longitud_impresa", 0),
+                    errors="coerce",
+                ).fillna(0)
+
+                resumen_ordenes = []
+                for orden_id, grupo in df_archivos_hist.groupby("orden_id"):
+                    orden = mapa_ordenes.get(orden_id, {})
+                    codigo = orden.get("codigo_orden", "Sin código")
+                    cliente_id = orden.get("cliente_id")
+                    cliente = mapa_clientes.get(cliente_id, "Consumidor Final")
+                    cantidad_archivos = len(grupo)
+                    metros_total = grupo["longitud_impresa_num"].sum()
+                    datos_impresion = mapa_impresion.get(orden_id, {})
+                    fecha_impresion = datos_impresion.get("fecha", pd.NaT)
+                    usuario_id = datos_impresion.get("usuario_id")
+                    operador = mapa_usuarios.get(usuario_id, "Sin registro")
+                    fecha_entrega = pd.to_datetime(
+                        orden.get("fecha_entrega"), errors="coerce", utc=True
+                    )
+                    fecha_ordenamiento = (
+                        fecha_impresion
+                        if pd.notna(fecha_impresion)
+                        else fecha_entrega
+                    )
+                    if pd.notna(fecha_impresion):
+                        try:
+                            fecha_texto = fecha_impresion.tz_convert(
+                                "America/Guayaquil"
+                            ).strftime("%d/%m/%Y %H:%M")
+                        except Exception:
+                            fecha_texto = fecha_impresion.strftime("%d/%m/%Y %H:%M")
+                    else:
+                        fecha_texto = "Sin registro"
+
+                    resumen_ordenes.append(
+                        {
+                            "_orden_id": orden_id,
+                            "_fecha_orden": fecha_ordenamiento,
+                            "Código": codigo,
+                            "Cliente": cliente,
+                            "Fecha impresión": fecha_texto,
+                            "Archivos": cantidad_archivos,
+                            "Metros": round(metros_total, 2),
+                            "Operador": operador,
+                            "Estado": "✅ Impreso",
+                        }
+                    )
+
+                df_resumen = pd.DataFrame(resumen_ordenes)
+                df_resumen = df_resumen.sort_values(
+                    by="_fecha_orden", ascending=False, na_position="last"
+                )
+
+                col_hist1, col_hist2 = st.columns(2)
+                filtro_codigo = col_hist1.text_input(
+                    "Buscar por Código de Orden",
+                    placeholder="Ej: ORD-6401",
+                    key="historial_codigo_resumen",
+                )
+                filtro_cliente = col_hist2.text_input(
+                    "Buscar por Cliente",
+                    placeholder="Ej: Paola",
+                    key="historial_cliente_resumen",
+                )
+
+                df_filtrado = df_resumen.copy()
+                if filtro_codigo:
+                    df_filtrado = df_filtrado[
+                        df_filtrado["Código"]
+                        .astype(str)
+                        .str.contains(filtro_codigo, case=False, na=False)
+                    ]
+                if filtro_cliente:
+                    df_filtrado = df_filtrado[
+                        df_filtrado["Cliente"]
+                        .astype(str)
+                        .str.contains(filtro_cliente, case=False, na=False)
+                    ]
+
+                st.caption(
+                    f"🖨️ Órdenes impresas encontradas: {len(df_filtrado)}"
+                )
+
+                columnas_visibles = [
+                    "Código",
+                    "Cliente",
+                    "Fecha impresión",
+                    "Archivos",
+                    "Metros",
+                    "Operador",
+                    "Estado",
+                ]
+                st.dataframe(
+                    df_filtrado[columnas_visibles],
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "Metros": st.column_config.NumberColumn(
+                            "Metros", format="%.2f m"
+                        )
+                    },
+                )
+
+                if not df_filtrado.empty:
+                    st.divider()
+                    st.markdown("### 🔎 Detalle de Orden Impresa")
+
+                    opciones = df_filtrado["Código"].tolist()
+                    codigo_seleccionado = st.selectbox(
+                        "Selecciona una orden:",
+                        opciones,
+                        key="detalle_historial_impresion",
+                    )
+
+                    fila_resumen = df_filtrado[
+                        df_filtrado["Código"] == codigo_seleccionado
+                    ].iloc[0]
+
+                    orden_id_sel = fila_resumen["_orden_id"]
+                    archivos_orden = df_archivos_hist[
+                        df_archivos_hist["orden_id"] == orden_id_sel
+                    ].copy()
+
+                    if "motivo_reimpresion" in archivos_orden.columns:
+                        archivos_orden["motivo_reimpresion"] = (
+                            archivos_orden["motivo_reimpresion"]
+                            .fillna("—")
+                            .replace("", "—")
+                        )
+
+                    st.markdown(
+                        f"""
+                        **{fila_resumen['Código']}**
+
+                        **Cliente:** {fila_resumen['Cliente']}  
+                        **Archivos impresos:** {fila_resumen['Archivos']}  
+                        **Metros impresos:** {fila_resumen['Metros']:.2f} m  
+                        **Fecha impresión:** {fila_resumen['Fecha impresión']}  
+                        **Operador:** {fila_resumen['Operador']}  
+                        **Estado:** ✅ Impreso
+                        """
+                    )
+
+                    detalle_archivos = pd.DataFrame(
+                        {
+                            "Archivo": archivos_orden.get("nombre_archivo"),
+                            "Cantidad": archivos_orden.get("cantidad"),
+                            "Metros impresos": archivos_orden[
+                                "longitud_impresa_num"
+                            ].round(2),
+                            "Motivo desperdicio": archivos_orden.get(
+                                "motivo_reimpresion"
+                            ),
+                        }
+                    )
+                    st.dataframe(
+                        detalle_archivos,
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+
+        except Exception as e:
+            st.error(f"❌ No se pudo cargar el historial de impresiones: {e}")
+
+    # ==========================================
     # 1. BUSCADOR AVANZADO Y BANDEJA
     # ==========================================
     with st.expander("🔍 Buscador Avanzado (Bandeja de Pendientes)", expanded=True):
@@ -471,12 +788,30 @@ def render(supabase):
                 )
 
                 if st.button(texto_boton, type="primary", use_container_width=True):
-                    if not df_editado["chk_impreso"].all():
-                        st.error(
-                            "❌ Error: Debes marcar todos los archivos como 'Impresos' en la tabla superior y Guardar Avances primero."
+                    try:
+                        # Validamos contra la BD (fuente de verdad), no solo el editor local.
+                        res_verif = (
+                            supabase.table("archivos_impresion")
+                            .select("id, estado_impresion")
+                            .eq("orden_id", order_id)
+                            .execute()
                         )
-                    else:
-                        try:
+                        archivos_bd = res_verif.data or []
+
+                        if not archivos_bd:
+                            st.error(
+                                "❌ No hay archivos de impresión para esta orden."
+                            )
+                        elif any(
+                            str(f.get("estado_impresion") or "").strip().lower()
+                            != "impreso"
+                            for f in archivos_bd
+                        ):
+                            st.error(
+                                "❌ Aún hay archivos 'Pendiente' en la base. Márcalos como "
+                                "'Impresos', presiona '💾 Guardar Avances' y reintenta."
+                            )
+                        else:
                             with st.spinner("Procesando cierre de impresión..."):
                                 usuario_actual = st.session_state.get(
                                     "id_usuario", None
@@ -494,8 +829,8 @@ def render(supabase):
                                 st.success(mensaje_exito)
                                 st.session_state["orden_impresion_actual"] = None
                                 st.rerun()
-                        except Exception as e:
-                            st.error(f"Error al finalizar la orden: {str(e)}")
+                    except Exception as e:
+                        st.error(f"Error al finalizar la orden: {str(e)}")
 
         except Exception as e:
             st.error(f"Error crítico en el panel de archivos: {str(e)}")

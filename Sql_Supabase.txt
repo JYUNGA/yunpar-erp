@@ -1,0 +1,314 @@
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
+
+CREATE TABLE public.usuarios (
+  id integer NOT NULL DEFAULT nextval('usuarios_id_seq'::regclass),
+  nombre_completo character varying NOT NULL,
+  usuario character varying NOT NULL UNIQUE,
+  password_hash character varying NOT NULL,
+  rol character varying NOT NULL,
+  activo boolean DEFAULT true,
+  CONSTRAINT usuarios_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.clientes (
+  id integer NOT NULL DEFAULT nextval('clientes_id_seq'::regclass),
+  cedula_ruc character varying NOT NULL UNIQUE,
+  nombre_completo character varying NOT NULL,
+  telefono character varying,
+  email character varying,
+  ciudad character varying,
+  fecha_nacimiento date,
+  genero character varying,
+  tipo_institucion character varying,
+  fecha_registro timestamp without time zone DEFAULT now(),
+  CONSTRAINT clientes_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.catalogo_telas (
+  id integer NOT NULL DEFAULT nextval('catalogo_telas_id_seq'::regclass),
+  nombre_tela character varying NOT NULL UNIQUE,
+  proveedor character varying,
+  costo_por_metro numeric DEFAULT 0,
+  activo boolean DEFAULT true,
+  CONSTRAINT catalogo_telas_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.productos_catalogo (
+  id integer NOT NULL DEFAULT nextval('productos_catalogo_id_seq'::regclass),
+  codigo_referencia character varying NOT NULL UNIQUE,
+  descripcion character varying NOT NULL,
+  tipo_prenda character varying,
+  linea_categoria character varying,
+  grupo_edad character varying,
+  precio_unitario numeric DEFAULT 0,
+  precio_docena numeric DEFAULT 0,
+  precio_mayorista numeric DEFAULT 0,
+  requiere_sublimado boolean DEFAULT false,
+  requiere_ticket boolean DEFAULT false,
+  requiere_dtf boolean DEFAULT false,
+  requiere_bordado boolean DEFAULT false,
+  activo boolean DEFAULT true,
+  created_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT productos_catalogo_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.detalles_orden (
+  id_detalle integer NOT NULL DEFAULT nextval('detalles_orden_id_detalle_seq'::regclass),
+  orden_id character varying,
+  producto_id integer,
+  precio_aplicado numeric NOT NULL,
+  tarifa_aplicada character varying,
+  cantidad integer NOT NULL DEFAULT 1,
+  tela_principal_id integer,
+  tela_secundaria_id integer,
+  datos_personalizacion jsonb,
+  observaciones_item text,
+  CONSTRAINT detalles_orden_pkey PRIMARY KEY (id_detalle),
+  CONSTRAINT detalles_orden_producto_id_fkey FOREIGN KEY (producto_id) REFERENCES public.productos_catalogo(id),
+  CONSTRAINT detalles_orden_tela_principal_id_fkey FOREIGN KEY (tela_principal_id) REFERENCES public.catalogo_telas(id),
+  CONSTRAINT detalles_orden_tela_secundaria_id_fkey FOREIGN KEY (tela_secundaria_id) REFERENCES public.catalogo_telas(id)
+);
+CREATE TABLE public.cotizaciones (
+  id integer NOT NULL DEFAULT nextval('cotizaciones_id_seq'::regclass),
+  codigo_cotizacion character varying NOT NULL UNIQUE,
+  cliente_id integer,
+  fecha_emision date DEFAULT CURRENT_DATE,
+  validez_dias integer DEFAULT 30,
+  subtotal numeric DEFAULT 0,
+  iva numeric DEFAULT 0,
+  total numeric DEFAULT 0,
+  estado character varying DEFAULT 'BORRADOR'::character varying,
+  creado_por_id bigint,
+  observaciones text,
+  created_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT cotizaciones_pkey PRIMARY KEY (id),
+  CONSTRAINT cotizaciones_cliente_id_fkey FOREIGN KEY (cliente_id) REFERENCES public.clientes(id)
+);
+CREATE TABLE public.detalles_cotizacion (
+  id integer NOT NULL DEFAULT nextval('detalles_cotizacion_id_seq'::regclass),
+  cotizacion_id integer,
+  producto_id integer,
+  cantidad numeric NOT NULL,
+  precio_unitario numeric NOT NULL,
+  subtotal numeric NOT NULL,
+  descripcion_snapshot character varying,
+  es_sublimado boolean DEFAULT false,
+  es_bordado boolean DEFAULT false,
+  CONSTRAINT detalles_cotizacion_pkey PRIMARY KEY (id),
+  CONSTRAINT detalles_cotizacion_cotizacion_id_fkey FOREIGN KEY (cotizacion_id) REFERENCES public.cotizaciones(id),
+  CONSTRAINT detalles_cotizacion_producto_id_fkey FOREIGN KEY (producto_id) REFERENCES public.productos_catalogo(id)
+);
+CREATE TABLE public.insumos (
+  id integer NOT NULL DEFAULT nextval('insumos_id_seq'::regclass),
+  codigo_insumo character varying NOT NULL UNIQUE,
+  categoria character varying,
+  nombre character varying NOT NULL,
+  unidad_medida character varying,
+  costo_unitario numeric DEFAULT 0,
+  activo boolean DEFAULT true,
+  created_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT insumos_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.ordenes (
+  id integer NOT NULL DEFAULT nextval('ordenes_id_seq'::regclass),
+  codigo_orden character varying NOT NULL UNIQUE,
+  cliente_id integer,
+  fecha_entrega date NOT NULL,
+  creado_por_id bigint,
+  disenador_asignado character varying,
+  estado character varying DEFAULT 'PENDIENTE DISEÑO'::character varying,
+  total_estimado numeric DEFAULT 0,
+  observaciones_generales text,
+  url_boceto_vendedora text,
+  url_arte_final text,
+  created_at timestamp without time zone DEFAULT now(),
+  abono_inicial numeric DEFAULT 0,
+  saldo_pendiente numeric DEFAULT 0,
+  url_diseno_final text,
+  alerta_cambios boolean DEFAULT false,
+  detalle_cambios text,
+  estado_facturacion boolean DEFAULT false,
+  numero_factura text,
+  notas_facturacion text,
+  CONSTRAINT ordenes_pkey PRIMARY KEY (id),
+  CONSTRAINT ordenes_cliente_id_fkey FOREIGN KEY (cliente_id) REFERENCES public.clientes(id)
+);
+CREATE TABLE public.items_orden (
+  id integer NOT NULL DEFAULT nextval('items_orden_id_seq'::regclass),
+  orden_id integer,
+  producto_id integer,
+  familia_producto character varying,
+  descripcion_item character varying,
+  insumo_base_id integer,
+  borda_si_no boolean DEFAULT false,
+  dtf_si_no boolean DEFAULT false,
+  cantidad_total numeric DEFAULT 0.0,
+  precio_aplicado numeric DEFAULT 0,
+  CONSTRAINT items_orden_pkey PRIMARY KEY (id),
+  CONSTRAINT items_orden_orden_id_fkey FOREIGN KEY (orden_id) REFERENCES public.ordenes(id),
+  CONSTRAINT items_orden_producto_id_fkey FOREIGN KEY (producto_id) REFERENCES public.productos_catalogo(id),
+  CONSTRAINT items_orden_insumo_base_id_fkey FOREIGN KEY (insumo_base_id) REFERENCES public.insumos(id)
+);
+CREATE TABLE public.especificaciones_producto (
+  id integer NOT NULL DEFAULT nextval('especificaciones_producto_id_seq'::regclass),
+  item_orden_id integer,
+  talla_superior character varying,
+  talla_inferior character varying,
+  talla_polines character varying,
+  color_polines character varying,
+  nombre_jugador character varying,
+  numero_dorsal character varying,
+  genero character varying,
+  es_arquero boolean DEFAULT false,
+  tipo_cuello_texto character varying,
+  ancho_cm numeric,
+  alto_cm numeric,
+  acabado character varying,
+  calandra_si_no boolean DEFAULT false,
+  observacion_individual character varying,
+  diseno_terminado boolean DEFAULT false,
+  polines_comprados boolean DEFAULT false,
+  CONSTRAINT especificaciones_producto_pkey PRIMARY KEY (id),
+  CONSTRAINT especificaciones_producto_item_orden_id_fkey FOREIGN KEY (item_orden_id) REFERENCES public.items_orden(id)
+);
+CREATE TABLE public.pagos (
+  id integer NOT NULL DEFAULT nextval('pagos_id_seq'::regclass),
+  orden_id integer,
+  cliente_id integer,
+  monto numeric NOT NULL,
+  fecha_pago date DEFAULT CURRENT_DATE,
+  metodo_pago character varying,
+  banco_destino character varying,
+  numero_referencia character varying,
+  observacion character varying,
+  registrado_por_id bigint,
+  created_at timestamp without time zone DEFAULT now(),
+  anulado boolean DEFAULT false,
+  motivo_anulacion text,
+  anulado_por_id bigint,
+  fecha_anulacion timestamp without time zone,
+  CONSTRAINT pagos_pkey PRIMARY KEY (id),
+  CONSTRAINT pagos_orden_id_fkey FOREIGN KEY (orden_id) REFERENCES public.ordenes(id),
+  CONSTRAINT pagos_cliente_id_fkey FOREIGN KEY (cliente_id) REFERENCES public.clientes(id),
+  CONSTRAINT pagos_anulado_por_id_fkey FOREIGN KEY (anulado_por_id) REFERENCES public.usuarios(id)
+);
+CREATE TABLE public.movimientos_caja (
+  id integer NOT NULL DEFAULT nextval('movimientos_caja_id_seq'::regclass),
+  tipo text,
+  categoria text,
+  monto numeric,
+  descripcion text,
+  fecha date DEFAULT now(),
+  registrado_por integer,
+  CONSTRAINT movimientos_caja_pkey PRIMARY KEY (id),
+  CONSTRAINT movimientos_caja_registrado_por_fkey FOREIGN KEY (registrado_por) REFERENCES public.usuarios(id)
+);
+CREATE TABLE public.archivos_impresion (
+  id integer NOT NULL DEFAULT nextval('archivos_impresion_id_seq'::regclass),
+  orden_id integer,
+  nombre_archivo character varying NOT NULL,
+  perfil_color character varying,
+  longitud_metros numeric NOT NULL,
+  estado_impresion character varying DEFAULT 'Pendiente'::character varying,
+  notas_disenador text,
+  created_at timestamp without time zone DEFAULT now(),
+  ancho_metros real,
+  longitud_impresa real,
+  motivo_reimpresion text,
+  tela character varying,
+  cantidad integer DEFAULT 1,
+  CONSTRAINT archivos_impresion_pkey PRIMARY KEY (id),
+  CONSTRAINT archivos_impresion_orden_id_fkey FOREIGN KEY (orden_id) REFERENCES public.ordenes(id)
+);
+CREATE TABLE public.egresos (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  fecha date NOT NULL DEFAULT CURRENT_DATE,
+  categoria text NOT NULL,
+  descripcion text NOT NULL,
+  monto numeric NOT NULL CHECK (monto > 0::numeric),
+  metodo_pago text NOT NULL,
+  created_at timestamp with time zone DEFAULT timezone('utc'::text, now()),
+  banco character varying,
+  anulado boolean DEFAULT false,
+  motivo_anulacion text,
+  anulado_por_id bigint,
+  fecha_anulacion timestamp without time zone,
+  origen_modulo character varying DEFAULT 'MANUAL'::character varying,
+  referencia_id integer,
+  CONSTRAINT egresos_pkey PRIMARY KEY (id),
+  CONSTRAINT egresos_anulado_por_id_fkey FOREIGN KEY (anulado_por_id) REFERENCES public.usuarios(id)
+);
+CREATE TABLE public.categorias_egreso (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  nombre text NOT NULL UNIQUE,
+  created_at timestamp with time zone DEFAULT timezone('utc'::text, now()),
+  CONSTRAINT categorias_egreso_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.rh_empleados (
+  id integer NOT NULL DEFAULT nextval('rh_empleados_id_seq'::regclass),
+  biometrico_id integer UNIQUE,
+  nombre_completo character varying NOT NULL,
+  sueldo_base numeric DEFAULT 485.00,
+  activo boolean DEFAULT true,
+  CONSTRAINT rh_empleados_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.rh_asistencia (
+  id integer NOT NULL DEFAULT nextval('rh_asistencia_id_seq'::regclass),
+  empleado_id integer,
+  fecha date NOT NULL,
+  horas_trabajadas numeric DEFAULT 0.0,
+  horas_extras numeric DEFAULT 0.0,
+  horas_descuento numeric DEFAULT 0.0,
+  es_falta boolean DEFAULT false,
+  observaciones text,
+  CONSTRAINT rh_asistencia_pkey PRIMARY KEY (id),
+  CONSTRAINT rh_asistencia_empleado_id_fkey FOREIGN KEY (empleado_id) REFERENCES public.rh_empleados(id)
+);
+CREATE TABLE public.rh_liquidaciones (
+  id integer NOT NULL DEFAULT nextval('rh_liquidaciones_id_seq'::regclass),
+  empleado_id integer,
+  mes character varying NOT NULL,
+  total_pagado numeric NOT NULL,
+  enlazado_caja boolean DEFAULT false,
+  fecha_pago date DEFAULT CURRENT_DATE,
+  CONSTRAINT rh_liquidaciones_pkey PRIMARY KEY (id),
+  CONSTRAINT rh_liquidaciones_empleado_id_fkey FOREIGN KEY (empleado_id) REFERENCES public.rh_empleados(id)
+);
+CREATE TABLE public.fichas_costos (
+  id integer NOT NULL DEFAULT nextval('fichas_costos_id_seq'::regclass),
+  producto_id integer,
+  insumo_id integer,
+  cantidad_por_unidad numeric NOT NULL,
+  CONSTRAINT fichas_costos_pkey PRIMARY KEY (id),
+  CONSTRAINT fichas_costos_producto_id_fkey FOREIGN KEY (producto_id) REFERENCES public.productos_catalogo(id),
+  CONSTRAINT fichas_costos_insumo_id_fkey FOREIGN KEY (insumo_id) REFERENCES public.insumos(id)
+);
+CREATE TABLE public.apu_imagenes (
+  id integer NOT NULL DEFAULT nextval('apu_imagenes_id_seq'::regclass),
+  producto_id integer,
+  url_imagen text NOT NULL,
+  created_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT apu_imagenes_pkey PRIMARY KEY (id),
+  CONSTRAINT apu_imagenes_producto_id_fkey FOREIGN KEY (producto_id) REFERENCES public.productos_catalogo(id)
+);
+CREATE TABLE public.catalogo_estados (
+  id integer NOT NULL DEFAULT nextval('catalogo_estados_id_seq'::regclass),
+  nombre character varying NOT NULL UNIQUE,
+  orden_flujo integer,
+  CONSTRAINT catalogo_estados_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.historial_estados (
+  id integer NOT NULL DEFAULT nextval('historial_estados_id_seq'::regclass),
+  orden_id integer NOT NULL,
+  estado_anterior character varying,
+  estado_nuevo character varying NOT NULL,
+  cambiado_por integer,
+  fecha_cambio timestamp without time zone DEFAULT now(),
+  notas text,
+  CONSTRAINT historial_estados_pkey PRIMARY KEY (id),
+  CONSTRAINT historial_estados_orden_id_fkey FOREIGN KEY (orden_id) REFERENCES public.ordenes(id),
+  CONSTRAINT historial_estados_cambiado_por_fkey FOREIGN KEY (cambiado_por) REFERENCES public.usuarios(id)
+);
+CREATE TABLE public.catalogo_tipos_cliente (
+  id integer NOT NULL DEFAULT nextval('catalogo_tipos_cliente_id_seq'::regclass),
+  nombre character varying NOT NULL UNIQUE,
+  activo boolean DEFAULT true,
+  CONSTRAINT catalogo_tipos_cliente_pkey PRIMARY KEY (id)
+);

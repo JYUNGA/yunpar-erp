@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import time
 
+from modulos import auth
+
 def render(supabase):
     st.header("👥 Gestión de Usuarios del Sistema", divider="blue")
     
@@ -18,7 +20,10 @@ def render(supabase):
         st.info("💡 Para quitarle el acceso a alguien sin borrar su historial de trabajo, simplemente desmarca la casilla '¿Activo?' y guarda los cambios.")
         
         try:
-            res = supabase.table('usuarios').select("*").order('id').execute()
+            # No traemos password_hash para no exponer credenciales en la UI.
+            res = supabase.table('usuarios').select(
+                "id, nombre_completo, usuario, rol, activo"
+            ).order('id').execute()
             if res.data:
                 df_usuarios = pd.DataFrame(res.data)
                 
@@ -68,7 +73,7 @@ def render(supabase):
                         nuevo_user = {
                             "nombre_completo": n_nombre.strip(),
                             "usuario": n_usuario.strip().lower(),
-                            "password_hash": n_pass, 
+                            "password_hash": auth.hash_password(n_pass),
                             "rol": n_rol,
                             "activo": True
                         }
@@ -99,7 +104,9 @@ def render(supabase):
             if st.button("Actualizar Contraseña"):
                 if nueva_pass:
                     try:
-                        supabase.table('usuarios').update({"password_hash": nueva_pass}).eq('id', usuario_seleccionado).execute()
+                        supabase.table('usuarios').update(
+                            {"password_hash": auth.hash_password(nueva_pass)}
+                        ).eq('id', usuario_seleccionado).execute()
                         st.success(f"Contraseña de {opciones[usuario_seleccionado]} actualizada exitosamente.")
                     except Exception as e:
                         st.error(f"Error al actualizar: {e}")
@@ -114,10 +121,13 @@ def render(supabase):
             
             if st.button("🗑️ Eliminar Usuario Definitivamente", type="secondary"):
                 try:
-                    supabase.table('usuarios').delete().eq('id', usuario_seleccionado).execute()
-                    st.success("Usuario eliminado de la base de datos.")
+                    # Borrado lógico: desactivamos en vez de eliminar, preservando historial.
+                    supabase.table('usuarios').update({"activo": False}).eq(
+                        'id', usuario_seleccionado
+                    ).execute()
+                    st.success("Usuario desactivado. Ya no podrá iniciar sesión.")
                     time.sleep(1); st.rerun()
                 except Exception as e:
-                    st.error(f"No se pudo eliminar el usuario porque tiene registros asociados en el sistema. Error: {e}")
+                    st.error(f"No se pudo desactivar el usuario. Error: {e}")
         else:
             st.info("No hay usuarios para administrar.")

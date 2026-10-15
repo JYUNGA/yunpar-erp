@@ -297,65 +297,29 @@ def render(supabase):
             id_s = int(row_seleccionada["id"])
             cod_on = row_seleccionada["codigo_orden"]
 
+            confirmar_del = c_del.checkbox("¿Seguro?", key=f"confirm_del_{id_s}")
             if c_del.button(
-                f"🗑️ Eliminar Orden {cod_on}",
+                f"🗑️ Anular Orden {cod_on}",
                 type="secondary",
                 use_container_width=True,
+                disabled=not confirmar_del,
             ):
                 try:
-                    try:
-                        abono = float(row_seleccionada.get("abono_inicial", 0))
-                    except:
-                        abono = 0.0
+                    # Revertimos el ingreso contable anulando los pagos asociados.
+                    supabase.table("pagos").update(
+                        {"anulado": True, "motivo_anulacion": f"Orden {cod_on} anulada"}
+                    ).eq("orden_id", id_s).execute()
 
-                    if abono > 0:
-                        try:
-                            cliente_id_val = int(row_seleccionada["cliente_id"])
-                        except:
-                            cliente_id_val = None
+                    # Borrado lógico: preserva historial y no rompe claves foráneas.
+                    supabase.table("ordenes").update(
+                        {"estado": "ANULADO", "saldo_pendiente": 0}
+                    ).eq("id", id_s).execute()
 
-                        supabase.table("pagos").insert(
-                            {
-                                "orden_id": None,
-                                "cliente_id": cliente_id_val,
-                                "monto": -abono,
-                                "metodo_pago": "DEVOLUCION",
-                                "fecha_pago": str(datetime.date.today()),
-                                "numero_referencia": f"Devolución Orden Eliminada {cod_on}",
-                            }
-                        ).execute()
-
-                    supabase.table("pagos").update({"orden_id": None}).eq(
-                        "orden_id", id_s
-                    ).execute()
-
-                    borrar_img(supabase, row_seleccionada.get("url_boceto_vendedora"))
-                    borrar_img(supabase, row_seleccionada.get("url_arte_final"))
-
-                    items_actuales = (
-                        supabase.table("items_orden")
-                        .select("id")
-                        .eq("orden_id", id_s)
-                        .execute()
-                        .data
-                    )
-                    ids_items = [item["id"] for item in items_actuales]
-
-                    if ids_items:
-                        supabase.table("especificaciones_producto").delete().in_(
-                            "item_orden_id", ids_items
-                        ).execute()
-
-                    supabase.table("items_orden").delete().eq(
-                        "orden_id", id_s
-                    ).execute()
-                    supabase.table("ordenes").delete().eq("id", id_s).execute()
-
-                    st.success(f"Orden {cod_on} eliminada correctamente.")
+                    st.success(f"Orden {cod_on} anulada correctamente.")
                     time.sleep(1.5)
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Error crítico al eliminar: {e}")
+                    st.error(f"Error crítico al anular: {e}")
 
             if c_edit.button(
                 f"📝 Editar Orden {cod_on}", type="primary", use_container_width=True
@@ -997,13 +961,18 @@ def render(supabase):
                     )
                     st.session_state[f'p_man_val_{prod_obj["id"]}'] = prec
 
-                # 4. PIN
+                # 4. PIN de autorización (valor centralizado en secrets, no hardcodeado)
                 auto = True
                 if es_manual:
                     pin = c3.text_input(
                         "PIN Autorización", type="password", key=f"pin_{prod_obj['id']}"
                     )
-                    if pin == "1234":
+                    pin_ok = False
+                    try:
+                        pin_ok = bool(pin) and pin == st.secrets["admin"]["pin_gerencia"]
+                    except Exception:
+                        pin_ok = False
+                    if pin_ok:
                         c3.success("OK")
                         auto = True
                     else:

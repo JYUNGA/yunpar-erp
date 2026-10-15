@@ -2,6 +2,161 @@ import streamlit as st
 import pandas as pd
 import datetime
 import time
+import io
+from fpdf import FPDF
+
+
+# Pesos por tipo de prenda para COSTURA (1 = prenda simple). Ajustables desde la UI.
+# El cortador cuenta 1 por cada prenda; las costureras usan estos pesos.
+PESOS_POR_PRENDA = {
+    "CAMISETA": 1.0,
+    "POLO": 1.0,
+    "BVD": 0.8,
+    "CHOMPA": 2.5,
+    "PANTALONETA": 1.0,
+    "FALDA SHORT": 1.0,
+    "FALDA": 1.2,
+    "PANTALÓN CALENTADOR": 1.5,
+    "PRENDA/GENÉRICO": 1.0,
+}
+
+TIPOS_PRENDA = list(PESOS_POR_PRENDA.keys())
+
+
+def _limpiar_texto_pdf(texto):
+    """Reemplaza caracteres Unicode que FPDF (latin-1) no soporta."""
+    if not texto:
+        return ""
+    t = str(texto)
+    reemplazos = {
+        "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
+        "\u2013": "-", "\u2014": "-", "\u2026": "...", "\u2022": "-",
+    }
+    for a, b in reemplazos.items():
+        t = t.replace(a, b)
+    return t.encode("latin-1", "ignore").decode("latin-1")
+
+
+class PDFInformeTaller(FPDF):
+    def __init__(self, titulo):
+        super().__init__()
+        self.titulo = titulo
+
+    def header(self):
+        try:
+            self.image("Logo_Yunpar.png", x=10, y=8, w=50)
+        except Exception:
+            pass
+        self.set_y(20)
+        self.set_font("helvetica", "B", 16)
+        self.set_text_color(0, 51, 153)
+        self.cell(0, 10, _limpiar_texto_pdf(self.titulo), align="R", new_x="LMARGIN", new_y="NEXT")
+        self.set_text_color(0, 0, 0)
+        self.set_draw_color(200, 200, 200)
+        self.line(10, self.get_y() + 2, 200, self.get_y() + 2)
+        self.ln(6)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("helvetica", "I", 8)
+        self.set_text_color(100, 100, 100)
+        self.cell(
+            0,
+            10,
+            f"Documento Interno de Taller  |  Página {self.page_no()}/{{nb}}",
+            align="C",
+        )
+        self.set_text_color(0, 0, 0)
+
+
+def generar_informe_taller(ordenes_seleccionadas, pesos, tipo):
+    """Genera un PDF de informe de taller. tipo = 'CORTE' o 'COSTURA'."""
+    es_corte = tipo == "CORTE"
+    titulo = "INFORME DE CORTE" if es_corte else "INFORME DE CONFECCIÓN (COSTURA)"
+    pdf = PDFInformeTaller(titulo)
+    pdf.add_page()
+
+    hoy = datetime.date.today().strftime("%d/%m/%Y")
+    pdf.set_font("helvetica", "", 10)
+    pdf.cell(0, 6, _limpiar_texto_pdf(f"Fecha: {hoy}"), new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    # --- Tabla por orden ---
+    a_orden, a_cliente, a_cant = 70, 90, 30
+    pdf.set_font("helvetica", "B", 10)
+    pdf.cell(a_orden, 8, "Orden", border=1)
+    pdf.cell(a_cliente, 8, "Cliente", border=1)
+    pdf.cell(a_cant, 8, "Prendas" if es_corte else "Puntos", border=1, align="R")
+    pdf.ln(8)
+
+    pdf.set_font("helvetica", "", 10)
+    total_general = 0.0
+    for o in ordenes_seleccionadas:
+        desglose = o.get("desglose", {})
+        if es_corte:
+            valor = int(sum(desglose.values()))
+        else:
+            valor = sum(cant * float(pesos.get(tp, 1.0)) for tp, cant in desglose.items())
+        total_general += valor
+        pdf.cell(a_orden, 7, _limpiar_texto_pdf(o.get("orden", "")), border=1)
+        pdf.cell(a_cliente, 7, _limpiar_texto_pdf(o.get("cliente", "")), border=1)
+        pdf.cell(
+            a_cant,
+            7,
+            str(int(valor)) if es_corte else f"{valor:,.1f}",
+            border=1,
+            align="R",
+        )
+        pdf.ln(7)
+
+    pdf.set_font("helvetica", "B", 11)
+    pdf.cell(a_orden + a_cliente, 8, "TOTAL", border=1, align="R")
+    pdf.cell(
+        a_cant,
+        8,
+        str(int(total_general)) if es_corte else f"{total_general:,.1f}",
+        border=1,
+        align="R",
+    )
+    pdf.ln(8)
+    pdf.ln(5)
+
+    # --- Resumen por tipo de prenda ---
+    desglose_acum = {}
+    for o in ordenes_seleccionadas:
+        for tp, cant in o.get("desglose", {}).items():
+            desglose_acum[tp] = desglose_acum.get(tp, 0) + cant
+
+    pdf.set_font("helvetica", "B", 11)
+    pdf.cell(0, 8, "Resumen por tipo de prenda", new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_font("helvetica", "B", 10)
+    if es_corte:
+        pdf.cell(120, 8, "Tipo de prenda", border=1)
+        pdf.cell(70, 8, "Cantidad (cada una = 1)", border=1, align="R")
+        pdf.ln(8)
+    else:
+        pdf.cell(80, 8, "Tipo de prenda", border=1)
+        pdf.cell(40, 8, "Cantidad", border=1, align="R")
+        pdf.cell(40, 8, "Peso", border=1, align="R")
+        pdf.cell(30, 8, "Subtotal", border=1, align="R")
+        pdf.ln(8)
+
+    pdf.set_font("helvetica", "", 10)
+    for tp, cant in sorted(desglose_acum.items(), key=lambda x: -x[1]):
+        if es_corte:
+            pdf.cell(120, 7, _limpiar_texto_pdf(tp), border=1)
+            pdf.cell(70, 7, str(int(cant)), border=1, align="R")
+        else:
+            peso = float(pesos.get(tp, 1.0))
+            subtotal = cant * peso
+            pdf.cell(80, 7, _limpiar_texto_pdf(tp), border=1)
+            pdf.cell(40, 7, str(int(cant)), border=1, align="R")
+            pdf.cell(40, 7, f"{peso:.1f}", border=1, align="R")
+            pdf.cell(30, 7, f"{subtotal:,.1f}", border=1, align="R")
+        pdf.ln(7)
+
+    return bytes(pdf.output())
 
 
 def render(supabase):
@@ -205,16 +360,115 @@ def render(supabase):
                 use_container_width=True,
                 disabled=not listo_para_asignar,
             ):
-                try:
-                    with st.spinner("Registrando en historial de producción..."):
-                        # Aquí ejecutarás el INSERT a la tabla de trazabilidad
-                        time.sleep(1)
+                if not listo_para_asignar:
+                    st.warning(
+                        "Selecciona órdenes arriba y asigna al menos un cortador o costurera."
+                    )
+                else:
+                    try:
+                        with st.spinner("Registrando asignación en el taller..."):
+                            ids_seleccionados = [
+                                int(x) for x in df_seleccionado["ID_Oculto"].tolist()
+                            ]
+                            cortador_id = mapa_cortadores.get(cortador_sel)
+                            costurera_id = mapa_costureras.get(costurera_sel)
+                            usuario_actual = st.session_state.get("id_usuario")
+                            ahora = datetime.datetime.now().isoformat()
+
+                            registros = []
+                            for oid in ids_seleccionados:
+                                prendas = sum(
+                                    memoria_desglose.get(oid, {}).values()
+                                )
+                                registros.append(
+                                    {
+                                        "orden_id": oid,
+                                        "cortador_id": cortador_id,
+                                        "costurera_id": costurera_id,
+                                        "asignado_por": usuario_actual,
+                                        "prendas": int(prendas),
+                                        "created_at": ahora,
+                                    }
+                                )
+
+                            # Persistencia real en la tabla de trazabilidad del taller.
+                            supabase.table("asignaciones_taller").insert(
+                                registros
+                            ).execute()
+
                         st.success(
-                            f"¡Lote de {total_absoluto} prendas asignado exitosamente!"
+                            f"¡{len(ids_seleccionados)} órdenes ({total_absoluto:.0f} prendas) "
+                            "asignadas correctamente!"
                         )
-                        time.sleep(1.5)
                         st.rerun()
-                except Exception as e:
-                    st.error(f"Error al asignar: {e}")
+                    except Exception as e:
+                        st.error(
+                            f"Error al asignar: {e}. Asegúrate de que exista la tabla "
+                            "'asignaciones_taller' (ejecuta migracion_fase1.sql)."
+                        )
+
+        # --- INFORMES DE TALLER (PDF por separado: corte y costura) ---
+        st.divider()
+        st.markdown("### 📄 Informes de Taller (PDF)")
+
+        with st.expander("⚖️ Pesos de confección (para costureras)", expanded=False):
+            st.caption(
+                "El cortador cuenta 1 por cada prenda. Para costura, cada tipo de prenda "
+                "tiene un peso según su dificultad y tiempo. Ajusta los valores según tu realidad."
+            )
+            pesos_edit = {}
+            cols_p = st.columns(3)
+            for i, tipo in enumerate(TIPOS_PRENDA):
+                pesos_edit[tipo] = cols_p[i % 3].number_input(
+                    tipo,
+                    min_value=0.0,
+                    value=PESOS_POR_PRENDA.get(tipo, 1.0),
+                    step=0.1,
+                    format="%.1f",
+                    key=f"peso_taller_{tipo}",
+                )
+
+        if total_absoluto > 0:
+            if st.button(
+                "📄 Generar Informes (Corte y Costura)",
+                type="primary",
+                use_container_width=True,
+            ):
+                detalle_seleccion = []
+                for _, fila in df_seleccionado.iterrows():
+                    oid = int(fila["ID_Oculto"])
+                    detalle_seleccion.append(
+                        {
+                            "orden": fila["Orden"],
+                            "cliente": fila["Cliente"],
+                            "desglose": memoria_desglose.get(oid, {}),
+                        }
+                    )
+
+                pdf_corte = generar_informe_taller(
+                    detalle_seleccion, pesos_edit, "CORTE"
+                )
+                pdf_costura = generar_informe_taller(
+                    detalle_seleccion, pesos_edit, "COSTURA"
+                )
+
+                col_d1, col_d2 = st.columns(2)
+                col_d1.download_button(
+                    "⬇️ Informe de Corte (PDF)",
+                    pdf_corte,
+                    file_name=f"informe_corte_{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+                col_d2.download_button(
+                    "⬇️ Informe de Costura (PDF)",
+                    pdf_costura,
+                    file_name=f"informe_costura_{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+        else:
+            st.caption("Selecciona órdenes arriba para poder generar los informes.")
+
     else:
         st.info("No hay órdenes pendientes de confección en este momento.")

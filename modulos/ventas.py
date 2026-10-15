@@ -482,7 +482,8 @@ def render(supabase):
                     )
 
                     txt_p = st.text_input(
-                        "Buscar texto...", placeholder="Cód o Nombre de producto"
+                        "🔎 Buscar producto",
+                        placeholder="Escribe código o nombre del producto",
                     )
 
                     df_fin = df_p.copy()
@@ -493,21 +494,31 @@ def render(supabase):
                     if eda != "Todos":
                         df_fin = df_fin[df_fin["grupo_edad_limpio"] == eda]
                     if txt_p:
+                        texto_busqueda = txt_p.strip()
                         df_fin = df_fin[
-                            df_fin["descripcion"].str.contains(txt_p, case=False)
-                            | df_fin["codigo_referencia"].str.contains(
-                                txt_p, case=False
-                            )
+                            df_fin["descripcion"]
+                            .fillna("")
+                            .astype(str)
+                            .str.contains(texto_busqueda, case=False, na=False)
+                            | df_fin["codigo_referencia"]
+                            .fillna("")
+                            .astype(str)
+                            .str.contains(texto_busqueda, case=False, na=False)
                         ]
 
                     mapa_p = {
                         f"{r['codigo_referencia']} | {r['descripcion']}": r
                         for r in df_fin.to_dict("records")
                     }
-                    sel_p_key = st.selectbox(
-                        "Seleccione el producto:", list(mapa_p.keys())
+                    opciones_productos = ["Seleccione un producto..."] + list(
+                        mapa_p.keys()
                     )
-                    prod_obj = mapa_p.get(sel_p_key, None)
+                    sel_p_key = st.selectbox("Producto", opciones_productos)
+                    prod_obj = (
+                        mapa_p.get(sel_p_key)
+                        if sel_p_key != "Seleccione un producto..."
+                        else None
+                    )
                 else:
                     st.warning(
                         "⚠️ No se encontraron productos clasificados estrictamente para VENTA en la Base de Datos."
@@ -817,21 +828,85 @@ def render(supabase):
                     total_venta += item["subtotal"]
                     unidad = "m" if item["es_impresion"] else "u"
 
-                    col_det, col_btn = st.columns([5, 1])
-                    col_det.markdown(
-                        f"**{item['descripcion']}**\n{item['cantidad']} {unidad} x ${item['precio']:.2f} = **${item['subtotal']:.2f}**"
-                    )
-                    if col_btn.button("❌", key=f"del_{i}"):
-                        st.session_state["carrito_vd"].pop(i)
-                        st.rerun()
-
-                    if item["archivos"]:
-                        st.caption(
-                            f"📎 {len(item['archivos'])} archivos listos para plotter."
+                    with st.container(border=True):
+                        col_prod, col_cant, col_precio, col_subtotal_item, col_btn = (
+                            st.columns([3.2, 1.2, 1.4, 1.5, 0.6])
                         )
-                    st.divider()
+
+                        with col_prod:
+                            st.markdown(f"**{item['descripcion']}**")
+                            if item["es_impresion"]:
+                                st.caption("🖨️ Servicio de impresión")
+                            else:
+                                st.caption("📦 Producto")
+
+                        with col_cant:
+                            st.caption("Cantidad")
+                            cantidad_item = float(item["cantidad"])
+                            if cantidad_item.is_integer():
+                                st.write(f"{int(cantidad_item)} {unidad}")
+                            else:
+                                st.write(f"{cantidad_item:.2f} {unidad}")
+
+                        with col_precio:
+                            st.caption("P. Unitario")
+                            st.write(f"USD {item['precio']:.2f}")
+
+                        with col_subtotal_item:
+                            st.caption("Subtotal")
+                            st.markdown(f"**USD {item['subtotal']:.2f}**")
+
+                        with col_btn:
+                            st.write("")
+                            if st.button(
+                                "Quitar",
+                                key=f"del_{i}",
+                                help="Quitar este producto del carrito",
+                                type="primary",
+                                use_container_width=True,
+                            ):
+                                st.session_state["carrito_vd"].pop(i)
+                                st.rerun()
+
+                        if item["archivos"]:
+                            st.caption(
+                                f"📎 {len(item['archivos'])} archivo(s) preparados para impresión"
+                            )
 
                 st.metric("Total a Pagar", f"${total_venta:.2f}")
+
+                # ======================================
+                # TRATAMIENTO DEL IVA (aporte de Andrés)
+                # ======================================
+                st.markdown("#### 🧾 Tratamiento del IVA")
+                modalidad_iva = st.radio(
+                    "¿Cómo se manejará el IVA en esta venta?",
+                    ["Precio final ya incluye IVA", "Agregar IVA al precio"],
+                    horizontal=False,
+                    key="vd_modalidad_iva",
+                )
+
+                if modalidad_iva == "Precio final ya incluye IVA":
+                    total_final = total_venta
+                    subtotal_sin_iva = (
+                        total_final / 1.15 if total_final > 0 else 0.0
+                    )
+                    iva_venta = total_final - subtotal_sin_iva
+                else:
+                    subtotal_sin_iva = total_venta
+                    iva_venta = subtotal_sin_iva * 0.15
+                    total_final = subtotal_sin_iva + iva_venta
+
+                col_subtotal, col_iva, col_total = st.columns(3)
+                col_subtotal.metric("Subtotal", f"${subtotal_sin_iva:.2f}")
+                col_iva.metric("IVA (15%)", f"${iva_venta:.2f}")
+                col_total.metric("TOTAL", f"${total_final:.2f}")
+
+                modalidad_iva_bd = (
+                    "INCLUIDO"
+                    if modalidad_iva == "Precio final ya incluye IVA"
+                    else "AGREGADO"
+                )
 
                 with st.container(border=True):
                     st.markdown("💰 **Finanzas**")
@@ -852,13 +927,13 @@ def render(supabase):
                             "Abono Parcial",
                             "Crédito / Sin Abono ($0)",
                         ],
-                        horizontal=True,
+                        horizontal=False,
                     )
 
                     if modalidad_pago == "Pago Total (100%)":
                         abono = st.number_input(
                             "Monto Recibido ($)",
-                            value=float(total_venta),
+                            value=float(total_final),
                             disabled=True,
                         )
                     elif modalidad_pago == "Crédito / Sin Abono ($0)":
@@ -870,7 +945,7 @@ def render(supabase):
                             "Monto Recibido ($)",
                             value=0.0,
                             min_value=0.0,
-                            max_value=float(total_venta),
+                            max_value=float(total_final),
                             step=1.0,
                         )
 
@@ -928,14 +1003,23 @@ def render(supabase):
                                 data_orden = {
                                     "codigo_orden": codigo_vd,
                                     "cliente_id": cliente_id,
-                                    "total_estimado": total_venta,
-                                    "abono_inicial": abono,
-                                    "saldo_pendiente": total_venta - abono,
+                                    "total_estimado": round(float(total_final), 2),
+                                    "subtotal_sin_iva": round(
+                                        float(subtotal_sin_iva), 2
+                                    ),
+                                    "valor_iva": round(float(iva_venta), 2),
+                                    "porcentaje_iva": 15.00,
+                                    "modalidad_iva": modalidad_iva_bd,
+                                    "abono_inicial": round(float(abono), 2),
+                                    "saldo_pendiente": round(
+                                        max(float(total_final) - float(abono), 0.0),
+                                        2,
+                                    ),
                                     "estado": estado_orden,
                                     "fecha_entrega": fecha_entrega_seleccionada.isoformat(),
                                     "created_at": f"{fecha_venta_seleccionada.isoformat()}T12:00:00",
                                     "creado_por_id": id_creador,
-                                    "notas_facturacion": notas_facturacion,  # <-- NUEVO CAMPO
+                                    "notas_facturacion": notas_facturacion,
                                 }
                                 res_orden = (
                                     supabase.table("ordenes")
@@ -1007,6 +1091,9 @@ def render(supabase):
                                             "banco_destino": banco,
                                             # --- CAMBIO: Fecha de pago igual a la fecha de registro ---
                                             "fecha_pago": fecha_venta_seleccionada.isoformat(),
+                                            "registrado_por_id": st.session_state.get(
+                                                "id_usuario"
+                                            ),
                                         }
                                     ).execute()
 
@@ -1194,32 +1281,34 @@ def render(supabase):
                                 )
 
                                 st.write("")
-                                # BOTÓN DE BORRADO ABSOLUTO: Elimina en cascada manual respetando las claves foráneas
+                                # ANULACIÓN (borrado lógico): preserva el historial contable.
+                                confirmar_anular = st.checkbox(
+                                    "Marcar para confirmar la anulación de esta venta",
+                                    key=f"confirm_vd_{cod_sel}",
+                                )
                                 if st.button(
-                                    f"🗑️ Eliminar Venta {cod_sel}",
+                                    f"🗑️ Anular Venta {cod_sel}",
                                     type="secondary",
                                     use_container_width=True,
+                                    disabled=not confirmar_anular,
                                 ):
                                     try:
                                         id_v = datos_venta.get("id")
                                         if id_v:
-                                            # Eliminamos de pagos para restar de los ingresos contables reales
-                                            supabase.table("pagos").delete().eq(
-                                                "orden_id", id_v
-                                            ).execute()
-                                            supabase.table(
-                                                "archivos_impresion"
-                                            ).delete().eq("orden_id", id_v).execute()
-                                            supabase.table("items_orden").delete().eq(
-                                                "orden_id", id_v
-                                            ).execute()
-                                            supabase.table("ordenes").delete().eq(
-                                                "id", id_v
-                                            ).execute()
+                                            # Revertimos el ingreso anulando los pagos asociados.
+                                            supabase.table("pagos").update(
+                                                {
+                                                    "anulado": True,
+                                                    "motivo_anulacion": f"Venta {cod_sel} anulada",
+                                                }
+                                            ).eq("orden_id", id_v).execute()
 
-                                            st.success(
-                                                f"Venta {cod_sel} eliminada correctamente de finanzas y caja."
-                                            )
+                                            # Borrado lógico de la orden (no se borran ítems ni archivos).
+                                            supabase.table("ordenes").update(
+                                                {"estado": "ANULADO", "saldo_pendiente": 0}
+                                            ).eq("id", id_v).execute()
+
+                                            st.success(f"Venta {cod_sel} anulada correctamente.")
                                             time.sleep(1.5)
                                             st.rerun()
                                         else:
@@ -1228,7 +1317,7 @@ def render(supabase):
                                             )
                                     except Exception as e:
                                         st.error(
-                                            f"Error crítico al eliminar venta: {e}"
+                                            f"Error crítico al anular venta: {e}"
                                         )
                 else:
                     st.info(

@@ -273,8 +273,15 @@ def render(supabase):
             f"Se marcarán **{len(df_join)}** pares de polines como 'Comprados' en la base de datos."
         )
 
+        confirmar_compra = st.checkbox(
+            "Confirmo que deseo marcar estos polines como comprados",
+            key="confirm_polines_compra",
+        )
         if st.button(
-            "✅ Registrar Compra Realizada", type="primary", use_container_width=True
+            "✅ Registrar Compra Realizada",
+            type="primary",
+            use_container_width=True,
+            disabled=not confirmar_compra,
         ):
             try:
                 with st.spinner("Actualizando base de datos..."):

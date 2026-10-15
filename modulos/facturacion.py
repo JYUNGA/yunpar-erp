@@ -209,35 +209,27 @@ def render(supabase):
                                     st.warning(f"📝 **Instrucciones:**\n{notas_fac}")
 
                                 cli = datos_agrupados["clientes"]
-                                st.write("Razón Social / Nombre:")
-                                st.code(
+                                st.write("**Razón Social / Nombre:**")
+                                st.write(
                                     cli.get(
                                         "nombre_completo",
                                         cli.get("nombre", "Consumidor Final"),
-                                    ),
-                                    language=None,
+                                    )
                                 )
-                                st.write("RUC / CI:")
-                                st.code(
-                                    cli.get("cedula_ruc", "9999999999999"),
-                                    language=None,
+                                st.write("**RUC / CI:**")
+                                st.write(cli.get("cedula_ruc", "9999999999999"))
+                                st.write("**Correo:**")
+                                st.write(
+                                    cli.get("email", cli.get("correo", "Sin correo"))
                                 )
-                                st.write("Correo:")
-                                st.code(
-                                    cli.get("email", cli.get("correo", "Sin correo")),
-                                    language=None,
-                                )
-                                st.write("Teléfono:")
-                                st.code(
+                                st.write("**Teléfono:**")
+                                st.write(
                                     cli.get(
                                         "telefono", cli.get("celular", "Sin teléfono")
-                                    ),
-                                    language=None,
+                                    )
                                 )
-                                st.write("Dirección:")
-                                st.code(
-                                    cli.get("ciudad", "Sin dirección"), language=None
-                                )
+                                st.write("**Dirección:**")
+                                st.write(cli.get("ciudad", "Sin dirección"))
 
                             with col_prod:
                                 st.markdown("#### 🛒 Resumen Consolidado")
@@ -473,6 +465,9 @@ def render(supabase):
                                                             ),
                                                             "fecha_pago": str(
                                                                 r["Fecha"]
+                                                            ),
+                                                            "registrado_por_id": st.session_state.get(
+                                                                "id_usuario"
                                                             ),
                                                         }
                                                     )

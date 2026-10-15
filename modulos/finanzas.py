@@ -23,6 +23,7 @@ def render(supabase):
             "📊 Flujo de Caja",
             "⏳ Cuentas por Cobrar",
             "📤 Registrar Gasto",
+            "🧵 Gastos Consumibles",
             "📖 Libro Diario",
         ]
     else:
@@ -303,6 +304,18 @@ def render(supabase):
                             "Nº Compr. / Ref.", placeholder="Ej: 0012345"
                         )
 
+                        # Notas de facturación SRI (mismo campo que Producción y Ventas)
+                        notas_fact = st.text_area(
+                            "🧾 Notas de Facturación (SRI)",
+                            placeholder="Ej: Facturar a la empresa X, no al consumidor final.",
+                        )
+
+                        # Separación visual para evitar pulsar el botón por error al abrir los desplegables
+                        st.write("")
+                        confirmar = st.checkbox(
+                            "✅ Confirmo que el monto y el método de pago son correctos"
+                        )
+
                         submit_pago = st.form_submit_button(
                             "💾 Confirmar Pago",
                             type="primary",
@@ -310,7 +323,11 @@ def render(supabase):
                         )
 
                         if submit_pago:
-                            if (
+                            if not confirmar:
+                                st.warning(
+                                    "⚠️ Marca la casilla de confirmación antes de registrar el pago."
+                                )
+                            elif (
                                 metodo_pago == "Transferencia"
                                 and banco_destino == "Seleccionar..."
                             ):
@@ -327,6 +344,9 @@ def render(supabase):
                                         "monto": monto_a_pagar,
                                         "metodo_pago": metodo_pago,
                                         "fecha_pago": hoy.isoformat(),
+                                        "registrado_por_id": st.session_state.get(
+                                            "id_usuario"
+                                        ),
                                     }
                                     if banco_destino != "Seleccionar...":
                                         data_pago["banco_destino"] = banco_destino
@@ -379,6 +399,11 @@ def render(supabase):
                                     )  # Previene saldos negativos visuales
 
                                     update_data = {"saldo_pendiente": saldo_guardar}
+
+                                    if notas_fact.strip():
+                                        update_data["notas_facturacion"] = (
+                                            notas_fact.strip()
+                                        )
 
                                     if saldo_guardar <= 0:
                                         # (Opcional) Si importaste OrderState de config.py, usa las variables estáticas aquí
@@ -444,12 +469,20 @@ def render(supabase):
                         ["Seleccionar...", "JEP", "Pichincha", "Pacifico", "Austro"],
                     )
 
+                    confirmar_gasto = st.checkbox(
+                        "✅ Confirmo que la categoría, descripción y monto son correctos"
+                    )
+
                     submit_gasto = st.form_submit_button(
                         "📤 Guardar Egreso", type="primary", use_container_width=True
                     )
 
                     if submit_gasto:
-                        if not descripcion_gasto.strip():
+                        if not confirmar_gasto:
+                            st.warning(
+                                "⚠️ Marca la casilla de confirmación antes de guardar el egreso."
+                            )
+                        elif not descripcion_gasto.strip():
                             st.warning("⚠️ Por favor, ingresa una descripción.")
                         elif (
                             metodo_gasto == "Transferencia"
@@ -463,9 +496,14 @@ def render(supabase):
                                 data_egreso = {
                                     "fecha": fecha_gasto.isoformat(),
                                     "categoria": categoria_gasto,
-                                    "descripcion": descripcion_gasto,
+                                    "descripcion": descripcion_gasto.strip(),
                                     "monto": monto_gasto,
                                     "metodo_pago": metodo_gasto,
+                                    "origen_modulo": (
+                                        "INSUMOS"
+                                        if "INSUM" in str(categoria_gasto).upper()
+                                        else "MANUAL"
+                                    ),
                                 }
                                 if banco_origen != "Seleccionar...":
                                     data_egreso["banco"] = banco_origen
@@ -500,7 +538,7 @@ def render(supabase):
                 try:
                     res_ultimos = (
                         supabase.table("egresos")
-                        .select("fecha, descripcion, monto")
+                        .select("fecha, categoria, descripcion, monto, origen_modulo")
                         .order("created_at", desc=True)
                         .limit(10)
                         .execute()
@@ -514,16 +552,278 @@ def render(supabase):
                             hide_index=True,
                             column_config={
                                 "fecha": "Fecha",
+                                "categoria": "Categoría",
                                 "descripcion": "Descripción",
                                 "monto": st.column_config.NumberColumn(
                                     "Monto", format="$ %.2f"
                                 ),
+                                "origen_modulo": "Origen",
                             },
                         )
                     else:
                         st.info("No hay egresos recientes.")
                 except Exception as e:
                     st.caption("Error al cargar el historial.")
+
+    # ==========================================
+    # TAB 3.5: GASTOS DE CONSUMIBLES (Solo Gerente)
+    # ==========================================
+    if "🧵 Gastos Consumibles" in mis_tabs:
+        with mis_tabs["🧵 Gastos Consumibles"]:
+            st.subheader("Resumen de Gastos de Consumibles")
+            st.caption(
+                "Los consumibles registrados se identifican mediante origen INSUMOS. "
+                "Los registros históricos manuales se muestran aparte."
+            )
+
+            col_cf1, col_cf2 = st.columns(2)
+            f_ini_consumibles = col_cf1.date_input(
+                "🗓️ Desde", value=primer_dia_mes, key="consumibles_desde"
+            )
+            f_fin_consumibles = col_cf2.date_input(
+                "🗓️ Hasta", value=hoy, key="consumibles_hasta"
+            )
+
+            if f_ini_consumibles > f_fin_consumibles:
+                st.warning(
+                    "⚠️ La fecha inicial no puede ser mayor que la fecha final."
+                )
+            else:
+                try:
+                    res_consumibles = (
+                        supabase.table("egresos")
+                        .select(
+                            "fecha, categoria, descripcion, monto, "
+                            "metodo_pago, banco, origen_modulo"
+                        )
+                        .gte("fecha", f_ini_consumibles.isoformat())
+                        .lte("fecha", f_fin_consumibles.isoformat())
+                        .eq("anulado", False)
+                        .execute()
+                    )
+
+                    if res_consumibles.data:
+                        df_todos = pd.DataFrame(res_consumibles.data)
+                        df_todos["monto"] = df_todos["monto"].astype(float)
+
+                        categoria_txt = (
+                            df_todos["categoria"].fillna("").astype(str).str.upper()
+                        )
+                        origen_txt = (
+                            df_todos["origen_modulo"]
+                            .fillna("")
+                            .astype(str)
+                            .str.upper()
+                        )
+
+                        mascara_confirmados = origen_txt.eq("INSUMOS")
+                        mascara_historicos = (
+                            categoria_txt.str.contains("INSUM", na=False)
+                            & ~mascara_confirmados
+                        )
+
+                        df_confirmados = df_todos[mascara_confirmados].copy()
+                        df_historicos = df_todos[mascara_historicos].copy()
+
+                        col_bus_cons, col_met_cons = st.columns([2, 1])
+                        buscar_consumible = col_bus_cons.text_input(
+                            "🔍 Buscar en descripción",
+                            placeholder="Ej: hilo, tela, nylon...",
+                            key="buscar_consumible",
+                        )
+
+                        metodos_base = pd.concat(
+                            [
+                                df_confirmados["metodo_pago"]
+                                if not df_confirmados.empty
+                                else pd.Series(dtype="object"),
+                                df_historicos["metodo_pago"]
+                                if not df_historicos.empty
+                                else pd.Series(dtype="object"),
+                            ],
+                            ignore_index=True,
+                        )
+                        metodos_disponibles = sorted(
+                            [str(x) for x in metodos_base.dropna().unique()]
+                        )
+                        metodo_consumible = col_met_cons.selectbox(
+                            "Medio de pago",
+                            ["Todos"] + metodos_disponibles,
+                            key="metodo_consumible",
+                        )
+
+                        def aplicar_filtros_consumibles(df):
+                            df_filtrado = df.copy()
+                            if not df_filtrado.empty and buscar_consumible.strip():
+                                df_filtrado = df_filtrado[
+                                    df_filtrado["descripcion"]
+                                    .fillna("")
+                                    .astype(str)
+                                    .str.contains(
+                                        buscar_consumible.strip(),
+                                        case=False,
+                                        na=False,
+                                    )
+                                ]
+                            if not df_filtrado.empty and metodo_consumible != "Todos":
+                                df_filtrado = df_filtrado[
+                                    df_filtrado["metodo_pago"] == metodo_consumible
+                                ]
+                            return df_filtrado
+
+                        df_confirmados_f = aplicar_filtros_consumibles(df_confirmados)
+                        df_historicos_f = aplicar_filtros_consumibles(df_historicos)
+
+                        total_confirmado = (
+                            float(df_confirmados_f["monto"].sum())
+                            if not df_confirmados_f.empty
+                            else 0.0
+                        )
+                        registros_confirmados = len(df_confirmados_f)
+                        promedio_confirmado = (
+                            total_confirmado / registros_confirmados
+                            if registros_confirmados > 0
+                            else 0.0
+                        )
+
+                        col_c1, col_c2, col_c3 = st.columns(3)
+                        col_c1.metric(
+                            "🧵 Consumibles Confirmados", f"${total_confirmado:,.2f}"
+                        )
+                        col_c2.metric(
+                            "🧾 Registros Confirmados", f"{registros_confirmados}"
+                        )
+                        col_c3.metric(
+                            "📊 Gasto Promedio", f"${promedio_confirmado:,.2f}"
+                        )
+
+                        if not df_confirmados_f.empty:
+                            st.divider()
+                            st.markdown("#### ✅ Consumibles registrados correctamente")
+                            df_detalle_confirmados = (
+                                df_confirmados_f[
+                                    [
+                                        "fecha",
+                                        "categoria",
+                                        "descripcion",
+                                        "monto",
+                                        "metodo_pago",
+                                        "banco",
+                                    ]
+                                ]
+                                .sort_values("fecha", ascending=False)
+                                .rename(
+                                    columns={
+                                        "fecha": "Fecha",
+                                        "categoria": "Categoría",
+                                        "descripcion": "Descripción",
+                                        "monto": "Monto",
+                                        "metodo_pago": "Medio",
+                                        "banco": "Banco",
+                                    }
+                                )
+                            )
+                            st.dataframe(
+                                df_detalle_confirmados,
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "Monto": st.column_config.NumberColumn(
+                                        "Monto", format="$ %.2f"
+                                    )
+                                },
+                            )
+
+                            st.markdown("#### 📈 Principales gastos confirmados")
+                            resumen_descripcion = (
+                                df_confirmados_f.assign(
+                                    descripcion=df_confirmados_f["descripcion"]
+                                    .fillna("Sin descripción")
+                                    .astype(str)
+                                )
+                                .groupby("descripcion", as_index=False)["monto"]
+                                .sum()
+                                .sort_values("monto", ascending=False)
+                                .head(10)
+                            )
+                            if not resumen_descripcion.empty:
+                                fig_consumibles = px.bar(
+                                    resumen_descripcion,
+                                    x="descripcion",
+                                    y="monto",
+                                    text_auto=".2f",
+                                    labels={
+                                        "descripcion": "Consumible / Descripción",
+                                        "monto": "Gasto ($)",
+                                    },
+                                    title="Top 10 gastos de consumibles",
+                                )
+                                fig_consumibles.update_layout(showlegend=False)
+                                st.plotly_chart(
+                                    fig_consumibles, use_container_width=True
+                                )
+                        else:
+                            st.info(
+                                "Todavía no hay consumibles confirmados registrados "
+                                "mediante el nuevo flujo."
+                            )
+
+                        if not df_historicos_f.empty:
+                            total_historico = float(df_historicos_f["monto"].sum())
+                            st.divider()
+                            st.warning(
+                                "⚠️ Hay registros históricos clasificados manualmente "
+                                "como Insumos. No se incluyen en el total confirmado."
+                            )
+                            col_h1, col_h2 = st.columns(2)
+                            col_h1.metric(
+                                "Históricos / Manuales", f"${total_historico:,.2f}"
+                            )
+                            col_h2.metric(
+                                "Registros por revisar", f"{len(df_historicos_f)}"
+                            )
+                            df_detalle_historico = (
+                                df_historicos_f[
+                                    [
+                                        "fecha",
+                                        "categoria",
+                                        "descripcion",
+                                        "monto",
+                                        "metodo_pago",
+                                        "banco",
+                                    ]
+                                ]
+                                .sort_values("fecha", ascending=False)
+                                .rename(
+                                    columns={
+                                        "fecha": "Fecha",
+                                        "categoria": "Categoría",
+                                        "descripcion": "Descripción",
+                                        "monto": "Monto",
+                                        "metodo_pago": "Medio",
+                                        "banco": "Banco",
+                                    }
+                                )
+                            )
+                            st.dataframe(
+                                df_detalle_historico,
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "Monto": st.column_config.NumberColumn(
+                                        "Monto", format="$ %.2f"
+                                    )
+                                },
+                            )
+
+                        st.caption(
+                            "Este resumen no modifica inventario ni corrige "
+                            "automáticamente registros históricos."
+                        )
+                    else:
+                        st.info("No hay egresos registrados en el rango seleccionado.")
+                except Exception as e:
+                    st.error(f"Error al cargar el resumen de consumibles: {e}")
 
     # ==========================================
     # TAB 4: LIBRO DIARIO (Solo Gerente)
@@ -730,11 +1030,16 @@ def render(supabase):
                                             f"Error técnico al anular en BD: {e}"
                                         )
 
+                                confirmar_anular_egreso = st.checkbox(
+                                    "Confirmo que deseo anular este egreso",
+                                    key=f"confirm_anular_egreso_{id_egreso}",
+                                )
                                 st.button(
                                     "🚨 Confirmar y Anular",
                                     type="primary",
                                     key="btn_borrar_gasto",
                                     use_container_width=True,
+                                    disabled=not confirmar_anular_egreso,
                                     on_click=procesar_eliminacion,
                                     args=(id_egreso,),
                                 )

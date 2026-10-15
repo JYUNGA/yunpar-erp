@@ -1,6 +1,7 @@
 import streamlit as st
 from supabase import create_client
 import time
+import random
 from datetime import datetime
 import pytz
 import google.generativeai as genai  # <-- LA LIBRERÍA OFICIAL DE GEMINI
@@ -24,6 +25,8 @@ from modulos import (
     apus,
     polines,
     control_taller,
+    kpis,
+    auth,
 )
 
 # --- CONFIGURACIÓN GLOBAL ---
@@ -42,6 +45,42 @@ st.markdown(
             fetch(window.location.href, { method: 'HEAD' });
         }, 25000);
     </script>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# --- AJUSTES RESPONSIVE / MÓVIL (global, aporte de Andrés) ---
+# Aplica a toda la app: apila columnas, agranda botones y evita que las tablas
+# rompan el ancho en pantallas de celular (≤768px).
+st.markdown(
+    """
+    <style>
+    @media (max-width: 1023px) {
+        div[data-testid="stHorizontalBlock"] {
+            flex-direction: column !important;
+            gap: 0.75rem !important;
+        }
+        div[data-testid="column"] {
+            width: 100% !important;
+            flex: 1 1 100% !important;
+            min-width: 100% !important;
+        }
+        div.stButton > button,
+        div[data-testid="stFormSubmitButton"] > button {
+            width: 100% !important;
+            min-height: 2.8rem !important;
+        }
+        h1 { font-size: 2rem !important; }
+        h2 { font-size: 1.45rem !important; }
+        h3 { font-size: 1.2rem !important; }
+        div[data-testid="stDataFrame"],
+        div[data-testid="stDataEditor"] {
+            max-width: 100% !important;
+            overflow-x: auto !important;
+        }
+    }
+    </style>
     """,
     unsafe_allow_html=True,
 )
@@ -66,6 +105,7 @@ supabase = init_connection()
 PERMISOS = {
     "GERENTE": [
         "Inicio",
+        "KPI y Métricas",
         "Ventas",
         "Cotizaciones",
         "Producción",
@@ -124,57 +164,86 @@ def login():
 
             if st.button("Iniciar Sesión", type="primary", use_container_width=True):
                 if user and pwd:
-                    # NOTA: Si decides usar hashes (ej. hashlib), aplica el hash a 'pwd' antes de consultar
+                    # Buscamos solo por usuario; la verificación de clave usa hash seguro.
                     res = (
                         supabase.table("usuarios")
                         .select("*")
                         .eq("usuario", user)
-                        .eq("password_hash", pwd)
                         .execute()
                     )
 
-                    if res.data:
-                        u = res.data[0]
-                        if u["activo"]:
-                            st.session_state["usuario"] = u["nombre_completo"]
-                            st.session_state["rol"] = u["rol"]
-                            st.session_state["id_usuario"] = u["id"]
-                            st.success(f"¡Bienvenido, {u['nombre_completo']}!")
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error(
-                                "🚫 Tu usuario está desactivado. Contacta al administrador."
-                            )
-                    else:
+                    u = res.data[0] if res.data else None
+
+                    if not u or not auth.verify_password(pwd, u.get("password_hash")):
                         st.error("❌ Credenciales incorrectas.")
+                    elif not u["activo"]:
+                        st.error(
+                            "🚫 Tu usuario está desactivado. Contacta al administrador."
+                        )
+                    else:
+                        # Migración perezosa: si la clave aún está en texto plano, la re-hasheamos.
+                        if not auth.is_hashed(u.get("password_hash")):
+                            try:
+                                supabase.table("usuarios").update(
+                                    {"password_hash": auth.hash_password(pwd)}
+                                ).eq("id", u["id"]).execute()
+                            except Exception:
+                                pass
+
+                        st.session_state["usuario"] = u["nombre_completo"]
+                        st.session_state["rol"] = u["rol"]
+                        st.session_state["id_usuario"] = u["id"]
+                        st.success(f"¡Bienvenido, {u['nombre_completo']}!")
+                        time.sleep(1)
+                        st.rerun()
                 else:
                     st.warning("⚠️ Ingresa usuario y contraseña.")
 
 
 # --- MOTOR DE INTELIGENCIA ARTIFICIAL (GEMINI) ---
-@st.cache_data(ttl=86400, show_spinner=False)
+# Sin caché de 24h: se genera una vez por sesión (session_state), así el
+# mensaje es distinto en cada ingreso y no se repite entre usuarios.
 def obtener_mensaje_diario(rol_usuario, nombre, turno):
+    clave = f"mensaje_ia_{rol_usuario}_{nombre}_{turno}"
+    if clave in st.session_state:
+        return st.session_state[clave]
+
     try:
         genai.configure(api_key=st.secrets["gemini"]["api_key"])
         model = genai.GenerativeModel("gemini-2.5-flash")
 
-        # PROMPT CON HUMOR: Cambiamos el dato curioso por un chiste corto y sano.
+        angulos = [
+            "superar una meta de producción",
+            "atender con buena actitud al cliente",
+            "mantener el orden y la calidad",
+            "trabajo en equipo",
+            "cuidar los detalles",
+            "cerrar el día sin pendientes",
+        ]
+        angulo = random.choice(angulos)
+
         prompt = f"""
-        Eres la IA del ERP de YUNPAR (fábrica de uniformes). 
+        Eres la IA del ERP de YUNPAR (fábrica de uniformes).
         El usuario '{nombre}' (rol: {rol_usuario}) acaba de iniciar sesión en el turno de la {turno}.
-        
+
         Escribe un mensaje de EXACTAMENTE DOS oraciones muy breves y directas:
-        1. Una frase de motivación extrema enfocada en su rol (máximo 15 palabras).
-        2. Un chiste muy corto, sano y divertido (máximo 20 palabras) para sacarle una sonrisa en el trabajo.
-        
-        REGLA DE ORO: NO LO SALUDES. PROHIBIDO decir "Hola", "Buenos días", "Buenas tardes" o "Buenas noches" porque el sistema ya lo saludó en el título. Ve directo a la motivación y remata con el chiste. Usa 2 emojis.
+        1. Una frase de motivación extrema enfocada en su rol, inspirada en este tema: "{angulo}" (máximo 15 palabras).
+        2. Un chiste o dato curioso MUY corto, sano y divertido, relacionado con fábricas, uniformes, telas o el trabajo (máximo 20 palabras).
+
+        REGLAS:
+        - NO saludes. PROHIBIDO decir "Hola", "Buenos días", "Buenas tardes" o "Buenas noches" (el sistema ya saludó).
+        - Varía el contenido: evita chistes típicos y no repitas la misma idea de siempre.
+        - Adapta el tono al rol: GERENTE = visión de negocio y resultados; VENDEDORA = ventas y clientes; DISEÑADOR = creatividad y arte; IMPRESION = ritmo y calidad del plotter.
+        - Usa exactamente 2 emojis.
         """
 
         respuesta = model.generate_content(prompt)
-        return respuesta.text
-    except Exception as e:
-        return f"¡A dar lo mejor en esta **{turno}**, {nombre}! 🚀"
+        texto = respuesta.text.strip()
+    except Exception:
+        texto = f"¡A dar lo mejor en esta **{turno}**, {nombre}! 🚀"
+
+    st.session_state[clave] = texto
+    return texto
 
 
 # --- ENRUTADOR DINÁMICO DE MÓDULOS ---
@@ -264,6 +333,8 @@ def enrutador(opcion):
             st.divider()
             st.caption(f"📅 {hora_exacta.strftime('%d/%m/%Y')} | 🏭 YUNPAR ERP v2.5")
 
+    elif opcion == "KPI y Métricas":
+        kpis.render(supabase)
     elif opcion == "Ventas":
         ventas.render(supabase)
     elif opcion == "Cotizaciones":
