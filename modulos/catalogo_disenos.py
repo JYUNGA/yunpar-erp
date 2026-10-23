@@ -6,6 +6,8 @@ import pandas as pd
 import streamlit as st
 from PIL import Image, ImageOps
 
+from modulos import catalogo_storage
+
 
 # =========================================================
 # CONFIGURACIÓN GENERAL DEL CATÁLOGO
@@ -51,7 +53,7 @@ CATEGORIAS = [
 
 
 # =========================================================
-# TIPOS DE IMAGEN PARA LA GALERÍA
+# TIPOS DE IMAGEN
 # =========================================================
 
 TIPOS_IMAGEN = [
@@ -75,12 +77,10 @@ TIPOS_IMAGEN = [
 
 def inicializar_tipos_producto():
     """
-    Inicializa los tipos de producto disponibles.
+    Inicializa los tipos de producto.
 
-    Por ahora se guardan solamente en la sesión actual
-    de Streamlit.
-
-    Más adelante estos datos se leerán desde Supabase.
+    Por ahora se guardan únicamente
+    durante la sesión de Streamlit.
     """
 
     if "catalogo_tipos_producto" not in st.session_state:
@@ -133,8 +133,7 @@ def convertir_lista_texto(texto):
 
 def aplicar_marca_yunpar(imagen):
     """
-    Aplica el patrón YUNPAR sobre la imagen preparada
-    para el catálogo.
+    Aplica el patrón YUNPAR sobre la imagen.
     """
 
     if not FONDO_CATALOGO.exists():
@@ -201,21 +200,17 @@ def optimizar_imagen(archivo):
 
     - Corrige orientación.
     - Mantiene proporción.
-    - La coloca en formato 4:5.
-    - 1080 x 1350 px.
-    - Aplica marca YUNPAR.
-    - Convierte a WEBP.
-    - Calidad 85 %.
+    - Formato 4:5.
+    - 1080 x 1350.
+    - Marca YUNPAR.
+    - WEBP.
+    - Calidad 85.
     """
 
     if archivo is None:
         return None
 
     try:
-        # -------------------------------------------------
-        # LEER ARCHIVO ORIGINAL
-        # -------------------------------------------------
-
         bytes_originales = archivo.getvalue()
 
         peso_original = len(
@@ -228,7 +223,6 @@ def optimizar_imagen(archivo):
             )
         )
 
-        # Corrige orientación EXIF
         imagen = ImageOps.exif_transpose(
             imagen
         )
@@ -237,9 +231,9 @@ def optimizar_imagen(archivo):
             imagen.size
         )
 
-        # -------------------------------------------------
+        # =================================================
         # TRANSPARENCIA
-        # -------------------------------------------------
+        # =================================================
 
         if (
             imagen.mode in ("RGBA", "LA")
@@ -273,9 +267,9 @@ def optimizar_imagen(archivo):
                 "RGB"
             )
 
-        # -------------------------------------------------
+        # =================================================
         # ESCALAR SIN DEFORMAR
-        # -------------------------------------------------
+        # =================================================
 
         escala = min(
             ANCHO_CATALOGO / imagen.width,
@@ -304,9 +298,9 @@ def optimizar_imagen(archivo):
             Image.Resampling.LANCZOS,
         )
 
-        # -------------------------------------------------
-        # CREAR LIENZO 4:5
-        # -------------------------------------------------
+        # =================================================
+        # LIENZO 4:5
+        # =================================================
 
         lienzo = Image.new(
             "RGB",
@@ -339,17 +333,17 @@ def optimizar_imagen(archivo):
             ),
         )
 
-        # -------------------------------------------------
-        # APLICAR MARCA YUNPAR
-        # -------------------------------------------------
+        # =================================================
+        # MARCA YUNPAR
+        # =================================================
 
         lienzo = aplicar_marca_yunpar(
             lienzo
         )
 
-        # -------------------------------------------------
-        # CONVERTIR A WEBP
-        # -------------------------------------------------
+        # =================================================
+        # WEBP
+        # =================================================
 
         salida = io.BytesIO()
 
@@ -360,9 +354,7 @@ def optimizar_imagen(archivo):
             method=6,
         )
 
-        bytes_optimizados = (
-            salida.getvalue()
-        )
+        bytes_optimizados = salida.getvalue()
 
         peso_optimizado = len(
             bytes_optimizados
@@ -376,6 +368,7 @@ def optimizar_imagen(archivo):
                     / peso_original
                 )
             ) * 100
+
         else:
             ahorro = 0
 
@@ -549,18 +542,10 @@ def mostrar_imagen_procesada(
     if resultado is None:
         return None
 
-    # -----------------------------------------------------
-    # PREVISUALIZACIÓN
-    # -----------------------------------------------------
-
     st.image(
         resultado["bytes"],
         use_container_width=True,
     )
-
-    # -----------------------------------------------------
-    # MÉTRICAS
-    # -----------------------------------------------------
 
     col1, col2, col3 = (
         st.columns(3)
@@ -597,10 +582,6 @@ def mostrar_imagen_procesada(
         f"Marca YUNPAR"
     )
 
-    # -----------------------------------------------------
-    # DESCARGAR
-    # -----------------------------------------------------
-
     st.download_button(
         "⬇️ Descargar optimizada",
         data=resultado["bytes"],
@@ -611,6 +592,87 @@ def mostrar_imagen_procesada(
     )
 
     return resultado
+
+
+# =========================================================
+# PREPARAR STORAGE SIMULADO
+# =========================================================
+
+def preparar_storage_simulado(
+    borrador,
+):
+    """
+    Prepara las rutas futuras de Supabase Storage.
+
+    NO sube archivos.
+    NO modifica Supabase.
+    """
+
+    estado_storage = (
+        catalogo_storage
+        .obtener_estado_storage()
+    )
+
+    codigo_orden = (
+        borrador.get(
+            "codigo_orden"
+        )
+        or borrador.get(
+            "orden_id"
+        )
+        or "sin-orden"
+    )
+
+    registros = []
+
+    for imagen in borrador.get(
+        "imagenes",
+        [],
+    ):
+        registro = (
+            catalogo_storage
+            .construir_registro_prueba(
+                diseno_id=codigo_orden,
+                nombre_visible=(
+                    imagen.get(
+                        "nombre",
+                        "Imagen",
+                    )
+                ),
+                posicion=(
+                    imagen.get(
+                        "orden",
+                        1,
+                    )
+                ),
+                imagen_bytes=(
+                    imagen.get(
+                        "bytes"
+                    )
+                ),
+                ancho=(
+                    imagen.get(
+                        "ancho",
+                        ANCHO_CATALOGO,
+                    )
+                ),
+                alto=(
+                    imagen.get(
+                        "alto",
+                        ALTO_CATALOGO,
+                    )
+                ),
+            )
+        )
+
+        registros.append(
+            registro
+        )
+
+    return {
+        "estado_storage": estado_storage,
+        "imagenes": registros,
+    }
 
 
 # =========================================================
@@ -629,10 +691,10 @@ def guardar_borrador_temporal(
     resultados_galeria,
 ):
     """
-    Guarda un borrador únicamente en st.session_state.
+    Guarda un borrador solamente en memoria.
 
-    NO escribe nada en Supabase.
-    NO sube archivos a Storage.
+    NO escribe en Supabase.
+    NO sube imágenes.
     """
 
     imagenes = []
@@ -650,7 +712,11 @@ def guardar_borrador_temporal(
                 "es_portada": (
                     item["orden"] == 1
                 ),
-                "bytes": resultado["bytes"],
+                "bytes": (
+                    resultado[
+                        "bytes"
+                    ]
+                ),
                 "peso_original": (
                     resultado[
                         "peso_original"
@@ -687,37 +753,75 @@ def guardar_borrador_temporal(
     borrador = {
         "estado": "BORRADOR",
         "modo": "PRUEBA",
-        "orden_id": orden_actual.get(
-            "ID"
+        "orden_id": (
+            orden_actual.get(
+                "ID"
+            )
         ),
-        "codigo_orden": orden_actual.get(
-            "Código"
+        "codigo_orden": (
+            orden_actual.get(
+                "Código"
+            )
         ),
-        "cliente": orden_actual.get(
-            "Cliente"
+        "cliente": (
+            orden_actual.get(
+                "Cliente"
+            )
         ),
-        "arte_original": orden_actual.get(
-            "Arte"
+        "arte_original": (
+            orden_actual.get(
+                "Arte"
+            )
         ),
-        "tipo_producto": tipo_producto,
-        "categoria": categoria,
-        "titulo": titulo.strip(),
-        "descripcion": descripcion.strip(),
-        "colores": convertir_lista_texto(
-            colores
+        "tipo_producto": (
+            tipo_producto
         ),
-        "etiquetas": convertir_lista_texto(
-            etiquetas
+        "categoria": (
+            categoria
         ),
-        "relacion_confirmada": confirmado,
-        "cantidad_imagenes": len(
+        "titulo": (
+            titulo.strip()
+        ),
+        "descripcion": (
+            descripcion.strip()
+        ),
+        "colores": (
+            convertir_lista_texto(
+                colores
+            )
+        ),
+        "etiquetas": (
+            convertir_lista_texto(
+                etiquetas
+            )
+        ),
+        "relacion_confirmada": (
+            confirmado
+        ),
+        "cantidad_imagenes": (
+            len(
+                imagenes
+            )
+        ),
+        "imagenes": (
             imagenes
         ),
-        "imagenes": imagenes,
-        "guardado_en": datetime.now().strftime(
-            "%d/%m/%Y %H:%M:%S"
+        "guardado_en": (
+            datetime.now().strftime(
+                "%d/%m/%Y %H:%M:%S"
+            )
         ),
     }
+
+    # =====================================================
+    # PREPARACIÓN SIMULADA PARA STORAGE
+    # =====================================================
+
+    borrador[
+        "preparacion_storage"
+    ] = preparar_storage_simulado(
+        borrador
+    )
 
     clave = (
         f"catalogo_borrador_"
@@ -733,6 +837,161 @@ def guardar_borrador_temporal(
     ] = borrador
 
     return borrador
+
+
+# =========================================================
+# MOSTRAR PREPARACIÓN PARA SUPABASE
+# =========================================================
+
+def mostrar_preparacion_storage(
+    borrador,
+):
+    preparacion = borrador.get(
+        "preparacion_storage"
+    )
+
+    if not preparacion:
+        return
+
+    estado = preparacion.get(
+        "estado_storage",
+        {},
+    )
+
+    imagenes = preparacion.get(
+        "imagenes",
+        [],
+    )
+
+    st.divider()
+
+    st.markdown(
+        "## 📦 Preparación para Supabase"
+    )
+
+    st.caption(
+        "Vista previa de cómo se prepararían "
+        "los archivos antes de subirlos."
+    )
+
+    col1, col2, col3 = (
+        st.columns(3)
+    )
+
+    col1.metric(
+        "Storage",
+        estado.get(
+            "estado",
+            "PRUEBA",
+        ),
+    )
+
+    col2.metric(
+        "Bucket",
+        estado.get(
+            "bucket",
+            "catalogo-disenos",
+        ),
+    )
+
+    puede_escribir = estado.get(
+        "puede_escribir",
+        False,
+    )
+
+    col3.metric(
+        "Escritura real",
+        (
+            "ACTIVADA"
+            if puede_escribir
+            else "DESACTIVADA"
+        ),
+    )
+
+    if not puede_escribir:
+        st.info(
+            "🔒 Escritura real desactivada. "
+            "Estas rutas son únicamente una simulación."
+        )
+    else:
+        st.warning(
+            "⚠️ Escritura real habilitada."
+        )
+
+    if not imagenes:
+        st.warning(
+            "No existen imágenes preparadas."
+        )
+        return
+
+    registros = []
+
+    for imagen in imagenes:
+        registros.append(
+            {
+                "Orden": (
+                    imagen.get(
+                        "orden"
+                    )
+                ),
+                "Nombre": (
+                    imagen.get(
+                        "nombre"
+                    )
+                ),
+                "Portada": (
+                    "Sí"
+                    if imagen.get(
+                        "es_portada"
+                    )
+                    else "No"
+                ),
+                "Ruta futura": (
+                    imagen.get(
+                        "storage_path"
+                    )
+                ),
+                "Peso": (
+                    formatear_peso(
+                        imagen.get(
+                            "peso_bytes",
+                            0,
+                        )
+                    )
+                ),
+                "Resolución": (
+                    f"{imagen.get('ancho', '')} "
+                    f"× "
+                    f"{imagen.get('alto', '')}"
+                ),
+                "Formato": (
+                    imagen.get(
+                        "formato",
+                        "WEBP",
+                    )
+                ),
+                "Estado": (
+                    "LISTA PARA SUBIR"
+                ),
+            }
+        )
+
+    st.dataframe(
+        pd.DataFrame(
+            registros
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.success(
+        "✅ La estructura de archivos está preparada."
+    )
+
+    st.warning(
+        "⚠️ Todavía NO se ha creado ningún archivo "
+        "en Supabase Storage."
+    )
 
 
 # =========================================================
@@ -754,7 +1013,7 @@ def mostrar_borrador_temporal(
     st.success(
         "✅ El borrador está guardado solamente "
         "en esta sesión de Streamlit. "
-        "No se envió nada a Supabase."
+        "No se envió a Supabase."
     )
 
     col1, col2, col3 = (
@@ -837,7 +1096,9 @@ def mostrar_borrador_temporal(
         st.write(
             "**Colores:** "
             + (
-                ", ".join(colores)
+                ", ".join(
+                    colores
+                )
                 if colores
                 else "Sin definir"
             )
@@ -846,7 +1107,9 @@ def mostrar_borrador_temporal(
         st.write(
             "**Etiquetas:** "
             + (
-                ", ".join(etiquetas)
+                ", ".join(
+                    etiquetas
+                )
                 if etiquetas
                 else "Sin definir"
             )
@@ -911,6 +1174,14 @@ def mostrar_borrador_temporal(
                 hide_index=True,
             )
 
+    # =====================================================
+    # PREPARACIÓN PARA SUPABASE
+    # =====================================================
+
+    mostrar_preparacion_storage(
+        borrador
+    )
+
 
 # =========================================================
 # FUNCIÓN PRINCIPAL
@@ -933,6 +1204,11 @@ def render(supabase):
         "el catálogo digital."
     )
 
+    estado_storage = (
+        catalogo_storage
+        .obtener_estado_storage()
+    )
+
     st.info(
         "🔒 Modo de prueba: "
         "los borradores se guardan únicamente "
@@ -940,6 +1216,15 @@ def render(supabase):
         "Todavía no se escribe ni se publica "
         "información en Supabase."
     )
+
+    if not estado_storage.get(
+        "puede_escribir",
+        False,
+    ):
+        st.caption(
+            "🔐 Supabase Storage: "
+            "escritura real DESACTIVADA."
+        )
 
     if FONDO_CATALOGO.exists():
         st.success(
@@ -1025,7 +1310,7 @@ def render(supabase):
         return
 
     # =====================================================
-    # SOLO ÓRDENES CON ARTE FINAL
+    # SOLO ÓRDENES CON ARTE
     # =====================================================
 
     ordenes_con_arte = []
@@ -1063,7 +1348,7 @@ def render(supabase):
         return
 
     # =====================================================
-    # OBTENER CLIENTES
+    # CLIENTES
     # =====================================================
 
     ids_clientes = list(
@@ -1113,7 +1398,7 @@ def render(supabase):
             pass
 
     # =====================================================
-    # ARMAR DATAFRAME
+    # DATAFRAME
     # =====================================================
 
     registros = []
@@ -1225,7 +1510,7 @@ def render(supabase):
         return
 
     # =====================================================
-    # TABLA DE ARTES
+    # TABLA
     # =====================================================
 
     evento = st.dataframe(
@@ -1244,7 +1529,7 @@ def render(supabase):
     )
 
     # =====================================================
-    # SELECCIONAR ARTE
+    # SELECCIÓN
     # =====================================================
 
     if evento.selection.rows:
@@ -1350,7 +1635,7 @@ def render(supabase):
             )
 
     # =====================================================
-    # 2. DEFINIR PRODUCTO
+    # 2. PRODUCTO
     # =====================================================
 
     st.divider()
@@ -1393,7 +1678,7 @@ def render(supabase):
         )
 
     # =====================================================
-    # CREAR NUEVO TIPO DE PRODUCTO
+    # NUEVO TIPO DE PRODUCTO
     # =====================================================
 
     with st.expander(
@@ -1468,7 +1753,7 @@ def render(supabase):
                     st.rerun()
 
     # =====================================================
-    # 3. GALERÍA FLEXIBLE
+    # 3. GALERÍA
     # =====================================================
 
     st.divider()
@@ -1501,10 +1786,6 @@ def render(supabase):
         with st.container(
             border=True
         ):
-            # =============================================
-            # CABECERA DE IMAGEN
-            # =============================================
-
             cab1, cab2 = (
                 st.columns(
                     [
@@ -1524,10 +1805,6 @@ def render(supabase):
                     f"{posicion + 1}"
                 )
 
-            # =============================================
-            # BOTONES MOVER / ELIMINAR
-            # =============================================
-
             with cab2:
                 b1, b2, b3 = (
                     st.columns(3)
@@ -1542,10 +1819,6 @@ def render(supabase):
                     ),
                     disabled=(
                         posicion == 0
-                    ),
-                    help=(
-                        "Mover imagen "
-                        "hacia arriba"
                     ),
                 ):
                     mover_imagen_galeria(
@@ -1567,10 +1840,6 @@ def render(supabase):
                         posicion
                         == len(slots) - 1
                     ),
-                    help=(
-                        "Mover imagen "
-                        "hacia abajo"
-                    ),
                 ):
                     mover_imagen_galeria(
                         orden_id,
@@ -1590,9 +1859,6 @@ def render(supabase):
                     disabled=(
                         len(slots) == 1
                     ),
-                    help=(
-                        "Eliminar imagen"
-                    ),
                 ):
                     eliminar_imagen_galeria(
                         orden_id,
@@ -1600,10 +1866,6 @@ def render(supabase):
                     )
 
                     st.rerun()
-
-            # =============================================
-            # IMAGEN + CONFIGURACIÓN
-            # =============================================
 
             col_img, col_config = (
                 st.columns(
@@ -1613,10 +1875,6 @@ def render(supabase):
                     ]
                 )
             )
-
-            # ---------------------------------------------
-            # CONFIGURACIÓN
-            # ---------------------------------------------
 
             with col_config:
                 if posicion == 0:
@@ -1662,10 +1920,6 @@ def render(supabase):
                         "primero en el catálogo."
                     )
 
-            # ---------------------------------------------
-            # SUBIR IMAGEN
-            # ---------------------------------------------
-
             with col_img:
                 archivo = (
                     st.file_uploader(
@@ -1695,10 +1949,6 @@ def render(supabase):
                     )
                 )
 
-            # ---------------------------------------------
-            # GUARDAR RESULTADO TEMPORAL
-            # ---------------------------------------------
-
             if resultado:
                 resultados_galeria.append(
                     {
@@ -1714,12 +1964,14 @@ def render(supabase):
                                 f"{posicion + 1}"
                             )
                         ),
-                        "resultado": resultado,
+                        "resultado": (
+                            resultado
+                        ),
                     }
                 )
 
     # =====================================================
-    # AGREGAR MÁS IMÁGENES
+    # AGREGAR IMAGEN
     # =====================================================
 
     if st.button(
@@ -1737,7 +1989,7 @@ def render(supabase):
         st.rerun()
 
     # =====================================================
-    # CONFIRMAR RELACIÓN
+    # RELACIÓN
     # =====================================================
 
     st.divider()
@@ -1770,7 +2022,7 @@ def render(supabase):
         )
 
     # =====================================================
-    # 4. INFORMACIÓN DEL CATÁLOGO
+    # 4. INFORMACIÓN
     # =====================================================
 
     st.divider()
@@ -1784,10 +2036,6 @@ def render(supabase):
         "la página pública."
     )
 
-    # -----------------------------------------------------
-    # TÍTULO
-    # -----------------------------------------------------
-
     titulo = st.text_input(
         "Título",
         placeholder=(
@@ -1798,10 +2046,6 @@ def render(supabase):
             f"{orden_id}"
         ),
     )
-
-    # -----------------------------------------------------
-    # DESCRIPCIÓN
-    # -----------------------------------------------------
 
     descripcion = st.text_area(
         "Descripción pública",
@@ -1814,10 +2058,6 @@ def render(supabase):
             f"{orden_id}"
         ),
     )
-
-    # -----------------------------------------------------
-    # COLORES Y ETIQUETAS
-    # -----------------------------------------------------
 
     col_meta1, col_meta2 = (
         st.columns(2)
@@ -1851,7 +2091,7 @@ def render(supabase):
     )
 
     # =====================================================
-    # 5. ESTADO DE PREPARACIÓN
+    # 5. ESTADO
     # =====================================================
 
     st.divider()
@@ -1899,7 +2139,7 @@ def render(supabase):
     )
 
     # =====================================================
-    # RESUMEN DE GALERÍA
+    # RESUMEN GALERÍA
     # =====================================================
 
     if resultados_galeria:
@@ -1909,9 +2149,7 @@ def render(supabase):
 
         resumen = []
 
-        for item in (
-            resultados_galeria
-        ):
+        for item in resultados_galeria:
             resultado = item[
                 "resultado"
             ]
@@ -1964,7 +2202,7 @@ def render(supabase):
         )
 
     # =====================================================
-    # VALIDACIÓN GENERAL
+    # VALIDACIÓN
     # =====================================================
 
     listo = bool(
@@ -2013,11 +2251,18 @@ def render(supabase):
     )
 
     # =====================================================
-    # GUARDAR BORRADOR TEMPORAL
+    # GUARDAR
     # =====================================================
 
     if guardar:
-        borrador = (
+        if not listo:
+            st.warning(
+                "⚠️ Completa los datos, "
+                "agrega al menos una imagen "
+                "y confirma la relación con el arte."
+            )
+
+        else:
             guardar_borrador_temporal(
                 orden_actual=orden_actual,
                 tipo_producto=tipo_producto,
@@ -2031,20 +2276,19 @@ def render(supabase):
                     resultados_galeria
                 ),
             )
-        )
 
-        st.success(
-            "✅ Borrador guardado "
-            "correctamente en modo de prueba."
-        )
+            st.success(
+                "✅ Borrador guardado "
+                "correctamente en modo de prueba."
+            )
 
-        st.info(
-            "🔒 No se modificó Supabase "
-            "y no se subieron archivos reales."
-        )
+            st.info(
+                "🔒 No se modificó Supabase "
+                "y no se subieron archivos reales."
+            )
 
     # =====================================================
-    # MOSTRAR BORRADOR EXISTENTE
+    # MOSTRAR BORRADOR
     # =====================================================
 
     clave_borrador = (
@@ -2065,9 +2309,7 @@ def render(supabase):
 
     st.caption(
         "💡 Guardar borrador funciona únicamente "
-        "en memoria para probar el flujo. "
-        "Publicar continuará bloqueado hasta "
-        "conectar de forma segura la base de datos "
-        "y Supabase Storage."
+        "en memoria. La sección de preparación "
+        "para Supabase es una simulación y "
+        "no realiza ninguna escritura real."
     )
-    
