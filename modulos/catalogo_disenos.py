@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 from PIL import Image, ImageOps
 
+from modulos import catalogo_db
 from modulos import catalogo_storage
 
 
@@ -613,6 +614,11 @@ def preparar_storage_simulado(
         .obtener_estado_storage()
     )
 
+    estado_db = (
+        catalogo_db
+        .obtener_estado_db()
+    )
+
     codigo_orden = (
         borrador.get(
             "codigo_orden"
@@ -823,6 +829,16 @@ def guardar_borrador_temporal(
         borrador
     )
 
+    # =====================================================
+    # PREPARACIÓN SIMULADA PARA BASE DE DATOS
+    # =====================================================
+
+    borrador[
+        "preparacion_db"
+    ] = catalogo_db.preparar_guardado_simulado(
+        borrador
+    )
+
     clave = (
         f"catalogo_borrador_"
         f"{orden_actual.get('ID')}"
@@ -991,6 +1007,196 @@ def mostrar_preparacion_storage(
     st.warning(
         "⚠️ Todavía NO se ha creado ningún archivo "
         "en Supabase Storage."
+    )
+
+
+# =========================================================
+# MOSTRAR PREPARACIÓN DE BASE DE DATOS
+# =========================================================
+
+def mostrar_preparacion_db(
+    borrador,
+):
+    preparacion = borrador.get(
+        "preparacion_db"
+    )
+
+    if not preparacion:
+        return
+
+    estado_db = catalogo_db.obtener_estado_db()
+
+    st.divider()
+
+    st.markdown(
+        "## 🗃️ Preparación de base de datos"
+    )
+
+    st.caption(
+        "Vista previa de los registros que se guardarían "
+        "en las tablas del catálogo."
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric(
+        "Base de datos",
+        estado_db.get(
+            "estado",
+            "PRUEBA",
+        ),
+    )
+
+    col2.metric(
+        "Storage real",
+        (
+            "ACTIVADO"
+            if estado_db.get(
+                "storage_real",
+                False,
+            )
+            else "DESACTIVADO"
+        ),
+    )
+
+    puede_escribir = estado_db.get(
+        "puede_escribir",
+        False,
+    )
+
+    col3.metric(
+        "Escritura BD",
+        (
+            "ACTIVADA"
+            if puede_escribir
+            else "BLOQUEADA"
+        ),
+    )
+
+    if not puede_escribir:
+        st.info(
+            "🔒 La escritura real de la base de datos está bloqueada. "
+            "Lo que ves aquí es únicamente una simulación."
+        )
+    else:
+        st.warning(
+            "⚠️ La escritura real de la base de datos está habilitada."
+        )
+
+    diseno = preparacion.get(
+        "diseno",
+        {},
+    )
+
+    st.markdown(
+        "### 📝 Registro preparado para `catalogo_disenos`"
+    )
+
+    resumen_diseno = pd.DataFrame(
+        [
+            {
+                "Orden origen": diseno.get(
+                    "codigo_orden_origen",
+                    "",
+                ),
+                "Cliente": diseno.get(
+                    "cliente_origen",
+                    "",
+                ),
+                "Tipo": diseno.get(
+                    "tipo_producto",
+                    "",
+                ),
+                "Categoría": diseno.get(
+                    "categoria",
+                    "",
+                ),
+                "Título": diseno.get(
+                    "titulo",
+                    "",
+                ),
+                "Estado": diseno.get(
+                    "estado",
+                    "BORRADOR",
+                ),
+            }
+        ]
+    )
+
+    st.dataframe(
+        resumen_diseno,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    imagenes = preparacion.get(
+        "imagenes",
+        [],
+    )
+
+    st.markdown(
+        "### 🖼️ Registros preparados para `catalogo_imagenes`"
+    )
+
+    if imagenes:
+        resumen_imagenes = []
+
+        for imagen in imagenes:
+            resumen_imagenes.append(
+                {
+                    "Orden": imagen.get(
+                        "orden"
+                    ),
+                    "Nombre": imagen.get(
+                        "nombre"
+                    ),
+                    "Portada": (
+                        "Sí"
+                        if imagen.get(
+                            "es_portada"
+                        )
+                        else "No"
+                    ),
+                    "Ruta": imagen.get(
+                        "storage_path"
+                    ),
+                    "Peso": formatear_peso(
+                        imagen.get(
+                            "peso_bytes",
+                            0,
+                        )
+                    ),
+                    "Resolución": (
+                        f"{imagen.get('ancho', '')} "
+                        f"× "
+                        f"{imagen.get('alto', '')}"
+                    ),
+                    "Formato": imagen.get(
+                        "formato",
+                        "WEBP",
+                    ),
+                }
+            )
+
+        st.dataframe(
+            pd.DataFrame(
+                resumen_imagenes
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.warning(
+            "No existen registros de imágenes preparados."
+        )
+
+    st.success(
+        "✅ La estructura de base de datos está preparada."
+    )
+
+    st.warning(
+        "⚠️ Todavía NO se ha insertado ningún registro "
+        "en las tablas reales del catálogo."
     )
 
 
@@ -1182,6 +1388,14 @@ def mostrar_borrador_temporal(
         borrador
     )
 
+    # =====================================================
+    # PREPARACIÓN DE BASE DE DATOS
+    # =====================================================
+
+    mostrar_preparacion_db(
+        borrador
+    )
+
 
 # =========================================================
 # FUNCIÓN PRINCIPAL
@@ -1209,6 +1423,11 @@ def render(supabase):
         .obtener_estado_storage()
     )
 
+    estado_db = (
+        catalogo_db
+        .obtener_estado_db()
+    )
+
     st.info(
         "🔒 Modo de prueba: "
         "los borradores se guardan únicamente "
@@ -1224,6 +1443,15 @@ def render(supabase):
         st.caption(
             "🔐 Supabase Storage: "
             "escritura real DESACTIVADA."
+        )
+
+    if not estado_db.get(
+        "puede_escribir",
+        False,
+    ):
+        st.caption(
+            "🔐 Base de datos del catálogo: "
+            "escritura real BLOQUEADA."
         )
 
     if FONDO_CATALOGO.exists():
@@ -2309,7 +2537,7 @@ def render(supabase):
 
     st.caption(
         "💡 Guardar borrador funciona únicamente "
-        "en memoria. La sección de preparación "
-        "para Supabase es una simulación y "
-        "no realiza ninguna escritura real."
+        "en memoria mientras el modo real esté desactivado. "
+        "Las secciones de preparación de Storage y base de datos "
+        "son simulaciones y no realizan ninguna escritura real."
     )
