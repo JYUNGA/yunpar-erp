@@ -17,6 +17,7 @@ from modulos import (
     finanzas,
     reportes,
     disenador,
+    preparacion_catalogo,
     catalogo_disenos,
     impresion,
     usuarios,
@@ -114,6 +115,7 @@ PERMISOS = {
         "Facturación",
         "Reportes",
         "Diseño",
+        "Preparación de Catálogo",
         "Catálogo de Diseños",
         "Impresión",
         "Caja y Finanzas",
@@ -138,7 +140,8 @@ PERMISOS = {
         "Polines",
     ],
     "IMPRESION": ["Inicio", "Impresión", "Reportes"],
-    "DISEÑADOR": ["Inicio", "Diseño", "Catálogo de Diseños",],
+    "DISEÑADOR": ["Inicio", "Diseño"],
+    "OPERADOR_CATALOGO": ["Inicio", "Preparación de Catálogo"],
 }
 
 
@@ -235,7 +238,12 @@ def obtener_mensaje_diario(rol_usuario, nombre, turno):
         REGLAS:
         - NO saludes. PROHIBIDO decir "Hola", "Buenos días", "Buenas tardes" o "Buenas noches" (el sistema ya saludó).
         - Varía el contenido: evita chistes típicos y no repitas la misma idea de siempre.
-        - Adapta el tono al rol: GERENTE = visión de negocio y resultados; VENDEDORA = ventas y clientes; DISEÑADOR = creatividad y arte; IMPRESION = ritmo y calidad del plotter.
+        - Adapta el tono al rol:
+          GERENTE = visión de negocio y resultados;
+          VENDEDORA = ventas y clientes;
+          DISEÑADOR = creatividad y arte;
+          OPERADOR_CATALOGO = preparación visual, mockups y calidad del catálogo;
+          IMPRESION = ritmo y calidad del plotter.
         - Usa exactamente 2 emojis.
         """
 
@@ -291,7 +299,11 @@ def enrutador(opcion):
         with col_ia:
             with st.spinner(f"Sincronizando IA para la {turno_ia}..."):
                 # Llamamos a la IA pasándole el turno
-                mensaje_ia = obtener_mensaje_diario(rol_actual, nombre_pila, turno_ia)
+                mensaje_ia = obtener_mensaje_diario(
+                    rol_actual,
+                    nombre_pila,
+                    turno_ia
+                )
 
             # --- NUEVO DISEÑO DEL MENSAJE IA (Letra gigante, cursiva y de lectura rápida) ---
             st.markdown(
@@ -313,63 +325,94 @@ def enrutador(opcion):
                 "<h4 style='color: #1a3c7a; font-weight: 700;'>📌 Enfoque de tu Rol</h4>",
                 unsafe_allow_html=True,
             )
+
             if rol_actual == "GERENTE":
                 st.success(
                     "📊 **Métricas.** Revisa saldos pendientes y controla el flujo del taller."
                 )
+
             elif rol_actual == "VENDEDORA":
                 st.warning(
                     "🛒 **Ventas.** Liquida órdenes entregadas y genera nuevas proformas."
                 )
+
             elif rol_actual == "DISEÑADOR":
                 st.error(
                     "🎨 **Diseño.** Sincroniza artes finales y envía archivos al plotter."
                 )
+
+            elif rol_actual == "OPERADOR_CATALOGO":
+                st.info(
+                    "🤖 **Preparación de Catálogo.** Prepara mockups y deja los diseños listos para revisión."
+                )
+
             elif rol_actual == "IMPRESION":
                 st.info(
                     "🖨️ **Plotter.** Descarga lotes de producción y mantén las máquinas a tope."
                 )
+
             else:
                 st.info("Revisa tus módulos en el menú lateral.")
 
             st.divider()
-            st.caption(f"📅 {hora_exacta.strftime('%d/%m/%Y')} | 🏭 YUNPAR ERP v2.5")
+            st.caption(
+                f"📅 {hora_exacta.strftime('%d/%m/%Y')} | 🏭 YUNPAR ERP v2.5"
+            )
 
     elif opcion == "KPI y Métricas":
         kpis.render(supabase)
+
     elif opcion == "Ventas":
         ventas.render(supabase)
+
     elif opcion == "Cotizaciones":
         cotizaciones.render(supabase)
+
     elif opcion == "Producción":
         produccion.render(supabase)
+
     elif opcion == "Facturación":
-        facturacion.render(supabase)  # <-- Corrección de sangría y variables
+        facturacion.render(supabase)
+
     elif opcion == "Reportes":
         reportes.render_modulo_reportes(supabase)
+
     elif opcion == "Diseño":
         disenador.render(supabase)
+
+    elif opcion == "Preparación de Catálogo":
+        preparacion_catalogo.render(supabase)
+
     elif opcion == "Catálogo de Diseños":
-        catalogo_disenos.render(supabase)    
+        catalogo_disenos.render(supabase)
+
     elif opcion == "Impresión":
         impresion.render(supabase)
+
     elif opcion == "Caja y Finanzas":
         finanzas.render(supabase)
+
     elif opcion == "Clientes":
         clientes.render(supabase)
+
     elif opcion == "Productos":
         productos.render(supabase)
+
     elif opcion == "Insumos":
         insumos.render(supabase)
+
     elif opcion == "Usuarios":
         usuarios.render(supabase)
-    # Enlazamos la opción de navegación con la función render de tu archivo rh.py
+
     elif opcion == "Asistencia y Nómina":
         rh.render(supabase)
+
     elif opcion == "Costos y APUs":
         apus.render(supabase)
+
     elif opcion == "Polines":
         polines.render(supabase)
+
     elif opcion == "Control de Taller":
         control_taller.render(supabase)
 
@@ -379,13 +422,28 @@ inicializar_estado()
 
 if not st.session_state["usuario"]:
     login()
+
 else:
     # --- 1. ESCUDO DE MEMORIA (ANTIBUG) ---
     # Si la caché del navegador corrompió el rol convirtiéndolo en diccionario, lo forzamos a texto
     if isinstance(st.session_state.get("rol"), dict):
-        st.session_state["rol"] = str(st.session_state["rol"].get("rol", "Inicio"))
-    elif not isinstance(st.session_state.get("rol"), str):
-        st.session_state["rol"] = str(st.session_state.get("rol", "Inicio"))
+        st.session_state["rol"] = str(
+            st.session_state["rol"].get(
+                "rol",
+                "Inicio"
+            )
+        )
+
+    elif not isinstance(
+        st.session_state.get("rol"),
+        str
+    ):
+        st.session_state["rol"] = str(
+            st.session_state.get(
+                "rol",
+                "Inicio"
+            )
+        )
 
     rol_seguro = st.session_state["rol"].strip()
 
@@ -394,25 +452,56 @@ else:
         st.title("🏭 YUNPAR")
 
         # También protegemos el nombre de usuario por si acaso
-        usuario_seguro = st.session_state.get("usuario", "Desconocido")
-        if isinstance(usuario_seguro, dict):
-            usuario_seguro = str(usuario_seguro.get("nombre_completo", "Desconocido"))
+        usuario_seguro = st.session_state.get(
+            "usuario",
+            "Desconocido"
+        )
 
-        st.write(f"👤 **{usuario_seguro}**")
-        st.caption(f"Rol: {rol_seguro}")
+        if isinstance(usuario_seguro, dict):
+            usuario_seguro = str(
+                usuario_seguro.get(
+                    "nombre_completo",
+                    "Desconocido"
+                )
+            )
+
+        st.write(
+            f"👤 **{usuario_seguro}**"
+        )
+
+        st.caption(
+            f"Rol: {rol_seguro}"
+        )
+
         st.divider()
 
         # Obtener los módulos permitidos de forma 100% segura
-        modulos_permitidos = PERMISOS.get(rol_seguro, ["Inicio"])
+        modulos_permitidos = PERMISOS.get(
+            rol_seguro,
+            ["Inicio"]
+        )
 
         # Generar los botones de navegación
-        opcion_seleccionada = st.radio("Navegación", modulos_permitidos)
+        opcion_seleccionada = st.radio(
+            "Navegación",
+            modulos_permitidos
+        )
 
         st.divider()
-        if st.button("🚪 Cerrar Sesión", use_container_width=True):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]  # Limpieza absoluta
+
+        if st.button(
+            "🚪 Cerrar Sesión",
+            use_container_width=True
+        ):
+
+            for key in list(
+                st.session_state.keys()
+            ):
+                del st.session_state[key]
+
             st.rerun()
 
     # Ejecutar el módulo seleccionado
-    enrutador(opcion_seleccionada)
+    enrutador(
+        opcion_seleccionada
+    )
