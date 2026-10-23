@@ -1,4 +1,5 @@
 import io
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -95,6 +96,8 @@ def inicializar_tipos_producto():
 # =========================================================
 
 def formatear_peso(cantidad_bytes):
+    if cantidad_bytes is None:
+        return "0 B"
 
     if cantidad_bytes < 1024:
         return f"{cantidad_bytes} B"
@@ -105,21 +108,39 @@ def formatear_peso(cantidad_bytes):
     return f"{cantidad_bytes / (1024 * 1024):.2f} MB"
 
 
+def convertir_lista_texto(texto):
+    """
+    Convierte:
+    'Rojo, blanco, negro'
+
+    en:
+    ['Rojo', 'blanco', 'negro']
+    """
+
+    if not texto:
+        return []
+
+    return [
+        elemento.strip()
+        for elemento in texto.split(",")
+        if elemento.strip()
+    ]
+
+
 # =========================================================
 # MARCA YUNPAR
 # =========================================================
 
 def aplicar_marca_yunpar(imagen):
     """
-    Aplica el patrón YUNPAR sobre la imagen
-    preparada para el catálogo.
+    Aplica el patrón YUNPAR sobre la imagen preparada
+    para el catálogo.
     """
 
     if not FONDO_CATALOGO.exists():
         return imagen
 
     try:
-
         marca = Image.open(
             FONDO_CATALOGO
         ).convert("RGBA")
@@ -163,10 +184,8 @@ def aplicar_marca_yunpar(imagen):
         )
 
     except Exception as e:
-
         st.warning(
-            f"⚠️ No se pudo aplicar "
-            f"la marca YUNPAR: {e}"
+            f"⚠️ No se pudo aplicar la marca YUNPAR: {e}"
         )
 
         return imagen
@@ -180,27 +199,24 @@ def optimizar_imagen(archivo):
     """
     Convierte una imagen para el catálogo:
 
-    - Corrige orientación
-    - Mantiene proporción
-    - La coloca en formato 4:5
-    - 1080 x 1350 px
-    - Aplica marca YUNPAR
-    - Convierte a WEBP
-    - Calidad 85 %
+    - Corrige orientación.
+    - Mantiene proporción.
+    - La coloca en formato 4:5.
+    - 1080 x 1350 px.
+    - Aplica marca YUNPAR.
+    - Convierte a WEBP.
+    - Calidad 85 %.
     """
 
     if archivo is None:
         return None
 
     try:
-
         # -------------------------------------------------
         # LEER ARCHIVO ORIGINAL
         # -------------------------------------------------
 
-        bytes_originales = (
-            archivo.getvalue()
-        )
+        bytes_originales = archivo.getvalue()
 
         peso_original = len(
             bytes_originales
@@ -229,7 +245,6 @@ def optimizar_imagen(archivo):
             imagen.mode in ("RGBA", "LA")
             or "transparency" in imagen.info
         ):
-
             imagen_rgba = imagen.convert(
                 "RGBA"
             )
@@ -254,7 +269,6 @@ def optimizar_imagen(archivo):
             )
 
         else:
-
             imagen = imagen.convert(
                 "RGB"
             )
@@ -355,7 +369,6 @@ def optimizar_imagen(archivo):
         )
 
         if peso_original > 0:
-
             ahorro = (
                 1
                 - (
@@ -363,46 +376,24 @@ def optimizar_imagen(archivo):
                     / peso_original
                 )
             ) * 100
-
         else:
-
             ahorro = 0
 
         return {
-
-            "bytes":
-                bytes_optimizados,
-
-            "peso_original":
-                peso_original,
-
-            "peso_optimizado":
-                peso_optimizado,
-
-            "ahorro":
-                ahorro,
-
-            "ancho_original":
-                ancho_original,
-
-            "alto_original":
-                alto_original,
-
-            "ancho_final":
-                ANCHO_CATALOGO,
-
-            "alto_final":
-                ALTO_CATALOGO,
-
-            "formato":
-                "WEBP",
+            "bytes": bytes_optimizados,
+            "peso_original": peso_original,
+            "peso_optimizado": peso_optimizado,
+            "ahorro": ahorro,
+            "ancho_original": ancho_original,
+            "alto_original": alto_original,
+            "ancho_final": ANCHO_CATALOGO,
+            "alto_final": ALTO_CATALOGO,
+            "formato": "WEBP",
         }
 
     except Exception as e:
-
         st.error(
-            f"❌ No se pudo procesar "
-            f"la imagen: {e}"
+            f"❌ No se pudo procesar la imagen: {e}"
         )
 
         return None
@@ -413,7 +404,6 @@ def optimizar_imagen(archivo):
 # =========================================================
 
 def inicializar_galeria(orden_id):
-
     slots_key = (
         f"catalogo_slots_{orden_id}"
     )
@@ -423,13 +413,11 @@ def inicializar_galeria(orden_id):
     )
 
     if slots_key not in st.session_state:
-
         st.session_state[
             slots_key
         ] = [0]
 
     if contador_key not in st.session_state:
-
         st.session_state[
             contador_key
         ] = 1
@@ -443,7 +431,6 @@ def inicializar_galeria(orden_id):
 def agregar_imagen_galeria(
     orden_id,
 ):
-
     slots_key, contador_key = (
         inicializar_galeria(
             orden_id
@@ -469,7 +456,6 @@ def eliminar_imagen_galeria(
     orden_id,
     uid,
 ):
-
     slots_key, _ = (
         inicializar_galeria(
             orden_id
@@ -484,24 +470,18 @@ def eliminar_imagen_galeria(
         uid in slots
         and len(slots) > 1
     ):
-
         slots.remove(
             uid
         )
 
     claves = [
-
         f"galeria_archivo_{orden_id}_{uid}",
-
         f"galeria_tipo_{orden_id}_{uid}",
-
         f"galeria_nombre_{orden_id}_{uid}",
     ]
 
     for clave in claves:
-
         if clave in st.session_state:
-
             del st.session_state[
                 clave
             ]
@@ -512,7 +492,6 @@ def mover_imagen_galeria(
     uid,
     direccion,
 ):
-
     slots_key, _ = (
         inicializar_galeria(
             orden_id
@@ -541,7 +520,6 @@ def mover_imagen_galeria(
             slots
         )
     ):
-
         return
 
     (
@@ -561,7 +539,6 @@ def mostrar_imagen_procesada(
     archivo,
     clave_descarga,
 ):
-
     if archivo is None:
         return None
 
@@ -609,9 +586,7 @@ def mostrar_imagen_procesada(
 
     col3.metric(
         "Ahorro",
-        (
-            f"{resultado['ahorro']:.1f}%"
-        ),
+        f"{resultado['ahorro']:.1f}%",
     )
 
     st.caption(
@@ -639,6 +614,305 @@ def mostrar_imagen_procesada(
 
 
 # =========================================================
+# GUARDAR BORRADOR TEMPORAL
+# =========================================================
+
+def guardar_borrador_temporal(
+    orden_actual,
+    tipo_producto,
+    categoria,
+    titulo,
+    descripcion,
+    colores,
+    etiquetas,
+    confirmado,
+    resultados_galeria,
+):
+    """
+    Guarda un borrador únicamente en st.session_state.
+
+    NO escribe nada en Supabase.
+    NO sube archivos a Storage.
+    """
+
+    imagenes = []
+
+    for item in resultados_galeria:
+        resultado = item[
+            "resultado"
+        ]
+
+        imagenes.append(
+            {
+                "uid": item["uid"],
+                "orden": item["orden"],
+                "nombre": item["nombre"],
+                "es_portada": (
+                    item["orden"] == 1
+                ),
+                "bytes": resultado["bytes"],
+                "peso_original": (
+                    resultado[
+                        "peso_original"
+                    ]
+                ),
+                "peso_optimizado": (
+                    resultado[
+                        "peso_optimizado"
+                    ]
+                ),
+                "ahorro": (
+                    resultado[
+                        "ahorro"
+                    ]
+                ),
+                "ancho": (
+                    resultado[
+                        "ancho_final"
+                    ]
+                ),
+                "alto": (
+                    resultado[
+                        "alto_final"
+                    ]
+                ),
+                "formato": (
+                    resultado[
+                        "formato"
+                    ]
+                ),
+            }
+        )
+
+    borrador = {
+        "estado": "BORRADOR",
+        "modo": "PRUEBA",
+        "orden_id": orden_actual.get(
+            "ID"
+        ),
+        "codigo_orden": orden_actual.get(
+            "Código"
+        ),
+        "cliente": orden_actual.get(
+            "Cliente"
+        ),
+        "arte_original": orden_actual.get(
+            "Arte"
+        ),
+        "tipo_producto": tipo_producto,
+        "categoria": categoria,
+        "titulo": titulo.strip(),
+        "descripcion": descripcion.strip(),
+        "colores": convertir_lista_texto(
+            colores
+        ),
+        "etiquetas": convertir_lista_texto(
+            etiquetas
+        ),
+        "relacion_confirmada": confirmado,
+        "cantidad_imagenes": len(
+            imagenes
+        ),
+        "imagenes": imagenes,
+        "guardado_en": datetime.now().strftime(
+            "%d/%m/%Y %H:%M:%S"
+        ),
+    }
+
+    clave = (
+        f"catalogo_borrador_"
+        f"{orden_actual.get('ID')}"
+    )
+
+    st.session_state[
+        clave
+    ] = borrador
+
+    st.session_state[
+        "catalogo_ultimo_borrador"
+    ] = borrador
+
+    return borrador
+
+
+# =========================================================
+# MOSTRAR BORRADOR TEMPORAL
+# =========================================================
+
+def mostrar_borrador_temporal(
+    borrador,
+):
+    if not borrador:
+        return
+
+    st.divider()
+
+    st.markdown(
+        "## 🧪 Borrador temporal guardado"
+    )
+
+    st.success(
+        "✅ El borrador está guardado solamente "
+        "en esta sesión de Streamlit. "
+        "No se envió nada a Supabase."
+    )
+
+    col1, col2, col3 = (
+        st.columns(3)
+    )
+
+    col1.metric(
+        "Estado",
+        borrador.get(
+            "estado",
+            "BORRADOR",
+        ),
+    )
+
+    col2.metric(
+        "Imágenes",
+        borrador.get(
+            "cantidad_imagenes",
+            0,
+        ),
+    )
+
+    col3.metric(
+        "Modo",
+        borrador.get(
+            "modo",
+            "PRUEBA",
+        ),
+    )
+
+    st.caption(
+        f"🕒 Guardado: "
+        f"{borrador.get('guardado_en', '')}"
+    )
+
+    with st.expander(
+        "👀 Ver resumen del borrador",
+        expanded=False,
+    ):
+        st.write(
+            f"**Orden:** "
+            f"{borrador.get('codigo_orden', '')}"
+        )
+
+        st.write(
+            f"**Cliente:** "
+            f"{borrador.get('cliente', '')}"
+        )
+
+        st.write(
+            f"**Tipo de producto:** "
+            f"{borrador.get('tipo_producto', '')}"
+        )
+
+        st.write(
+            f"**Categoría:** "
+            f"{borrador.get('categoria', '')}"
+        )
+
+        st.write(
+            f"**Título:** "
+            f"{borrador.get('titulo', '')}"
+        )
+
+        st.write(
+            f"**Descripción:** "
+            f"{borrador.get('descripcion', '')}"
+        )
+
+        colores = borrador.get(
+            "colores",
+            [],
+        )
+
+        etiquetas = borrador.get(
+            "etiquetas",
+            [],
+        )
+
+        st.write(
+            "**Colores:** "
+            + (
+                ", ".join(colores)
+                if colores
+                else "Sin definir"
+            )
+        )
+
+        st.write(
+            "**Etiquetas:** "
+            + (
+                ", ".join(etiquetas)
+                if etiquetas
+                else "Sin definir"
+            )
+        )
+
+        if borrador.get(
+            "imagenes"
+        ):
+            st.markdown(
+                "### 📸 Imágenes guardadas"
+            )
+
+            resumen_imagenes = []
+
+            for imagen in borrador[
+                "imagenes"
+            ]:
+                resumen_imagenes.append(
+                    {
+                        "Orden": (
+                            imagen[
+                                "orden"
+                            ]
+                        ),
+                        "Nombre": (
+                            imagen[
+                                "nombre"
+                            ]
+                        ),
+                        "Portada": (
+                            "Sí"
+                            if imagen[
+                                "es_portada"
+                            ]
+                            else "No"
+                        ),
+                        "Peso": (
+                            formatear_peso(
+                                imagen[
+                                    "peso_optimizado"
+                                ]
+                            )
+                        ),
+                        "Resolución": (
+                            f"{imagen['ancho']} "
+                            f"× "
+                            f"{imagen['alto']}"
+                        ),
+                        "Formato": (
+                            imagen[
+                                "formato"
+                            ]
+                        ),
+                    }
+                )
+
+            st.dataframe(
+                pd.DataFrame(
+                    resumen_imagenes
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+
+# =========================================================
 # FUNCIÓN PRINCIPAL
 # =========================================================
 
@@ -661,18 +935,17 @@ def render(supabase):
 
     st.info(
         "🔒 Modo de prueba: "
-        "todavía no se guarda ni publica "
+        "los borradores se guardan únicamente "
+        "durante la sesión actual. "
+        "Todavía no se escribe ni se publica "
         "información en Supabase."
     )
 
     if FONDO_CATALOGO.exists():
-
         st.success(
             "✅ Marca YUNPAR disponible."
         )
-
     else:
-
         st.warning(
             "⚠️ No se encontró "
             "assets/fondo-yunpar.png."
@@ -718,7 +991,6 @@ def render(supabase):
     # =====================================================
 
     try:
-
         respuesta = (
             supabase
             .table("ordenes")
@@ -746,10 +1018,8 @@ def render(supabase):
         )
 
     except Exception as e:
-
         st.error(
-            f"❌ Error consultando "
-            f"órdenes: {e}"
+            f"❌ Error consultando órdenes: {e}"
         )
 
         return
@@ -761,7 +1031,6 @@ def render(supabase):
     ordenes_con_arte = []
 
     for orden in ordenes:
-
         arte = (
             orden.get(
                 "url_arte_final"
@@ -777,7 +1046,6 @@ def render(supabase):
                 arte
             ).strip()
         ):
-
             orden[
                 "arte_catalogo"
             ] = arte
@@ -787,7 +1055,6 @@ def render(supabase):
             )
 
     if not ordenes_con_arte:
-
         st.warning(
             "No existen órdenes "
             "con arte final."
@@ -815,9 +1082,7 @@ def render(supabase):
     mapa_clientes = {}
 
     if ids_clientes:
-
         try:
-
             clientes = (
                 supabase
                 .table("clientes")
@@ -835,7 +1100,6 @@ def render(supabase):
                 clientes.data
                 or []
             ):
-
                 mapa_clientes[
                     cliente["id"]
                 ] = (
@@ -846,7 +1110,6 @@ def render(supabase):
                 )
 
         except Exception:
-
             pass
 
     # =====================================================
@@ -856,7 +1119,6 @@ def render(supabase):
     registros = []
 
     for orden in ordenes_con_arte:
-
         fecha_original = (
             orden.get(
                 "created_at"
@@ -866,9 +1128,7 @@ def render(supabase):
         fecha = ""
 
         if fecha_original:
-
             try:
-
                 fecha = (
                     pd.to_datetime(
                         fecha_original
@@ -879,50 +1139,47 @@ def render(supabase):
                 )
 
             except Exception:
-
                 fecha = str(
                     fecha_original
                 )
 
         registros.append(
             {
-
-                "ID":
-                    orden["id"],
-
-                "Código":
+                "ID": (
+                    orden["id"]
+                ),
+                "Código": (
                     orden.get(
                         "codigo_orden",
                         "",
-                    ),
-
-                "Cliente":
+                    )
+                ),
+                "Cliente": (
                     mapa_clientes.get(
                         orden.get(
                             "cliente_id"
                         ),
                         "Consumidor Final",
-                    ),
-
-                "Estado":
+                    )
+                ),
+                "Estado": (
                     orden.get(
                         "estado",
                         "",
-                    ),
-
-                "Fecha":
-                    fecha,
-
-                "Arte":
+                    )
+                ),
+                "Fecha": fecha,
+                "Arte": (
                     orden.get(
                         "arte_catalogo"
-                    ),
-
-                "Observaciones":
+                    )
+                ),
+                "Observaciones": (
                     orden.get(
                         "observaciones_generales",
                         "",
-                    ),
+                    )
+                ),
             }
         )
 
@@ -935,7 +1192,6 @@ def render(supabase):
     # =====================================================
 
     if buscar_codigo:
-
         df = df[
             df["Código"]
             .astype(str)
@@ -947,7 +1203,6 @@ def render(supabase):
         ]
 
     if buscar_cliente:
-
         df = df[
             df["Cliente"]
             .astype(str)
@@ -963,7 +1218,6 @@ def render(supabase):
     )
 
     if df.empty:
-
         st.warning(
             "No se encontraron resultados."
         )
@@ -994,7 +1248,6 @@ def render(supabase):
     # =====================================================
 
     if evento.selection.rows:
-
         indice = (
             evento.selection.rows[
                 0
@@ -1016,7 +1269,6 @@ def render(supabase):
     )
 
     if not orden_actual:
-
         st.info(
             "👆 Selecciona un arte "
             "para comenzar."
@@ -1048,7 +1300,6 @@ def render(supabase):
     )
 
     with col_arte:
-
         arte_url = (
             orden_actual.get(
                 "Arte"
@@ -1056,23 +1307,19 @@ def render(supabase):
         )
 
         if arte_url:
-
             try:
-
                 st.image(
                     arte_url,
                     use_container_width=True,
                 )
 
             except Exception:
-
                 st.warning(
                     "No se pudo mostrar "
                     "el arte seleccionado."
                 )
 
     with col_info:
-
         st.markdown(
             f"""
 ### {orden_actual["Código"]}
@@ -1098,7 +1345,6 @@ def render(supabase):
         )
 
         if observaciones:
-
             st.info(
                 observaciones
             )
@@ -1127,7 +1373,6 @@ def render(supabase):
     )
 
     with col_tipo1:
-
         tipo_producto = st.selectbox(
             "Tipo de producto",
             tipos_producto,
@@ -1138,7 +1383,6 @@ def render(supabase):
         )
 
     with col_tipo2:
-
         categoria = st.selectbox(
             "Categoría",
             CATEGORIAS,
@@ -1156,7 +1400,6 @@ def render(supabase):
         "➕ Agregar nuevo tipo de producto",
         expanded=False,
     ):
-
         st.caption(
             "Si YUNPAR comienza a trabajar "
             "con un producto nuevo, "
@@ -1183,20 +1426,17 @@ def render(supabase):
             ),
             use_container_width=True,
         ):
-
             nuevo_tipo_limpio = (
                 nuevo_tipo.strip()
             )
 
             if not nuevo_tipo_limpio:
-
                 st.warning(
                     "⚠️ Escribe el nombre "
                     "del producto."
                 )
 
             else:
-
                 ya_existe = any(
                     producto.lower()
                     == nuevo_tipo_limpio.lower()
@@ -1207,14 +1447,12 @@ def render(supabase):
                 )
 
                 if ya_existe:
-
                     st.warning(
                         "⚠️ Ese tipo de producto "
                         "ya existe."
                     )
 
                 else:
-
                     st.session_state[
                         "catalogo_tipos_producto"
                     ].append(
@@ -1260,14 +1498,12 @@ def render(supabase):
     for posicion, uid in enumerate(
         slots
     ):
-
         with st.container(
             border=True
         ):
-
-            # =================================================
+            # =============================================
             # CABECERA DE IMAGEN
-            # =================================================
+            # =============================================
 
             cab1, cab2 = (
                 st.columns(
@@ -1279,24 +1515,20 @@ def render(supabase):
             )
 
             if posicion == 0:
-
                 cab1.markdown(
                     "### ⭐ Portada del carrusel"
                 )
-
             else:
-
                 cab1.markdown(
                     f"### Imagen en posición "
                     f"{posicion + 1}"
                 )
 
-            # =================================================
+            # =============================================
             # BOTONES MOVER / ELIMINAR
-            # =================================================
+            # =============================================
 
             with cab2:
-
                 b1, b2, b3 = (
                     st.columns(3)
                 )
@@ -1316,7 +1548,6 @@ def render(supabase):
                         "hacia arriba"
                     ),
                 ):
-
                     mover_imagen_galeria(
                         orden_id,
                         uid,
@@ -1341,7 +1572,6 @@ def render(supabase):
                         "hacia abajo"
                     ),
                 ):
-
                     mover_imagen_galeria(
                         orden_id,
                         uid,
@@ -1364,7 +1594,6 @@ def render(supabase):
                         "Eliminar imagen"
                     ),
                 ):
-
                     eliminar_imagen_galeria(
                         orden_id,
                         uid,
@@ -1372,9 +1601,9 @@ def render(supabase):
 
                     st.rerun()
 
-            # =================================================
+            # =============================================
             # IMAGEN + CONFIGURACIÓN
-            # =================================================
+            # =============================================
 
             col_img, col_config = (
                 st.columns(
@@ -1385,18 +1614,14 @@ def render(supabase):
                 )
             )
 
-            # -------------------------------------------------
+            # ---------------------------------------------
             # CONFIGURACIÓN
-            # -------------------------------------------------
+            # ---------------------------------------------
 
             with col_config:
-
                 if posicion == 0:
-
                     indice_default = 0
-
                 else:
-
                     indice_default = 5
 
                 tipo_imagen = (
@@ -1413,7 +1638,6 @@ def render(supabase):
                 )
 
                 if tipo_imagen == "Otro":
-
                     nombre_imagen = (
                         st.text_input(
                             "Nombre personalizado",
@@ -1427,26 +1651,22 @@ def render(supabase):
                             ),
                         )
                     )
-
                 else:
-
                     nombre_imagen = (
                         tipo_imagen
                     )
 
                 if posicion == 0:
-
                     st.info(
                         "⭐ Esta imagen aparecerá "
                         "primero en el catálogo."
                     )
 
-            # -------------------------------------------------
+            # ---------------------------------------------
             # SUBIR IMAGEN
-            # -------------------------------------------------
+            # ---------------------------------------------
 
             with col_img:
-
                 archivo = (
                     st.file_uploader(
                         "Subir imagen",
@@ -1475,33 +1695,26 @@ def render(supabase):
                     )
                 )
 
-            # -------------------------------------------------
+            # ---------------------------------------------
             # GUARDAR RESULTADO TEMPORAL
-            # -------------------------------------------------
+            # ---------------------------------------------
 
             if resultado:
-
                 resultados_galeria.append(
                     {
-
-                        "uid":
-                            uid,
-
-                        "orden":
-                            posicion + 1,
-
-                        "nombre":
-                            (
-                                nombre_imagen
-                                if nombre_imagen
-                                else (
-                                    f"Imagen "
-                                    f"{posicion + 1}"
-                                )
-                            ),
-
-                        "resultado":
-                            resultado,
+                        "uid": uid,
+                        "orden": (
+                            posicion + 1
+                        ),
+                        "nombre": (
+                            nombre_imagen
+                            if nombre_imagen
+                            else (
+                                f"Imagen "
+                                f"{posicion + 1}"
+                            )
+                        ),
+                        "resultado": resultado,
                     }
                 )
 
@@ -1517,7 +1730,6 @@ def render(supabase):
             f"{orden_id}"
         ),
     ):
-
         agregar_imagen_galeria(
             orden_id
         )
@@ -1547,14 +1759,11 @@ def render(supabase):
     )
 
     if confirmado:
-
         st.success(
             "✅ Imágenes confirmadas "
             "para este arte."
         )
-
     else:
-
         st.warning(
             "⚠️ Confirma que las imágenes "
             "corresponden al arte seleccionado."
@@ -1694,7 +1903,6 @@ def render(supabase):
     # =====================================================
 
     if resultados_galeria:
-
         st.markdown(
             "### 📸 Galería preparada"
         )
@@ -1704,55 +1912,46 @@ def render(supabase):
         for item in (
             resultados_galeria
         ):
-
             resultado = item[
                 "resultado"
             ]
 
             resumen.append(
                 {
-
-                    "Orden":
+                    "Orden": (
                         item[
                             "orden"
-                        ],
-
-                    "Nombre":
+                        ]
+                    ),
+                    "Nombre": (
                         item[
                             "nombre"
-                        ],
-
-                    "Original":
+                        ]
+                    ),
+                    "Original": (
                         formatear_peso(
                             resultado[
                                 "peso_original"
                             ]
-                        ),
-
-                    "Optimizada":
+                        )
+                    ),
+                    "Optimizada": (
                         formatear_peso(
                             resultado[
                                 "peso_optimizado"
                             ]
-                        ),
-
-                    "Ahorro":
-                        (
-                            f"{resultado['ahorro']:.1f}%"
-                        ),
-
-                    "Resolución":
-                        (
-                            f"{ANCHO_CATALOGO} "
-                            f"× "
-                            f"{ALTO_CATALOGO}"
-                        ),
-
-                    "Formato":
-                        "WEBP",
-
-                    "Marca":
-                        "YUNPAR",
+                        )
+                    ),
+                    "Ahorro": (
+                        f"{resultado['ahorro']:.1f}%"
+                    ),
+                    "Resolución": (
+                        f"{ANCHO_CATALOGO} "
+                        f"× "
+                        f"{ALTO_CATALOGO}"
+                    ),
+                    "Formato": "WEBP",
+                    "Marca": "YUNPAR",
                 }
             )
 
@@ -1775,32 +1974,31 @@ def render(supabase):
     )
 
     if listo:
-
         st.success(
-            "✅ Esta publicación está lista "
-            "para conectarse posteriormente "
-            "con Supabase."
+            "✅ Esta publicación está lista. "
+            "Puedes guardar el borrador de prueba."
         )
-
     else:
-
         st.warning(
             "⚠️ Aún faltan datos o imágenes "
             "para completar la publicación."
         )
 
     # =====================================================
-    # BOTONES FUTUROS
+    # BOTONES
     # =====================================================
 
     col_b1, col_b2 = (
         st.columns(2)
     )
 
-    col_b1.button(
+    guardar = col_b1.button(
         "💾 Guardar borrador",
-        disabled=True,
         use_container_width=True,
+        key=(
+            f"guardar_borrador_"
+            f"{orden_id}"
+        ),
     )
 
     col_b2.button(
@@ -1808,11 +2006,68 @@ def render(supabase):
         disabled=True,
         use_container_width=True,
         type="primary",
+        key=(
+            f"publicar_catalogo_"
+            f"{orden_id}"
+        ),
     )
 
-    st.caption(
-        "Los botones siguen desactivados "
-        "porque todavía estamos definiendo "
-        "el flujo antes de crear las tablas "
-        "definitivas en Supabase."
+    # =====================================================
+    # GUARDAR BORRADOR TEMPORAL
+    # =====================================================
+
+    if guardar:
+        borrador = (
+            guardar_borrador_temporal(
+                orden_actual=orden_actual,
+                tipo_producto=tipo_producto,
+                categoria=categoria,
+                titulo=titulo,
+                descripcion=descripcion,
+                colores=colores,
+                etiquetas=etiquetas,
+                confirmado=confirmado,
+                resultados_galeria=(
+                    resultados_galeria
+                ),
+            )
+        )
+
+        st.success(
+            "✅ Borrador guardado "
+            "correctamente en modo de prueba."
+        )
+
+        st.info(
+            "🔒 No se modificó Supabase "
+            "y no se subieron archivos reales."
+        )
+
+    # =====================================================
+    # MOSTRAR BORRADOR EXISTENTE
+    # =====================================================
+
+    clave_borrador = (
+        f"catalogo_borrador_"
+        f"{orden_actual.get('ID')}"
     )
+
+    borrador_actual = (
+        st.session_state.get(
+            clave_borrador
+        )
+    )
+
+    if borrador_actual:
+        mostrar_borrador_temporal(
+            borrador_actual
+        )
+
+    st.caption(
+        "💡 Guardar borrador funciona únicamente "
+        "en memoria para probar el flujo. "
+        "Publicar continuará bloqueado hasta "
+        "conectar de forma segura la base de datos "
+        "y Supabase Storage."
+    )
+    
