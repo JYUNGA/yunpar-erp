@@ -17,6 +17,7 @@ from modulos import (
     finanzas,
     reportes,
     disenador,
+    catalogo_disenos,
     impresion,
     usuarios,
     ventas,
@@ -113,6 +114,7 @@ PERMISOS = {
         "Facturación",
         "Reportes",
         "Diseño",
+        "Catálogo de Diseños",
         "Impresión",
         "Caja y Finanzas",
         "Asistencia y Nómina",
@@ -136,7 +138,7 @@ PERMISOS = {
         "Polines",
     ],
     "IMPRESION": ["Inicio", "Impresión", "Reportes"],
-    "DISEÑADOR": ["Inicio", "Diseño"],
+    "DISEÑADOR": ["Inicio", "Diseño", "Catálogo de Diseños",],
 }
 
 
@@ -347,6 +349,8 @@ def enrutador(opcion):
         reportes.render_modulo_reportes(supabase)
     elif opcion == "Diseño":
         disenador.render(supabase)
+    elif opcion == "Catálogo de Diseños":
+        catalogo_disenos.render(supabase)    
     elif opcion == "Impresión":
         impresion.render(supabase)
     elif opcion == "Caja y Finanzas":
