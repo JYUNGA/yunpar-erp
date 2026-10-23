@@ -13,36 +13,35 @@ from supabase import create_client
 
 BUCKET_CATALOGO = "catalogo-disenos"
 
+LIMITE_ARCHIVO_BYTES = 2 * 1024 * 1024
+
+MIME_PERMITIDOS = [
+    "image/webp",
+]
+
+
 # =========================================================
 # SEGURO PRINCIPAL
 # =========================================================
 #
-# FALSE:
-# No permite subir, borrar ni modificar archivos reales.
+# False:
+# No permite crear bucket, subir, modificar ni borrar.
 #
-# TRUE:
-# Permitirá operaciones reales SOLO si existe una
-# configuración administrativa válida en secrets.toml.
+# True:
+# Permitirá operaciones reales solamente si existe
+# la configuración [supabase_admin] en secrets.toml.
 #
-# POR AHORA NO CAMBIAR.
+# NO CAMBIAR TODAVÍA.
 # =========================================================
 
 MODO_SUPABASE_REAL = False
 
 
 # =========================================================
-# ESTADO DEL STORAGE
+# ESTADO GENERAL
 # =========================================================
 
 def storage_real_habilitado() -> bool:
-    """
-    Indica si las operaciones reales de Storage
-    están habilitadas.
-
-    Por ahora siempre será False mientras
-    MODO_SUPABASE_REAL permanezca desactivado.
-    """
-
     return MODO_SUPABASE_REAL is True
 
 
@@ -52,20 +51,16 @@ def storage_real_habilitado() -> bool:
 
 def obtener_cliente_admin():
     """
-    Obtiene un cliente administrativo independiente
-    del cliente ANON que utiliza actualmente el ERP.
+    Crea un cliente administrativo independiente
+    del cliente ANON utilizado normalmente por el ERP.
 
-    IMPORTANTE:
-    Esta función solamente se utilizará cuando
-    MODO_SUPABASE_REAL sea True.
-
-    La configuración futura será:
+    Configuración futura esperada:
 
     [supabase_admin]
     url = "..."
     key = "..."
 
-    NO crear esa configuración todavía.
+    NO agregar todavía esa sección.
     """
 
     if not MODO_SUPABASE_REAL:
@@ -112,11 +107,9 @@ def limpiar_texto_ruta(
     texto: str,
 ) -> str:
     """
-    Convierte texto normal en un texto seguro
-    para utilizar dentro de rutas.
+    Convierte texto a una forma segura para rutas.
 
     Ejemplo:
-
     'Uniforme Pasaje Armado'
     ->
     'uniforme-pasaje-armado'
@@ -156,22 +149,12 @@ def limpiar_texto_ruta(
 
 
 # =========================================================
-# GENERAR NOMBRE DEL ARCHIVO
+# GENERAR NOMBRE DE ARCHIVO
 # =========================================================
 
 def generar_nombre_archivo(
     posicion: int,
 ) -> str:
-    """
-    Genera nombres internos estables.
-
-    Ejemplos:
-
-    1  -> 01.webp
-    2  -> 02.webp
-    10 -> 10.webp
-    """
-
     posicion = int(
         posicion
     )
@@ -187,49 +170,36 @@ def generar_nombre_archivo(
 
 
 # =========================================================
-# GENERAR CARPETA DE PUBLICACIÓN
+# GENERAR CARPETA DEL DISEÑO
 # =========================================================
 
 def generar_carpeta_publicacion(
     diseno_id,
 ) -> str:
-    """
-    Genera la carpeta interna del diseño.
-
-    Ejemplo:
-
-    diseno_id = 25
-
-    Resultado:
-    diseno-25
-    """
-
     if diseno_id is None:
         raise ValueError(
             "El diseño debe tener un ID."
         )
 
+    identificador = limpiar_texto_ruta(
+        str(
+            diseno_id
+        )
+    )
+
     return (
-        f"diseno-{diseno_id}"
+        f"diseno-{identificador}"
     )
 
 
 # =========================================================
-# GENERAR RUTA STORAGE
+# GENERAR RUTA DE STORAGE
 # =========================================================
 
 def generar_ruta_storage(
     diseno_id,
     posicion: int,
 ) -> str:
-    """
-    Genera la ruta completa dentro del bucket.
-
-    Ejemplo:
-
-    diseno-25/01.webp
-    """
-
     carpeta = (
         generar_carpeta_publicacion(
             diseno_id
@@ -248,17 +218,12 @@ def generar_ruta_storage(
 
 
 # =========================================================
-# VALIDAR BYTES DE IMAGEN
+# VALIDAR IMAGEN
 # =========================================================
 
 def validar_imagen_bytes(
     imagen_bytes: bytes,
 ):
-    """
-    Comprueba que exista contenido antes
-    de intentar una futura subida.
-    """
-
     if not imagen_bytes:
         raise ValueError(
             "No se recibieron bytes de imagen."
@@ -272,9 +237,19 @@ def validar_imagen_bytes(
             "La imagen debe estar en formato bytes."
         )
 
+    peso = len(
+        imagen_bytes
+    )
+
+    if peso > LIMITE_ARCHIVO_BYTES:
+        raise ValueError(
+            "La imagen supera el límite permitido "
+            "de 2 MB."
+        )
+
 
 # =========================================================
-# PREPARAR SUBIDA
+# PREPARAR SUBIDA SIN SUBIR
 # =========================================================
 
 def preparar_subida(
@@ -283,12 +258,9 @@ def preparar_subida(
     imagen_bytes: bytes,
 ) -> dict:
     """
-    Prepara la información que posteriormente
-    se utilizará para subir una imagen.
+    Prepara la información de una futura subida.
 
-    ESTA FUNCIÓN NO SUBE NADA.
-
-    Es segura para utilizar durante las pruebas.
+    NO modifica Supabase.
     """
 
     validar_imagen_bytes(
@@ -301,13 +273,181 @@ def preparar_subida(
     )
 
     return {
-        "bucket": BUCKET_CATALOGO,
+        "bucket": (
+            BUCKET_CATALOGO
+        ),
         "ruta": ruta,
         "bytes": imagen_bytes,
         "peso_bytes": len(
             imagen_bytes
         ),
-        "content_type": "image/webp",
+        "content_type": (
+            "image/webp"
+        ),
+    }
+
+
+# =========================================================
+# LEER NOMBRE / ID DE UN BUCKET
+# =========================================================
+
+def obtener_identificador_bucket(
+    bucket,
+):
+    """
+    Soporta respuestas tipo dict u objeto
+    según la versión del cliente Supabase.
+    """
+
+    if isinstance(
+        bucket,
+        dict,
+    ):
+        return (
+            bucket.get("id")
+            or bucket.get("name")
+        )
+
+    identificador = getattr(
+        bucket,
+        "id",
+        None,
+    )
+
+    if identificador:
+        return identificador
+
+    return getattr(
+        bucket,
+        "name",
+        None,
+    )
+
+
+# =========================================================
+# COMPROBAR SI EL BUCKET EXISTE
+# =========================================================
+
+def bucket_catalogo_existe(
+    cliente_admin=None,
+) -> bool:
+    """
+    Consulta si ya existe catalogo-disenos.
+
+    Requiere modo real.
+    """
+
+    if not MODO_SUPABASE_REAL:
+        raise RuntimeError(
+            "Operación bloqueada: "
+            "MODO_SUPABASE_REAL está desactivado."
+        )
+
+    if cliente_admin is None:
+        cliente_admin = (
+            obtener_cliente_admin()
+        )
+
+    buckets = (
+        cliente_admin
+        .storage
+        .list_buckets()
+    )
+
+    for bucket in (
+        buckets
+        or []
+    ):
+        identificador = (
+            obtener_identificador_bucket(
+                bucket
+            )
+        )
+
+        if identificador == BUCKET_CATALOGO:
+            return True
+
+    return False
+
+
+# =========================================================
+# CREAR / CONFIGURAR BUCKET
+# =========================================================
+
+def asegurar_bucket_catalogo():
+    """
+    Crea o actualiza el bucket del catálogo.
+
+    Configuración:
+
+    - Público.
+    - Solo WEBP.
+    - Máximo 2 MB por archivo.
+
+    Mientras MODO_SUPABASE_REAL sea False,
+    NO realiza ninguna operación.
+    """
+
+    if not MODO_SUPABASE_REAL:
+        return {
+            "ok": False,
+            "estado": "BLOQUEADO",
+            "bucket": BUCKET_CATALOGO,
+            "mensaje": (
+                "Modo Supabase real desactivado. "
+                "No se creó ni modificó el bucket."
+            ),
+        }
+
+    cliente_admin = (
+        obtener_cliente_admin()
+    )
+
+    opciones = {
+        "public": True,
+        "allowed_mime_types": (
+            MIME_PERMITIDOS
+        ),
+        "file_size_limit": (
+            LIMITE_ARCHIVO_BYTES
+        ),
+    }
+
+    existe = bucket_catalogo_existe(
+        cliente_admin
+    )
+
+    if existe:
+        respuesta = (
+            cliente_admin
+            .storage
+            .update_bucket(
+                BUCKET_CATALOGO,
+                options=opciones,
+            )
+        )
+
+        return {
+            "ok": True,
+            "estado": "ACTUALIZADO",
+            "bucket": BUCKET_CATALOGO,
+            "respuesta": respuesta,
+        }
+
+    respuesta = (
+        cliente_admin
+        .storage
+        .create_bucket(
+            BUCKET_CATALOGO,
+            options=opciones,
+        )
+    )
+
+    return {
+        "ok": True,
+        "estado": "CREADO",
+        "bucket": BUCKET_CATALOGO,
+        "respuesta": respuesta,
     }
 
 
@@ -322,11 +462,9 @@ def subir_imagen_catalogo(
     sobrescribir: bool = False,
 ):
     """
-    Sube realmente una imagen optimizada
-    al Storage del catálogo.
+    Sube una imagen WEBP real.
 
-    Mientras MODO_SUPABASE_REAL sea False,
-    esta función se bloqueará automáticamente.
+    BLOQUEADA mientras MODO_SUPABASE_REAL=False.
     """
 
     if not MODO_SUPABASE_REAL:
@@ -358,18 +496,17 @@ def subir_imagen_catalogo(
             path=ruta,
             file=imagen_bytes,
             file_options={
-                "content-type":
-                    "image/webp",
-
-                "cache-control":
-                    "3600",
-
-                "upsert":
-                    (
-                        "true"
-                        if sobrescribir
-                        else "false"
-                    ),
+                "content-type": (
+                    "image/webp"
+                ),
+                "cache-control": (
+                    "3600"
+                ),
+                "upsert": (
+                    "true"
+                    if sobrescribir
+                    else "false"
+                ),
             },
         )
     )
@@ -391,10 +528,7 @@ def obtener_url_publica(
     ruta: str,
 ):
     """
-    Obtiene la URL pública de una imagen.
-
-    Solamente podrá utilizarse cuando
-    el modo real esté habilitado.
+    Obtiene la URL pública de una imagen ya subida.
     """
 
     if not MODO_SUPABASE_REAL:
@@ -431,13 +565,6 @@ def obtener_url_publica(
 def eliminar_imagen_catalogo(
     ruta: str,
 ):
-    """
-    Elimina una imagen real del bucket.
-
-    Está bloqueada mientras el modo real
-    se encuentre desactivado.
-    """
-
     if not MODO_SUPABASE_REAL:
         raise RuntimeError(
             "Operación bloqueada: "
@@ -474,13 +601,6 @@ def eliminar_imagen_catalogo(
 def eliminar_imagenes_catalogo(
     rutas: list[str],
 ):
-    """
-    Elimina varias imágenes reales.
-
-    Está bloqueada mientras el modo real
-    permanezca desactivado.
-    """
-
     if not MODO_SUPABASE_REAL:
         raise RuntimeError(
             "Operación bloqueada: "
@@ -513,7 +633,7 @@ def eliminar_imagenes_catalogo(
 
 
 # =========================================================
-# CONSTRUIR REGISTRO PARA catalogo_imagenes
+# CONSTRUIR REGISTRO PARA BD
 # =========================================================
 
 def construir_registro_imagen(
@@ -526,13 +646,6 @@ def construir_registro_imagen(
     ancho: int | None = None,
     alto: int | None = None,
 ) -> dict:
-    """
-    Construye los datos que posteriormente
-    se guardarán en catalogo_imagenes.
-
-    No escribe nada en la base.
-    """
-
     return {
         "diseno_id": (
             diseno_id
@@ -562,7 +675,7 @@ def construir_registro_imagen(
 
 
 # =========================================================
-# CONSTRUIR REGISTRO DE PRUEBA
+# CONSTRUIR REGISTRO SIMULADO
 # =========================================================
 
 def construir_registro_prueba(
@@ -574,11 +687,10 @@ def construir_registro_prueba(
     alto: int = 1350,
 ) -> dict:
     """
-    Simula cómo quedaría una imagen preparada
-    para Supabase.
+    Simula exactamente cómo quedaría el registro
+    de una imagen en la base.
 
     NO sube nada.
-    NO modifica la base.
     """
 
     subida = preparar_subida(
@@ -591,28 +703,23 @@ def construir_registro_prueba(
         diseno_id=diseno_id,
         nombre_visible=nombre_visible,
         posicion=posicion,
-        ruta_storage=subida[
-            "ruta"
-        ],
+        ruta_storage=(
+            subida["ruta"]
+        ),
         url_publica=None,
-        peso_bytes=subida[
-            "peso_bytes"
-        ],
+        peso_bytes=(
+            subida["peso_bytes"]
+        ),
         ancho=ancho,
         alto=alto,
     )
 
 
 # =========================================================
-# INFORMACIÓN DEL MODO ACTUAL
+# ESTADO DEL STORAGE
 # =========================================================
 
 def obtener_estado_storage() -> dict:
-    """
-    Devuelve información simple para mostrar
-    en el módulo del catálogo.
-    """
-
     return {
         "modo_real": (
             MODO_SUPABASE_REAL
@@ -627,5 +734,14 @@ def obtener_estado_storage() -> dict:
         ),
         "puede_escribir": (
             MODO_SUPABASE_REAL
+        ),
+        "bucket_publico": True,
+        "mime_permitido": (
+            "image/webp"
+        ),
+        "limite_mb": (
+            LIMITE_ARCHIVO_BYTES
+            / 1024
+            / 1024
         ),
     }
