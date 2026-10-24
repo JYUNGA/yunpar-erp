@@ -5,8 +5,16 @@ import google.generativeai as genai
 import io
 import json
 import re
+import urllib.request
 
 from datetime import datetime
+
+try:
+    from google import genai as genai_imagen
+    from google.genai import types as genai_types
+except Exception:
+    genai_imagen = None
+    genai_types = None
 
 import pytz
 
@@ -994,6 +1002,386 @@ def mostrar_estado_proceso(
 
 
 # =========================================================
+# APOYO PARA GENERACIÓN AUTOMÁTICA DE MOCKUPS
+# =========================================================
+
+MODELO_IMAGEN_CATALOGO = "gemini-nano-banana-2.1"
+
+
+def descargar_imagen_desde_url(url):
+
+    if not url:
+        raise RuntimeError(
+            "La orden no tiene un arte disponible."
+        )
+
+    try:
+        solicitud = urllib.request.Request(
+            str(url),
+            headers={
+                "User-Agent": "Mozilla/5.0"
+            },
+        )
+
+        with urllib.request.urlopen(
+            solicitud,
+            timeout=30,
+        ) as respuesta:
+            datos = respuesta.read()
+
+        imagen = Image.open(
+            io.BytesIO(datos)
+        )
+
+        return imagen.convert("RGB")
+
+    except Exception as e:
+        raise RuntimeError(
+            f"No se pudo descargar el arte original: {e}"
+        )
+
+
+def imagen_a_archivo_virtual(
+    imagen,
+    nombre,
+):
+
+    memoria = io.BytesIO()
+
+    imagen.convert("RGB").save(
+        memoria,
+        format="PNG",
+        optimize=True,
+    )
+
+    memoria.seek(0)
+    memoria.name = nombre
+
+    return memoria
+
+
+def generar_mockup_automatico(
+    arte_url,
+    presentacion,
+    vista,
+    referencia_frente=None,
+):
+
+    if genai_imagen is None or genai_types is None:
+        raise RuntimeError(
+            "No está disponible la librería google-genai. "
+            "Ejecuta la instalación que ya utilizamos para "
+            "la prueba de generación automática."
+        )
+
+    try:
+        api_key = st.secrets[
+            "gemini"
+        ][
+            "api_key"
+        ]
+    except Exception:
+        raise RuntimeError(
+            "No se encontró la API key de Gemini "
+            "en secrets.toml."
+        )
+
+    arte_original = descargar_imagen_desde_url(
+        arte_url
+    )
+
+    prompt = generar_prompt_mockup(
+        presentacion,
+        vista,
+    )
+
+    if (
+        vista != "Frente"
+        and referencia_frente is not None
+    ):
+
+        referencia = archivo_a_imagen(
+            referencia_frente
+        )
+
+        prompt += """
+
+REFERENCIA VISUAL ADICIONAL:
+La segunda imagen adjunta es el mockup FRONTAL ya aprobado de esta misma prenda.
+Úsala para conservar exactamente el mismo tipo de camiseta, cuello, mangas,
+proporciones, volumen, iluminación, fondo y estilo fotográfico.
+Cambia únicamente el ángulo para producir la vista solicitada.
+No copies el frente cuando se solicita espalda o lateral.
+"""
+
+        contenidos = [
+            prompt,
+            arte_original,
+            referencia,
+        ]
+
+    else:
+
+        contenidos = [
+            prompt,
+            arte_original,
+        ]
+
+    cliente = genai_imagen.Client(
+        api_key=api_key
+    )
+
+    respuesta = cliente.models.generate_content(
+        model=MODELO_IMAGEN_CATALOGO,
+        contents=contenidos,
+        config=genai_types.GenerateContentConfig(
+            response_modalities=["IMAGE"],
+            image_config=genai_types.ImageConfig(
+                aspect_ratio="4:5",
+                image_size="1K",
+            ),
+        ),
+    )
+
+    imagen_generada = None
+
+    for parte in (
+        getattr(respuesta, "parts", None)
+        or []
+    ):
+
+        if getattr(
+            parte,
+            "thought",
+            False,
+        ):
+            continue
+
+        try:
+            imagen_parte = parte.as_image()
+        except Exception:
+            imagen_parte = None
+
+        if imagen_parte is not None:
+            imagen_generada = imagen_parte
+
+    if imagen_generada is None:
+        raise RuntimeError(
+            "Gemini respondió, pero no devolvió "
+            "una imagen utilizable."
+        )
+
+    nombres = {
+        "Frente": "frente_ia.png",
+        "Espalda": "espalda_ia.png",
+        "Lateral derecho": "derecha_ia.png",
+        "Lateral izquierdo": "izquierda_ia.png",
+    }
+
+    return imagen_a_archivo_virtual(
+        imagen_generada,
+        nombres.get(
+            vista,
+            "mockup_ia.png",
+        ),
+    )
+
+
+def limpiar_memoria_mockups_orden(
+    orden_id,
+):
+
+    claves = [
+        f"preparacion_ia_resultado_{orden_id}_frente",
+        f"preparacion_ia_resultado_{orden_id}_espalda",
+        f"preparacion_ia_resultado_{orden_id}_lateral_derecho",
+        f"preparacion_ia_resultado_{orden_id}_lateral_izquierdo",
+        f"preparacion_ia_aprobado_{orden_id}_frente",
+        f"preparacion_ia_aprobado_{orden_id}_espalda",
+        f"preparacion_ia_aprobado_{orden_id}_lateral_derecho",
+        f"preparacion_ia_aprobado_{orden_id}_lateral_izquierdo",
+        f"preparacion_frente_{orden_id}",
+        f"preparacion_espalda_{orden_id}",
+        f"preparacion_derecha_{orden_id}",
+        f"preparacion_izquierda_{orden_id}",
+    ]
+
+    for clave in claves:
+        st.session_state.pop(
+            clave,
+            None,
+        )
+
+
+def mostrar_generador_ia_vista(
+    orden_id,
+    arte_url,
+    presentacion,
+    vista,
+    slug,
+    referencia_frente=None,
+    habilitado=True,
+):
+
+    clave_resultado = (
+        f"preparacion_ia_resultado_"
+        f"{orden_id}_{slug}"
+    )
+
+    clave_aprobado = (
+        f"preparacion_ia_aprobado_"
+        f"{orden_id}_{slug}"
+    )
+
+    resultado = st.session_state.get(
+        clave_resultado
+    )
+
+    aprobado = bool(
+        st.session_state.get(
+            clave_aprobado,
+            False,
+        )
+    )
+
+    st.markdown(
+        f"#### {vista}"
+    )
+
+    if not habilitado:
+
+        st.info(
+            "Primero aprueba la vista frontal. "
+            "Después esta vista utilizará ese frente "
+            "como referencia para mantener consistencia."
+        )
+
+        return None, False
+
+    etiqueta_boton = (
+        f"🔄 Regenerar {vista.lower()}"
+        if resultado is not None
+        else f"🤖 Generar {vista.lower()} con IA"
+    )
+
+    if st.button(
+        etiqueta_boton,
+        type="primary",
+        width="stretch",
+        key=(
+            f"preparacion_generar_ia_"
+            f"{orden_id}_{slug}"
+        ),
+    ):
+
+        try:
+            with st.spinner(
+                f"Gemini está generando {vista.lower()}..."
+            ):
+
+                nuevo_resultado = (
+                    generar_mockup_automatico(
+                        arte_url=arte_url,
+                        presentacion=presentacion,
+                        vista=vista,
+                        referencia_frente=(
+                            referencia_frente
+                            if vista != "Frente"
+                            else None
+                        ),
+                    )
+                )
+
+            # Reemplaza la generación anterior para no acumular memoria.
+            st.session_state[
+                clave_resultado
+            ] = nuevo_resultado
+
+            st.session_state[
+                clave_aprobado
+            ] = False
+
+            st.rerun()
+
+        except Exception as e:
+            st.error(
+                f"❌ No se pudo generar {vista.lower()}: {e}"
+            )
+
+    resultado = st.session_state.get(
+        clave_resultado
+    )
+
+    aprobado = bool(
+        st.session_state.get(
+            clave_aprobado,
+            False,
+        )
+    )
+
+    if resultado is None:
+        st.caption(
+            "Todavía no se ha generado esta vista."
+        )
+        return None, False
+
+    st.image(
+        resultado,
+        caption=f"Resultado IA - {vista}",
+        width=420,
+    )
+
+    if aprobado:
+        st.success(
+            f"✅ {vista} aprobado."
+        )
+
+    col_aprobar, col_descartar = st.columns(2)
+
+    with col_aprobar:
+
+        if st.button(
+            f"✅ Aprobar {vista.lower()}",
+            disabled=aprobado,
+            width="stretch",
+            key=(
+                f"preparacion_aprobar_ia_"
+                f"{orden_id}_{slug}"
+            ),
+        ):
+
+            st.session_state[
+                clave_aprobado
+            ] = True
+
+            st.rerun()
+
+    with col_descartar:
+
+        if st.button(
+            f"🗑️ Descartar {vista.lower()}",
+            width="stretch",
+            key=(
+                f"preparacion_descartar_ia_"
+                f"{orden_id}_{slug}"
+            ),
+        ):
+
+            st.session_state.pop(
+                clave_resultado,
+                None,
+            )
+
+            st.session_state[
+                clave_aprobado
+            ] = False
+
+            st.rerun()
+
+    return resultado, aprobado
+
+
+# =========================================================
 # PASO 2
 # GENERACIÓN Y CARGA DE MOCKUPS
 # =========================================================
@@ -1031,13 +1419,11 @@ def mostrar_paso_2(
     )
 
     with col_info1:
-
         st.write(
             f"**Orden seleccionada:** {codigo}"
         )
 
     with col_info2:
-
         st.write(
             f"**Cliente:** "
             f"{orden_actual.get('Cliente', '')}"
@@ -1054,28 +1440,64 @@ def mostrar_paso_2(
     metodo = st.radio(
         "¿Cómo se generarán los mockups?",
         [
-            "Canva IA - Manual",
-            "Otra herramienta IA - Manual",
+            "🤖 IA integrada YUNPAR",
+            "🎨 Canva IA / Manual",
         ],
         horizontal=True,
         key=f"preparacion_metodo_{orden_id}",
     )
 
-    if metodo == "Canva IA - Manual":
+    clave_metodo_anterior = (
+        f"preparacion_metodo_anterior_{orden_id}"
+    )
+
+    metodo_anterior = st.session_state.get(
+        clave_metodo_anterior
+    )
+
+    if (
+        metodo_anterior is not None
+        and metodo_anterior != metodo
+    ):
+
+        limpiar_memoria_mockups_orden(
+            orden_id
+        )
+
+        st.session_state.pop(
+            "preparacion_catalogo_mockups",
+            None,
+        )
+
+        st.session_state.pop(
+            "preparacion_catalogo_clasificacion",
+            None,
+        )
+
+        st.session_state.pop(
+            "preparacion_catalogo_paquete_final",
+            None,
+        )
+
+    st.session_state[
+        clave_metodo_anterior
+    ] = metodo
+
+    if metodo == "🤖 IA integrada YUNPAR":
 
         st.info(
-            "✅ Método actual recomendado. "
-            "El operador visualiza o descarga el arte, "
-            "utiliza el prompt oficial y genera "
-            "cada vista por separado en Canva IA."
+            "🤖 Gemini generará las vistas UNA POR UNA. "
+            "El operador debe revisar y aprobar cada imagen. "
+            "Regenerar reemplaza la imagen anterior para "
+            "no acumular archivos innecesarios en memoria."
         )
 
     else:
 
         st.info(
-            "Puedes utilizar otra herramienta de IA, "
-            "pero debes mantener las reglas visuales "
-            "establecidas por YUNPAR."
+            "🎨 Método manual. Puedes usar Canva IA u otra "
+            "herramienta externa, siguiendo el prompt oficial, "
+            "y después cargar las cuatro vistas aquí."
         )
 
     # =====================================================
@@ -1112,48 +1534,47 @@ def mostrar_paso_2(
     ):
 
         if arte_url:
-
             try:
-
                 st.image(
                     arte_url,
                     width="stretch",
                 )
-
             except Exception:
-
                 st.warning(
                     "No se pudo mostrar "
                     "la vista previa del arte."
                 )
-
                 st.write(
                     arte_url
                 )
-
         else:
-
             st.warning(
                 "No existe una URL de arte "
                 "para esta orden."
             )
 
     # =====================================================
-    # PROMPT
+    # PROMPT OFICIAL
     # =====================================================
 
     st.markdown(
         "### 🧠 Prompt oficial YUNPAR"
     )
 
-    st.caption(
-        "Genera las imágenes UNA POR UNA. "
-        "Nunca pidas las cuatro vistas "
-        "en una misma generación."
-    )
+    if metodo == "🤖 IA integrada YUNPAR":
+        st.caption(
+            "La IA integrada utiliza automáticamente "
+            "este mismo estándar visual. Puedes revisarlo aquí."
+        )
+    else:
+        st.caption(
+            "Genera las imágenes UNA POR UNA. "
+            "Nunca pidas las cuatro vistas "
+            "en una misma generación."
+        )
 
     vista_prompt = st.selectbox(
-        "Vista que deseas generar",
+        "Vista que deseas revisar en el prompt",
         [
             "Frente",
             "Espalda",
@@ -1168,16 +1589,21 @@ def mostrar_paso_2(
         vista_prompt,
     )
 
-    st.code(
-        prompt_actual,
-        language="text",
-    )
+    with st.expander(
+        "📋 Ver prompt utilizado",
+        expanded=(
+            metodo == "🎨 Canva IA / Manual"
+        ),
+    ):
+        st.code(
+            prompt_actual,
+            language="text",
+        )
 
     st.info(
-        "💡 Para obtener consistencia, usa primero "
-        "el arte original como referencia. "
-        "Después utiliza el primer mockup aprobado "
-        "como referencia visual para las siguientes vistas."
+        "💡 Para mantener consistencia, la vista frontal "
+        "aprobada se utilizará como referencia visual "
+        "para espalda y laterales en el modo automático."
     )
 
     # =====================================================
@@ -1209,145 +1635,205 @@ def mostrar_paso_2(
         )
 
     # =====================================================
-    # CARGA DE MOCKUPS
+    # DOS CAMINOS: IA AUTOMÁTICA O MANUAL
     # =====================================================
 
     st.divider()
 
-    st.markdown(
-        "### 📤 Cargar mockups generados"
-    )
+    frente = None
+    espalda = None
+    lateral_derecho = None
+    lateral_izquierdo = None
 
-    st.caption(
-        "Carga cada imagen en su posición correspondiente."
-    )
+    aprobados_ia = {
+        "frente": False,
+        "espalda": False,
+        "lateral_derecho": False,
+        "lateral_izquierdo": False,
+    }
 
-    # =====================================================
-    # FRENTE
-    # =====================================================
+    if metodo == "🤖 IA integrada YUNPAR":
 
-    st.markdown(
-        "#### 1. Frente ⭐"
-    )
-
-    frente = st.file_uploader(
-        "Subir vista frontal",
-        type=[
-            "png",
-            "jpg",
-            "jpeg",
-            "webp",
-        ],
-        key=f"preparacion_frente_{orden_id}",
-    )
-
-    if frente is not None:
-
-        st.image(
-            frente,
-            caption="Frente",
-            width=350,
+        st.markdown(
+            "### 🤖 Generar mockups dentro de YUNPAR"
         )
 
-        st.success(
-            "✅ Frente cargado."
+        st.caption(
+            "Genera, revisa y aprueba cada vista. "
+            "Solo se mantiene una generación por vista en memoria."
         )
 
-    # =====================================================
-    # ESPALDA
-    # =====================================================
-
-    st.markdown(
-        "#### 2. Espalda"
-    )
-
-    espalda = st.file_uploader(
-        "Subir vista posterior",
-        type=[
-            "png",
-            "jpg",
-            "jpeg",
-            "webp",
-        ],
-        key=f"preparacion_espalda_{orden_id}",
-    )
-
-    if espalda is not None:
-
-        st.image(
-            espalda,
-            caption="Espalda",
-            width=350,
+        frente, aprobados_ia["frente"] = (
+            mostrar_generador_ia_vista(
+                orden_id=orden_id,
+                arte_url=arte_url,
+                presentacion=presentacion,
+                vista="Frente",
+                slug="frente",
+                habilitado=True,
+            )
         )
 
-        st.success(
-            "✅ Espalda cargada."
+        st.divider()
+
+        espalda, aprobados_ia["espalda"] = (
+            mostrar_generador_ia_vista(
+                orden_id=orden_id,
+                arte_url=arte_url,
+                presentacion=presentacion,
+                vista="Espalda",
+                slug="espalda",
+                referencia_frente=frente,
+                habilitado=(
+                    aprobados_ia["frente"]
+                ),
+            )
         )
 
-    # =====================================================
-    # LATERAL DERECHO
-    # =====================================================
+        st.divider()
 
-    st.markdown(
-        "#### 3. Lateral derecho"
-    )
-
-    lateral_derecho = st.file_uploader(
-        "Subir lateral derecho",
-        type=[
-            "png",
-            "jpg",
-            "jpeg",
-            "webp",
-        ],
-        key=f"preparacion_derecha_{orden_id}",
-    )
-
-    if lateral_derecho is not None:
-
-        st.image(
-            lateral_derecho,
-            caption="Lateral derecho",
-            width=350,
+        lateral_derecho, aprobados_ia["lateral_derecho"] = (
+            mostrar_generador_ia_vista(
+                orden_id=orden_id,
+                arte_url=arte_url,
+                presentacion=presentacion,
+                vista="Lateral derecho",
+                slug="lateral_derecho",
+                referencia_frente=frente,
+                habilitado=(
+                    aprobados_ia["frente"]
+                ),
+            )
         )
 
-        st.success(
-            "✅ Lateral derecho cargado."
+        st.divider()
+
+        lateral_izquierdo, aprobados_ia["lateral_izquierdo"] = (
+            mostrar_generador_ia_vista(
+                orden_id=orden_id,
+                arte_url=arte_url,
+                presentacion=presentacion,
+                vista="Lateral izquierdo",
+                slug="lateral_izquierdo",
+                referencia_frente=frente,
+                habilitado=(
+                    aprobados_ia["frente"]
+                ),
+            )
         )
 
-    # =====================================================
-    # LATERAL IZQUIERDO
-    # =====================================================
+    else:
 
-    st.markdown(
-        "#### 4. Lateral izquierdo"
-    )
-
-    lateral_izquierdo = st.file_uploader(
-        "Subir lateral izquierdo",
-        type=[
-            "png",
-            "jpg",
-            "jpeg",
-            "webp",
-        ],
-        key=f"preparacion_izquierda_{orden_id}",
-    )
-
-    if lateral_izquierdo is not None:
-
-        st.image(
-            lateral_izquierdo,
-            caption="Lateral izquierdo",
-            width=350,
+        st.markdown(
+            "### 📤 Cargar mockups generados"
         )
 
-        st.success(
-            "✅ Lateral izquierdo cargado."
+        st.caption(
+            "Carga cada imagen en su posición correspondiente."
         )
 
+        st.markdown(
+            "#### 1. Frente ⭐"
+        )
+
+        frente = st.file_uploader(
+            "Subir vista frontal",
+            type=[
+                "png",
+                "jpg",
+                "jpeg",
+                "webp",
+            ],
+            key=f"preparacion_frente_{orden_id}",
+        )
+
+        if frente is not None:
+            st.image(
+                frente,
+                caption="Frente",
+                width=350,
+            )
+            st.success(
+                "✅ Frente cargado."
+            )
+
+        st.markdown(
+            "#### 2. Espalda"
+        )
+
+        espalda = st.file_uploader(
+            "Subir vista posterior",
+            type=[
+                "png",
+                "jpg",
+                "jpeg",
+                "webp",
+            ],
+            key=f"preparacion_espalda_{orden_id}",
+        )
+
+        if espalda is not None:
+            st.image(
+                espalda,
+                caption="Espalda",
+                width=350,
+            )
+            st.success(
+                "✅ Espalda cargada."
+            )
+
+        st.markdown(
+            "#### 3. Lateral derecho"
+        )
+
+        lateral_derecho = st.file_uploader(
+            "Subir lateral derecho",
+            type=[
+                "png",
+                "jpg",
+                "jpeg",
+                "webp",
+            ],
+            key=f"preparacion_derecha_{orden_id}",
+        )
+
+        if lateral_derecho is not None:
+            st.image(
+                lateral_derecho,
+                caption="Lateral derecho",
+                width=350,
+            )
+            st.success(
+                "✅ Lateral derecho cargado."
+            )
+
+        st.markdown(
+            "#### 4. Lateral izquierdo"
+        )
+
+        lateral_izquierdo = st.file_uploader(
+            "Subir lateral izquierdo",
+            type=[
+                "png",
+                "jpg",
+                "jpeg",
+                "webp",
+            ],
+            key=f"preparacion_izquierda_{orden_id}",
+        )
+
+        if lateral_izquierdo is not None:
+            st.image(
+                lateral_izquierdo,
+                caption="Lateral izquierdo",
+                width=350,
+            )
+            st.success(
+                "✅ Lateral izquierdo cargado."
+            )
+
     # =====================================================
-    # ESTADO
+    # ESTADO COMÚN
     # =====================================================
 
     st.divider()
@@ -1357,63 +1843,72 @@ def mostrar_paso_2(
     )
 
     mockups = [
-
         {
             "Vista": "Frente",
             "Archivo": frente,
+            "Aprobado": (
+                aprobados_ia["frente"]
+                if metodo == "🤖 IA integrada YUNPAR"
+                else frente is not None
+            ),
         },
-
         {
             "Vista": "Espalda",
             "Archivo": espalda,
+            "Aprobado": (
+                aprobados_ia["espalda"]
+                if metodo == "🤖 IA integrada YUNPAR"
+                else espalda is not None
+            ),
         },
-
         {
             "Vista": "Lateral derecho",
             "Archivo": lateral_derecho,
+            "Aprobado": (
+                aprobados_ia["lateral_derecho"]
+                if metodo == "🤖 IA integrada YUNPAR"
+                else lateral_derecho is not None
+            ),
         },
-
         {
             "Vista": "Lateral izquierdo",
             "Archivo": lateral_izquierdo,
+            "Aprobado": (
+                aprobados_ia["lateral_izquierdo"]
+                if metodo == "🤖 IA integrada YUNPAR"
+                else lateral_izquierdo is not None
+            ),
         },
     ]
 
     registros_estado = []
-
-    cantidad_cargados = 0
+    cantidad_listos = 0
 
     for mockup in mockups:
 
-        archivo = mockup[
-            "Archivo"
-        ]
+        archivo = mockup["Archivo"]
+        aprobado = mockup["Aprobado"]
 
-        cargado = (
-            archivo is not None
-        )
+        if archivo is not None and aprobado:
+            cantidad_listos += 1
 
-        if cargado:
-
-            cantidad_cargados += 1
+        if archivo is None:
+            estado = "⏳ Pendiente"
+        elif aprobado:
+            estado = "✅ Aprobado"
+        else:
+            estado = "🔎 Por revisar"
 
         registros_estado.append(
             {
-
-                "Vista": (
-                    mockup[
-                        "Vista"
-                    ]
-                ),
-
-                "Estado": (
-                    "✅ Cargado"
-                    if cargado
-                    else "⏳ Pendiente"
-                ),
-
+                "Vista": mockup["Vista"],
+                "Estado": estado,
                 "Archivo": (
-                    archivo.name
+                    getattr(
+                        archivo,
+                        "name",
+                        "imagen_generada.png",
+                    )
                     if archivo is not None
                     else ""
                 ),
@@ -1428,27 +1923,20 @@ def mostrar_paso_2(
         width="stretch",
     )
 
-    progreso = (
-        cantidad_cargados
-        / 4
-    )
-
-    st.progress(
-        progreso
-    )
+    progreso = cantidad_listos / 4
+    st.progress(progreso)
 
     st.caption(
-        f"{cantidad_cargados} de 4 "
-        f"mockups cargados."
+        f"{cantidad_listos} de 4 mockups listos."
     )
 
-    todas_cargadas = (
-        cantidad_cargados == 4
+    todas_listas = (
+        cantidad_listos == 4
     )
 
     confirmado = False
 
-    if todas_cargadas:
+    if todas_listas:
 
         confirmado = st.checkbox(
             (
@@ -1460,68 +1948,45 @@ def mostrar_paso_2(
         )
 
         if confirmado:
-
             st.success(
-                "✅ Mockups confirmados "
-                "para este arte."
+                "✅ Mockups confirmados para este arte."
             )
-
         else:
-
             st.warning(
-                "⚠️ Revisa las cuatro imágenes "
-                "y confirma su relación con "
-                "el arte original."
+                "⚠️ Revisa las cuatro imágenes y confirma "
+                "su relación con el arte original."
             )
 
     else:
 
-        st.info(
-            "Carga las cuatro vistas para "
-            "completar el Paso 2."
-        )
+        if metodo == "🤖 IA integrada YUNPAR":
+            st.info(
+                "Genera y aprueba las cuatro vistas "
+                "para completar el Paso 2."
+            )
+        else:
+            st.info(
+                "Carga las cuatro vistas para "
+                "completar el Paso 2."
+            )
 
     paso2_completo = (
-        todas_cargadas
+        todas_listas
         and confirmado
     )
 
+    datos_mockups = {
+        "orden_id": orden_id,
+        "codigo": codigo,
+        "presentacion": presentacion,
+        "metodo": metodo,
+        "frente": frente,
+        "espalda": espalda,
+        "lateral_derecho": lateral_derecho,
+        "lateral_izquierdo": lateral_izquierdo,
+    }
+
     if paso2_completo:
-
-        datos_mockups = {
-
-            "orden_id": (
-                orden_id
-            ),
-
-            "codigo": (
-                codigo
-            ),
-
-            "presentacion": (
-                presentacion
-            ),
-
-            "metodo": (
-                metodo
-            ),
-
-            "frente": (
-                frente
-            ),
-
-            "espalda": (
-                espalda
-            ),
-
-            "lateral_derecho": (
-                lateral_derecho
-            ),
-
-            "lateral_izquierdo": (
-                lateral_izquierdo
-            ),
-        }
 
         st.session_state[
             "preparacion_catalogo_mockups"
@@ -1529,7 +1994,7 @@ def mostrar_paso_2(
 
         st.success(
             "✅ PASO 2 COMPLETADO. "
-            "Las cuatro vistas están cargadas "
+            "Las cuatro vistas están listas "
             "y confirmadas."
         )
 
@@ -1541,32 +2006,7 @@ def mostrar_paso_2(
 
     return (
         paso2_completo,
-        {
-
-            "presentacion": (
-                presentacion
-            ),
-
-            "metodo": (
-                metodo
-            ),
-
-            "frente": (
-                frente
-            ),
-
-            "espalda": (
-                espalda
-            ),
-
-            "lateral_derecho": (
-                lateral_derecho
-            ),
-
-            "lateral_izquierdo": (
-                lateral_izquierdo
-            ),
-        },
+        datos_mockups,
     )
 
 
@@ -3015,6 +3455,10 @@ def render(
             st.session_state.pop(
                 "preparacion_catalogo_paquete_final",
                 None,
+            )
+
+            limpiar_memoria_mockups_orden(
+                id_anterior
             )
 
         st.session_state[
