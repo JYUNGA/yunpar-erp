@@ -3,6 +3,7 @@ import pandas as pd
 import datetime
 import time
 import uuid
+import hashlib
 import requests
 import os
 from config import OrderState, transicionar_estado
@@ -125,6 +126,286 @@ def borrar_img(supabase, url_archivo):
     except Exception as e:
         print(f"No se pudo borrar imagen antigua: {e}")
 
+def _codigo_storage_seguro(codigo_orden):
+    """Convierte el código de orden en un nombre de carpeta seguro para Storage."""
+    codigo = str(codigo_orden or "SIN-CODIGO").strip()
+    return "".join(
+        caracter if caracter.isalnum() or caracter in ["-", "_"] else "_"
+        for caracter in codigo
+    )
+
+
+def _huella_bytes(contenido):
+    """Devuelve una huella SHA-256 estable para detectar archivos idénticos."""
+    return hashlib.sha256(contenido).hexdigest()
+
+
+def _huella_url_publica(url):
+    """Calcula la huella de un arte ya guardado usando su URL pública."""
+    if not url:
+        return None
+
+    try:
+        respuesta = requests.get(str(url), timeout=12)
+        respuesta.raise_for_status()
+        return _huella_bytes(respuesta.content)
+    except Exception:
+        return None
+
+
+def construir_indice_huellas_artes(supabase, codigo_orden, url_principal=None):
+    """
+    Construye un índice {sha256: arte} con los archivos ya existentes.
+    Esto permite reutilizar el mismo archivo si el operador vuelve a seleccionarlo,
+    en vez de subir una copia nueva a Storage.
+    """
+    indice = {}
+    artes = listar_artes_multiple_orden(supabase, codigo_orden)
+
+    # Incluimos el principal aunque sea un archivo antiguo fuera de artes_orden.
+    if url_principal and not any(
+        str(a.get("url", "")).strip() == str(url_principal).strip()
+        for a in artes
+    ):
+        artes.append(
+            {
+                "nombre": "arte_principal_actual",
+                "ruta": None,
+                "url": url_principal,
+            }
+        )
+
+    for arte in artes:
+        huella = _huella_url_publica(arte.get("url"))
+        if huella and huella not in indice:
+            indice[huella] = arte
+
+    return indice
+
+
+def subir_arte_multiple_orden(
+    supabase,
+    archivo_streamlit,
+    codigo_orden,
+    huellas_existentes=None,
+):
+    """
+    Sube un arte a la carpeta propia de la orden sin crear duplicados exactos.
+    Si el mismo archivo ya existe, reutiliza su URL y NO vuelve a subirlo.
+    No modifica por sí sola el campo ordenes.url_arte_final.
+    """
+    try:
+        file_bytes = archivo_streamlit.getvalue()
+        huella = _huella_bytes(file_bytes)
+
+        # Si ya existe exactamente el mismo contenido, reutilizamos ese arte.
+        if huellas_existentes is not None and huella in huellas_existentes:
+            existente = huellas_existentes[huella]
+            return {
+                "ruta": existente.get("ruta"),
+                "url": existente.get("url"),
+                "nombre_original": archivo_streamlit.name,
+                "huella": huella,
+                "duplicado": True,
+            }
+
+        _, extension = os.path.splitext(archivo_streamlit.name)
+        extension = extension.lower()
+        if not extension:
+            extension = ".jpg"
+
+        content_type = "image/jpeg"
+        if extension == ".pdf":
+            content_type = "application/pdf"
+        elif extension == ".png":
+            content_type = "image/png"
+
+        codigo_seguro = _codigo_storage_seguro(codigo_orden)
+        carpeta = f"artes_orden/{codigo_seguro}"
+
+        # Nombre estable por contenido: el mismo archivo siempre apunta a la misma ruta.
+        nombre_archivo = f"{huella[:32]}{extension}"
+        ruta = f"{carpeta}/{nombre_archivo}"
+
+        # Blindaje adicional: si ya existe esa ruta, reutilizamos su URL.
+        try:
+            archivos_carpeta = (
+                supabase.storage.from_("ordenes_produccion").list(carpeta) or []
+            )
+            nombres_existentes = {
+                item.get("name")
+                for item in archivos_carpeta
+                if isinstance(item, dict) and item.get("name")
+            }
+        except Exception:
+            nombres_existentes = set()
+
+        if nombre_archivo not in nombres_existentes:
+            supabase.storage.from_("ordenes_produccion").upload(
+                path=ruta,
+                file=file_bytes,
+                file_options={"content-type": content_type},
+            )
+
+        url = supabase.storage.from_("ordenes_produccion").get_public_url(ruta)
+
+        resultado = {
+            "ruta": ruta,
+            "url": url,
+            "nombre_original": archivo_streamlit.name,
+            "huella": huella,
+            "duplicado": nombre_archivo in nombres_existentes,
+        }
+
+        if huellas_existentes is not None:
+            huellas_existentes[huella] = resultado
+
+        return resultado
+
+    except Exception as e:
+        st.error(f"Error subiendo {archivo_streamlit.name}: {e}")
+        return None
+
+
+def listar_artes_multiple_orden(supabase, codigo_orden):
+    """
+    Lista los archivos adicionales guardados en Storage para una orden.
+    Si la política de Storage no permite listar, devuelve una lista vacía.
+    """
+    try:
+        codigo_seguro = _codigo_storage_seguro(codigo_orden)
+        carpeta = f"artes_orden/{codigo_seguro}"
+
+        archivos = supabase.storage.from_("ordenes_produccion").list(carpeta) or []
+        resultado = []
+
+        for archivo in archivos:
+            nombre = archivo.get("name") if isinstance(archivo, dict) else None
+            if not nombre:
+                continue
+
+            extension = os.path.splitext(nombre)[1].lower()
+            if extension not in [".jpg", ".jpeg", ".png", ".pdf"]:
+                continue
+
+            ruta = f"{carpeta}/{nombre}"
+            url = supabase.storage.from_("ordenes_produccion").get_public_url(ruta)
+
+            resultado.append(
+                {
+                    "nombre": nombre,
+                    "ruta": ruta,
+                    "url": url,
+                }
+            )
+
+        resultado.sort(key=lambda x: x["nombre"])
+        return resultado
+
+    except Exception:
+        return []
+
+
+def borrar_arte_multiple_orden(supabase, ruta_archivo):
+    """Elimina únicamente un arte adicional de la carpeta de la orden."""
+    if not ruta_archivo:
+        return False
+
+    try:
+        supabase.storage.from_("ordenes_produccion").remove([ruta_archivo])
+        return True
+    except Exception as e:
+        st.error(f"No se pudo eliminar el archivo: {e}")
+        return False
+
+
+
+def obtener_decision_catalogo_orden(supabase, orden_id):
+    """
+    Lee la decisión comercial de catálogo de una orden.
+
+    Retorna disponible=False si los campos todavía no existen en Supabase.
+    Así esta versión de Producción NO rompe el ERP antes de ejecutar la
+    migración sql/catalogo_permiso_ordenes.sql.
+    """
+    try:
+        respuesta = (
+            supabase.table("ordenes")
+            .select(
+                "catalogo_permitido, "
+                "catalogo_motivo, "
+                "catalogo_decidido_en"
+            )
+            .eq("id", orden_id)
+            .limit(1)
+            .execute()
+        )
+
+        if not respuesta.data:
+            return {
+                "disponible": True,
+                "permitido": None,
+                "motivo": "",
+                "decidido_en": None,
+            }
+
+        fila = respuesta.data[0]
+
+        return {
+            "disponible": True,
+            "permitido": fila.get("catalogo_permitido"),
+            "motivo": fila.get("catalogo_motivo") or "",
+            "decidido_en": fila.get("catalogo_decidido_en"),
+        }
+
+    except Exception as e:
+        return {
+            "disponible": False,
+            "permitido": None,
+            "motivo": "",
+            "decidido_en": None,
+            "error": str(e),
+        }
+
+
+def guardar_decision_catalogo_orden(
+    supabase,
+    orden_id,
+    permitido,
+    motivo="",
+):
+    """
+    Guarda una decisión explícita:
+      True  -> puede ir al catálogo
+      False -> no puede ir al catálogo
+      None  -> pendiente de decidir
+    """
+    payload = {
+        "catalogo_permitido": permitido,
+        "catalogo_motivo": (
+            str(motivo).strip()
+            if permitido is False
+            else None
+        ),
+        "catalogo_decidido_en": (
+            datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat()
+            if permitido is not None
+            else None
+        ),
+    }
+
+    (
+        supabase.table("ordenes")
+        .update(payload)
+        .eq("id", orden_id)
+        .execute()
+    )
+
+    return True
+
+
 
 # ==============================================================================
 # GRUPO C: LÓGICA PRINCIPAL (RENDER)
@@ -132,6 +413,114 @@ def borrar_img(supabase, url_archivo):
 
 
 def render(supabase):
+    # --------------------------------------------------------------------------
+    # AJUSTES RESPONSIVE PARA CELULAR / TABLET
+    # Solo afectan la presentación visual. No modifican lógica ni datos.
+    # --------------------------------------------------------------------------
+    st.markdown(
+        """
+        <style>
+        @media (max-width: 768px) {
+            /* Aprovecha mejor el ancho de la pantalla */
+            .block-container {
+                padding-top: 0.9rem !important;
+                padding-left: 0.75rem !important;
+                padding-right: 0.75rem !important;
+                padding-bottom: 2rem !important;
+            }
+
+            /* Títulos más proporcionados en pantallas pequeñas */
+            h1 {
+                font-size: 1.75rem !important;
+                line-height: 1.15 !important;
+            }
+
+            h2 {
+                font-size: 1.45rem !important;
+                line-height: 1.2 !important;
+            }
+
+            h3 {
+                font-size: 1.25rem !important;
+                line-height: 1.2 !important;
+            }
+
+            /* Las columnas pasan a una debajo de otra en celular */
+            [data-testid="stHorizontalBlock"] {
+                flex-wrap: wrap !important;
+                gap: 0.65rem !important;
+            }
+
+            [data-testid="column"] {
+                width: 100% !important;
+                flex: 1 1 100% !important;
+                min-width: 100% !important;
+            }
+
+            /* Botones cómodos para tocar con el dedo */
+            .stButton > button,
+            [data-testid="stFormSubmitButton"] button,
+            [data-testid="stPopover"] button {
+                min-height: 44px !important;
+                width: 100% !important;
+                white-space: normal !important;
+            }
+
+            /* Popover de Adjuntar Arte: cómodo y desplazable en celular. */
+            [data-testid="stPopoverBody"] {
+                width: calc(100vw - 1.25rem) !important;
+                max-width: calc(100vw - 1.25rem) !important;
+                min-width: 0 !important;
+                max-height: 76dvh !important;
+                overflow-y: auto !important;
+                overflow-x: hidden !important;
+                -webkit-overflow-scrolling: touch !important;
+                overscroll-behavior: contain !important;
+                touch-action: pan-y !important;
+                padding: 0.85rem !important;
+            }
+
+            /* Evita que el contenido interno del popover quede apretado. */
+            [data-testid="stPopoverBody"] [data-testid="stVerticalBlock"] {
+                gap: 0.65rem !important;
+            }
+
+            /* Cargador de archivos más compacto y legible */
+            [data-testid="stFileUploader"] section {
+                padding: 0.65rem !important;
+                min-height: auto !important;
+            }
+
+            [data-testid="stFileUploader"] small {
+                white-space: normal !important;
+            }
+
+            /* Los archivos seleccionados se leen mejor en una sola columna. */
+            [data-testid="stFileUploaderFile"] {
+                min-height: 42px !important;
+            }
+
+            /* Selectores cómodos para tocar con el dedo. */
+            [data-baseweb="select"] > div {
+                min-height: 44px !important;
+            }
+
+            /* Tablas desplazables horizontalmente sin romper el diseño */
+            [data-testid="stDataFrame"] {
+                overflow-x: auto !important;
+                -webkit-overflow-scrolling: touch !important;
+            }
+
+            /* Evita que textos largos se salgan del ancho disponible */
+            p, span, label, div {
+                overflow-wrap: anywhere;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.title("🏭 Producción y Órdenes")
 
     # --- INICIALIZACIÓN DE ESTADOS ---
@@ -422,58 +811,364 @@ def render(supabase):
                     st.session_state["vista_prod"] = "EDITOR"
                     st.rerun()
 
-            # --- NUEVA FUNCIONALIDAD: SUBIDA SILENCIOSA DE ARTE FINAL ---
+            # --- FUNCIONALIDAD: SUBIDA SILENCIOSA DE UNO O VARIOS ARTES ---
             with c_arte.popover(f"📁 Adjuntar Arte {cod_on}", use_container_width=True):
                 st.markdown("##### 🤫 Subida Silenciosa")
                 st.caption(
-                    "Adjunta el diseño final como respaldo sin notificar a diseño ni alterar el estado."
+                    "Adjunta uno o varios diseños finales como respaldo sin notificar a diseño ni alterar el estado."
                 )
 
-                arte_actual = row_seleccionada.get("url_arte_final")
+                # --------------------------------------------------------------
+                # DECISIÓN COMERCIAL: ¿PUEDE IR AL CATÁLOGO?
+                # --------------------------------------------------------------
+                st.markdown("###### 📢 Publicación en catálogo")
 
-                # CORRECCIÓN: Filtrar los valores 'nan' de Pandas que se disfrazaban de texto
-                if pd.notna(arte_actual) and str(arte_actual).strip().lower() not in [
-                    "none",
-                    "null",
-                    "nan",
-                    "",
-                ]:
-                    st.success("✅ Diseño ya adjunto.")
+                estado_catalogo = obtener_decision_catalogo_orden(
+                    supabase,
+                    id_s,
+                )
+
+                if not estado_catalogo.get("disponible"):
+                    st.warning(
+                        "⚠️ Esta función ya está preparada en el código, "
+                        "pero falta activar sus campos en Supabase."
+                    )
+                    st.caption(
+                        "Cuando el ingeniero ejecute "
+                        "sql/catalogo_permiso_ordenes.sql aparecerán aquí "
+                        "las opciones «Puede ir» / «No puede ir»."
+                    )
+                else:
+                    permitido_actual = estado_catalogo.get("permitido")
+                    motivo_actual = (
+                        estado_catalogo.get("motivo")
+                        or ""
+                    )
+
+                    if permitido_actual is True:
+                        st.success(
+                            "✅ Decisión actual: PUEDE IR AL CATÁLOGO."
+                        )
+                        indice_decision = 1
+                    elif permitido_actual is False:
+                        st.error(
+                            "🔒 Decisión actual: NO PUEDE IR AL CATÁLOGO."
+                        )
+                        indice_decision = 2
+                    else:
+                        st.info(
+                            "⏳ Decisión actual: PENDIENTE."
+                        )
+                        indice_decision = 0
+
+                    opciones_catalogo = [
+                        "⏳ Pendiente de decidir",
+                        "✅ Puede ir al catálogo",
+                        "🔒 No puede ir al catálogo",
+                    ]
+
+                    decision_catalogo = st.selectbox(
+                        "Destino del diseño",
+                        options=opciones_catalogo,
+                        index=indice_decision,
+                        key=f"decision_catalogo_{id_s}",
+                        help=(
+                            "La orden solo deberá pasar a Preparación de "
+                            "Catálogo cuando esté marcada como permitida."
+                        ),
+                    )
+
+                    motivo_catalogo = ""
+
+                    if decision_catalogo == "🔒 No puede ir al catálogo":
+                        motivos_base = [
+                            "Confidencial",
+                            "Cliente no autoriza",
+                            "Diseño privado",
+                            "Otro",
+                        ]
+
+                        indice_motivo = 0
+
+                        if motivo_actual in motivos_base:
+                            indice_motivo = motivos_base.index(motivo_actual)
+                        elif motivo_actual:
+                            indice_motivo = 3
+
+                        motivo_elegido = st.selectbox(
+                            "Motivo",
+                            options=motivos_base,
+                            index=indice_motivo,
+                            key=f"motivo_catalogo_{id_s}",
+                        )
+
+                        if motivo_elegido == "Otro":
+                            motivo_catalogo = st.text_input(
+                                "Especificar motivo",
+                                value=(
+                                    motivo_actual
+                                    if motivo_actual
+                                    not in motivos_base[:-1]
+                                    else ""
+                                ),
+                                key=f"motivo_catalogo_otro_{id_s}",
+                            )
+                        else:
+                            motivo_catalogo = motivo_elegido
+
+                    if st.button(
+                        "💾 Guardar decisión de catálogo",
+                        type="secondary",
+                        use_container_width=True,
+                        key=f"guardar_decision_catalogo_{id_s}",
+                    ):
+                        try:
+                            if decision_catalogo == "✅ Puede ir al catálogo":
+                                nuevo_valor = True
+                                nuevo_motivo = ""
+                            elif decision_catalogo == "🔒 No puede ir al catálogo":
+                                nuevo_valor = False
+                                nuevo_motivo = motivo_catalogo
+
+                                if not str(nuevo_motivo).strip():
+                                    st.warning(
+                                        "Selecciona o escribe el motivo "
+                                        "para mantener el diseño privado."
+                                    )
+                                    st.stop()
+                            else:
+                                nuevo_valor = None
+                                nuevo_motivo = ""
+
+                            guardar_decision_catalogo_orden(
+                                supabase,
+                                id_s,
+                                nuevo_valor,
+                                nuevo_motivo,
+                            )
+
+                            if nuevo_valor is True:
+                                st.success(
+                                    "✅ Guardado: este diseño puede ir al catálogo."
+                                )
+                            elif nuevo_valor is False:
+                                st.success(
+                                    "🔒 Guardado: este diseño se mantendrá privado."
+                                )
+                            else:
+                                st.success(
+                                    "⏳ Guardado: la decisión quedó pendiente."
+                                )
+
+                            time.sleep(0.5)
+                            st.rerun()
+
+                        except Exception as e:
+                            st.error(
+                                "No se pudo guardar la decisión de catálogo: "
+                                f"{e}"
+                            )
+
+                st.divider()
+
+                arte_actual = row_seleccionada.get("url_arte_final")
+                tiene_arte_principal = (
+                    pd.notna(arte_actual)
+                    and str(arte_actual).strip().lower()
+                    not in ["none", "null", "nan", ""]
+                )
+
+                st.markdown("###### ⭐ Arte principal")
+
+                if tiene_arte_principal:
+                    st.success("✅ Diseño principal adjunto.")
 
                     if es_imagen_segura(arte_actual):
                         st.image(arte_actual, use_container_width=True)
                     else:
                         st.warning("⚠️ Vista previa no disponible (Es PDF o documento)")
-                        st.markdown(f"[🔗 Abrir archivo original]({arte_actual})")
+                        st.markdown(f"[🔗 Abrir archivo principal]({arte_actual})")
                 else:
                     st.info("Sin archivo final adjunto.")
 
-                # Usamos un formulario para evitar parpadeos visuales al subir
-                with st.form(key=f"form_arte_{id_s}", clear_on_submit=True):
-                    nuevo_arte = st.file_uploader(
-                        "Seleccionar archivo", type=["jpg", "png", "pdf"]
+                artes_guardados = listar_artes_multiple_orden(supabase, cod_on)
+                artes_adicionales = [
+                    arte
+                    for arte in artes_guardados
+                    if str(arte.get("url", "")).strip()
+                    != str(arte_actual or "").strip()
+                ]
+
+                if artes_adicionales:
+                    st.markdown("###### 🖼️ Artes adicionales")
+
+                    for indice, arte_extra in enumerate(artes_adicionales, start=1):
+                        with st.container(border=True):
+                            st.caption(
+                                f"Arte adicional {indice}: {arte_extra['nombre']}"
+                            )
+
+                            if es_imagen_segura(arte_extra["url"]):
+                                st.image(
+                                    arte_extra["url"],
+                                    use_container_width=True,
+                                )
+                            else:
+                                st.markdown(
+                                    f"[🔗 Abrir archivo]({arte_extra['url']})"
+                                )
+
+                            col_principal, col_eliminar = st.columns(2)
+
+                            if col_principal.button(
+                                "⭐ Hacer principal",
+                                key=f"principal_arte_extra_{id_s}_{indice}_{arte_extra['nombre']}",
+                                use_container_width=True,
+                            ):
+                                supabase.table("ordenes").update(
+                                    {"url_arte_final": arte_extra["url"]}
+                                ).eq("id", id_s).execute()
+                                st.success("⭐ Arte principal actualizado.")
+                                time.sleep(0.5)
+                                st.rerun()
+
+                            if col_eliminar.button(
+                                "🗑️ Eliminar este arte",
+                                key=f"del_arte_extra_{id_s}_{indice}_{arte_extra['nombre']}",
+                                use_container_width=True,
+                            ):
+                                if borrar_arte_multiple_orden(
+                                    supabase, arte_extra["ruta"]
+                                ):
+                                    st.success("Arte adicional eliminado.")
+                                    time.sleep(0.5)
+                                    st.rerun()
+
+                st.markdown("###### 📤 Agregar archivos")
+
+                nuevos_artes = st.file_uploader(
+                    "Seleccionar uno o varios archivos",
+                    type=["jpg", "png", "pdf"],
+                    accept_multiple_files=True,
+                    key=f"up_artes_multi_{id_s}",
+                )
+
+                indice_principal = -1
+
+                if nuevos_artes:
+                    st.markdown("###### ⭐ Elegir arte principal")
+                    st.caption(
+                        "Selecciona cuál archivo representará oficialmente a la orden. "
+                        "Los demás quedarán guardados como artes adicionales."
                     )
 
-                    if st.form_submit_button(
-                        "Subir y Guardar", type="primary", use_container_width=True
-                    ):
-                        if nuevo_arte:
-                            with st.spinner("Subiendo..."):
-                                url_a = subir_img(supabase, nuevo_arte, "artes")
-                                if url_a:
-                                    # 1. Limpiamos el servidor de basura borrando la imagen vieja (si existía)
-                                    if arte_actual:
-                                        borrar_img(supabase, arte_actual)
+                    opciones_principal = list(range(len(nuevos_artes)))
 
-                                    # 2. UPDATE QUIRÚRGICO: Solo tocamos la url, no encendemos alertas de cambio
-                                    supabase.table("ordenes").update(
-                                        {"url_arte_final": url_a}
-                                    ).eq("id", id_s).execute()
-                                    st.success("¡Guardado correctamente!")
-                                    time.sleep(1)
-                                    st.rerun()
-                        else:
-                            st.warning("⚠️ Debes seleccionar un archivo primero.")
+                    if tiene_arte_principal:
+                        opciones_principal = [-1] + opciones_principal
+
+                    indice_principal = st.selectbox(
+                        "Arte principal",
+                        options=opciones_principal,
+                        index=0,
+                        format_func=lambda indice: (
+                            "⭐ Conservar el arte principal actual"
+                            if indice == -1
+                            else f"⭐ {nuevos_artes[indice].name}"
+                        ),
+                        key=f"principal_nuevo_arte_{id_s}",
+                    )
+
+                    if indice_principal == -1:
+                        st.info(
+                            "El arte principal actual se conservará. "
+                            "Los nuevos archivos se guardarán como adicionales."
+                        )
+                    else:
+                        st.success(
+                            f"⭐ Principal seleccionado: {nuevos_artes[indice_principal].name}"
+                        )
+
+                if st.button(
+                    "Subir y Guardar",
+                    type="primary",
+                    use_container_width=True,
+                    key=f"guardar_artes_multi_{id_s}",
+                    disabled=not bool(nuevos_artes),
+                ):
+                    if nuevos_artes:
+                        with st.spinner("Subiendo..."):
+                            subidos = []
+                            nuevos_reales = 0
+                            reutilizados = 0
+
+                            # Revisamos lo que ya existe antes de subir.
+                            # Si el usuario vuelve a elegir el mismo archivo,
+                            # se reutiliza y NO se crea otra copia.
+                            huellas_existentes = construir_indice_huellas_artes(
+                                supabase,
+                                cod_on,
+                                arte_actual if tiene_arte_principal else None,
+                            )
+
+                            for indice_archivo, archivo in enumerate(nuevos_artes):
+                                resultado_subida = subir_arte_multiple_orden(
+                                    supabase,
+                                    archivo,
+                                    cod_on,
+                                    huellas_existentes=huellas_existentes,
+                                )
+                                if resultado_subida:
+                                    resultado_subida["indice_origen"] = indice_archivo
+                                    subidos.append(resultado_subida)
+
+                                    if resultado_subida.get("duplicado"):
+                                        reutilizados += 1
+                                    else:
+                                        nuevos_reales += 1
+
+                            if subidos:
+                                # El operador decide explícitamente cuál será el arte principal.
+                                # Si existe uno previo y eligió conservarlo, url_arte_final no cambia.
+                                if indice_principal != -1:
+                                    principal_subido = next(
+                                        (
+                                            item
+                                            for item in subidos
+                                            if item.get("indice_origen")
+                                            == indice_principal
+                                        ),
+                                        None,
+                                    )
+
+                                    if principal_subido:
+                                        supabase.table("ordenes").update(
+                                            {"url_arte_final": principal_subido["url"]}
+                                        ).eq("id", id_s).execute()
+                                    else:
+                                        st.error(
+                                            "Los archivos se procesaron, pero el archivo "
+                                            "elegido como principal no pudo subirse."
+                                        )
+                                        st.stop()
+
+                                if reutilizados:
+                                    st.success(
+                                        "✅ Guardado correctamente. "
+                                        f"Nuevos: {nuevos_reales} · "
+                                        f"Ya existentes reutilizados: {reutilizados}. "
+                                        "No se crearon duplicados."
+                                    )
+                                else:
+                                    st.success(
+                                        f"✅ {nuevos_reales} archivo(s) nuevo(s) guardado(s) correctamente."
+                                    )
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error("❌ No se pudo guardar ningún archivo.")
+                    else:
+                        st.warning("⚠️ Debes seleccionar al menos un archivo primero.")
 
     # --------------------------------------------------------------------------
     # C.2: VISTA 2 - EDITOR DE ORDEN (NUEVO/EDITAR)

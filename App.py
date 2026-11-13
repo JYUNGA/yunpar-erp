@@ -116,7 +116,6 @@ PERMISOS = {
         "Reportes",
         "Diseño",
         "Preparación de Catálogo",
-        "Catálogo de Diseños",
         "Impresión",
         "Caja y Finanzas",
         "Asistencia y Nómina",
@@ -382,9 +381,6 @@ def enrutador(opcion):
 
     elif opcion == "Preparación de Catálogo":
         preparacion_catalogo.render(supabase)
-
-    elif opcion == "Catálogo de Diseños":
-        catalogo_disenos.render(supabase)
 
     elif opcion == "Impresión":
         impresion.render(supabase)

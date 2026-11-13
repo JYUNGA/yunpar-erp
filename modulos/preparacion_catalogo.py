@@ -8,6 +8,8 @@ import re
 import urllib.request
 
 from datetime import datetime
+from pathlib import Path
+
 
 try:
     from google import genai as genai_imagen
@@ -18,12 +20,138 @@ except Exception:
 
 import pytz
 
-from PIL import Image
+from PIL import Image, ImageOps, ImageDraw, ImageFilter, ImageChops
 
 
 # =========================================================
 # MÓDULO: PREPARACIÓN DE CATÁLOGO
 # =========================================================
+
+# =========================================================
+# CONFIGURACIÓN VISUAL DEL CATÁLOGO YUNPAR
+# =========================================================
+
+ANCHO_CATALOGO = 1080
+ALTO_CATALOGO = 1350
+CALIDAD_WEBP = 85
+
+ASSETS_DIR = (
+    Path(__file__)
+    .resolve()
+    .parent
+    .parent
+    / "assets"
+)
+
+FONDO_CATALOGO = (
+    ASSETS_DIR
+    / "fondo-yunpar.png"
+)
+
+# =========================================================
+# CONFIGURACIÓN DE PRESENTACIONES / PERFILES
+# =========================================================
+
+PRESENTACIONES_MOCKUP = [
+    "Solo prenda (sin persona)",
+    "Niño",
+    "Niña",
+    "Adolescente masculino",
+    "Adolescente femenina",
+    "Hombre joven",
+    "Mujer joven",
+    "Hombre adulto",
+    "Mujer adulta",
+]
+
+ICONOS_PRESENTACION = {
+    "Solo prenda (sin persona)": "👕",
+    "Niño": "👦",
+    "Niña": "👧",
+    "Adolescente masculino": "🧑",
+    "Adolescente femenina": "👩",
+    "Hombre joven": "👨",
+    "Mujer joven": "👩",
+    "Hombre adulto": "👨",
+    "Mujer adulta": "👩",
+}
+
+MIGRACION_PRESENTACION_LEGACY = {
+    "Hombre": "Hombre joven",
+    "Mujer": "Mujer joven",
+}
+
+DESCRIPCIONES_PRESENTACION = {
+    "Solo prenda (sin persona)": (
+        "la prenda presentada sin persona, "
+        "con volumen tridimensional realista, "
+        "forma natural y apariencia de fotografía "
+        "profesional de producto"
+    ),
+    "Niño": (
+        "un modelo infantil masculino usando la prenda, "
+        "con apariencia apropiada para su edad, "
+        "proporciones naturales y pose neutral "
+        "de catálogo de ropa"
+    ),
+    "Niña": (
+        "una modelo infantil femenina usando la prenda, "
+        "con apariencia apropiada para su edad, "
+        "proporciones naturales y pose neutral "
+        "de catálogo de ropa"
+    ),
+    "Adolescente masculino": (
+        "un modelo adolescente masculino usando la prenda, "
+        "con proporciones naturales, apariencia juvenil "
+        "y pose neutral y profesional de catálogo"
+    ),
+    "Adolescente femenina": (
+        "una modelo adolescente femenina usando la prenda, "
+        "con proporciones naturales, apariencia juvenil "
+        "y pose neutral y profesional de catálogo"
+    ),
+    "Hombre joven": (
+        "un modelo masculino adulto joven usando la prenda, "
+        "con proporciones naturales y pose profesional "
+        "de catálogo"
+    ),
+    "Mujer joven": (
+        "una modelo femenina adulta joven usando la prenda, "
+        "con proporciones naturales y pose profesional "
+        "de catálogo"
+    ),
+    "Hombre adulto": (
+        "un modelo masculino adulto usando la prenda, "
+        "con apariencia madura, proporciones naturales "
+        "y pose profesional de catálogo"
+    ),
+    "Mujer adulta": (
+        "una modelo femenina adulta usando la prenda, "
+        "con apariencia madura, proporciones naturales "
+        "y pose profesional de catálogo"
+    ),
+}
+
+
+def normalizar_presentacion_legacy(valor):
+
+    if not valor:
+        return "Solo prenda (sin persona)"
+
+    valor = str(valor).strip()
+
+    return MIGRACION_PRESENTACION_LEGACY.get(
+        valor,
+        valor,
+    )
+
+
+def formato_presentacion(opcion):
+
+    return (
+        f"{ICONOS_PRESENTACION.get(opcion, '👤')} "
+        f"{opcion}"
+    )
 
 
 # =========================================================
@@ -41,7 +169,6 @@ def convertir_lista_texto(valor):
         ]
 
     if not valor:
-
         return []
 
     return [
@@ -54,11 +181,9 @@ def convertir_lista_texto(valor):
 def convertir_lista_a_texto(valor):
 
     if not valor:
-
         return ""
 
     if isinstance(valor, str):
-
         return valor
 
     return ", ".join(
@@ -77,33 +202,13 @@ def generar_prompt_mockup(
     vista,
 ):
 
-    descripcion_presentacion = {
+    presentacion = normalizar_presentacion_legacy(
+        presentacion
+    )
 
-        "Solo prenda (sin persona)": (
-            "la prenda presentada sin persona, "
-            "con volumen tridimensional realista, "
-            "forma natural y apariencia de fotografía "
-            "profesional de producto"
-        ),
-
-        "Hombre": (
-            "un modelo masculino usando la prenda, "
-            "con proporciones naturales y pose profesional "
-            "de catálogo"
-        ),
-
-        "Mujer": (
-            "una modelo femenina usando la prenda, "
-            "con proporciones naturales y pose profesional "
-            "de catálogo"
-        ),
-
-        "Niño": (
-            "un modelo infantil usando la prenda, "
-            "con pose profesional de catálogo "
-            "y proporciones naturales"
-        ),
-    }
+    descripcion_presentacion = (
+        DESCRIPCIONES_PRESENTACION
+    )
 
     descripcion_vista = {
 
@@ -169,6 +274,9 @@ REGLAS VISUALES YUNPAR:
 16. La imagen debe servir para un catálogo comercial de uniformes.
 17. El resultado debe verse realista, limpio y profesional.
 18. El diseño gráfico debe continuar naturalmente por mangas y laterales cuando corresponda.
+19. Si la presentación incluye una persona, conserva el mismo perfil de edad y género visual en las cuatro vistas.
+20. Cuando se utilicen modelos infantiles o adolescentes, usa únicamente poses neutrales y apropiadas para un catálogo de ropa.
+21. No cambies el perfil seleccionado entre frente, espalda y laterales.
 
 IMPORTANTE:
 
@@ -193,7 +301,6 @@ def archivo_a_imagen(
 ):
 
     if archivo is None:
-
         return None
 
     try:
@@ -211,8 +318,266 @@ def archivo_a_imagen(
         )
 
     except Exception:
-
         return None
+
+
+# =========================================================
+# PREPARACIÓN VISUAL FINAL YUNPAR
+# =========================================================
+
+def aplicar_marca_yunpar(
+    imagen,
+):
+
+    if not FONDO_CATALOGO.exists():
+        return imagen
+
+    try:
+
+        # =====================================================
+        # FONDO YUNPAR DETRÁS DE LA PRENDA
+        # =====================================================
+        # La imagen de fondo se usa como escenario del catálogo.
+        # NO se superpone sobre la camiseta ni sobre la persona.
+
+        fondo_yunpar = Image.open(
+            FONDO_CATALOGO
+        ).convert(
+            "RGB"
+        )
+
+        fondo_yunpar = ImageOps.fit(
+            fondo_yunpar,
+            (
+                ANCHO_CATALOGO,
+                ALTO_CATALOGO,
+            ),
+            method=Image.Resampling.LANCZOS,
+        )
+
+        imagen_rgb = imagen.convert(
+            "RGB"
+        )
+
+        # Detectamos únicamente el fondo conectado con los bordes.
+        # Así los detalles blancos internos de la camiseta se conservan.
+        deteccion = imagen_rgb.copy()
+        ancho, alto = deteccion.size
+
+        color_marca = (1, 2, 3)
+
+        puntos_borde = [
+            (0, 0),
+            (ancho - 1, 0),
+            (0, alto - 1),
+            (ancho - 1, alto - 1),
+            (ancho // 2, 0),
+            (ancho // 2, alto - 1),
+            (0, alto // 2),
+            (ancho - 1, alto // 2),
+        ]
+
+        for punto in puntos_borde:
+            try:
+                ImageDraw.floodfill(
+                    deteccion,
+                    punto,
+                    color_marca,
+                    thresh=42,
+                )
+            except Exception:
+                pass
+
+        # Construimos la máscara con operaciones internas de Pillow.
+        # Esto evita recorrer 1.458.000 píxeles con Python por cada imagen
+        # y mantiene el Paso 4 fluido incluso al procesar las cuatro vistas.
+        imagen_marca = Image.new(
+            "RGB",
+            (ancho, alto),
+            color_marca,
+        )
+
+        diferencia_marca = ImageChops.difference(
+            deteccion,
+            imagen_marca,
+        ).convert(
+            "L"
+        )
+
+        mascara = diferencia_marca.point(
+            lambda p: 255 if p > 0 else 0
+        )
+
+        mascara = mascara.filter(
+            ImageFilter.GaussianBlur(
+                radius=1.2
+            )
+        )
+
+        resultado = Image.composite(
+            imagen_rgb,
+            fondo_yunpar,
+            mascara,
+        )
+
+        return resultado.convert(
+            "RGB"
+        )
+
+    except Exception as e:
+
+        raise RuntimeError(
+            "No se pudo aplicar "
+            f"el fondo YUNPAR: {e}"
+        )
+
+
+def preparar_mockup_final_yunpar(
+    archivo,
+    nombre_salida,
+):
+
+    if archivo is None:
+        return None
+
+    try:
+
+        bytes_originales = archivo.getvalue()
+
+        imagen = Image.open(
+            io.BytesIO(
+                bytes_originales
+            )
+        )
+
+        imagen = ImageOps.exif_transpose(
+            imagen
+        )
+
+        if (
+            imagen.mode in (
+                "RGBA",
+                "LA",
+            )
+            or "transparency"
+            in imagen.info
+        ):
+
+            imagen_rgba = imagen.convert(
+                "RGBA"
+            )
+
+            fondo_blanco = Image.new(
+                "RGBA",
+                imagen_rgba.size,
+                (
+                    255,
+                    255,
+                    255,
+                    255,
+                ),
+            )
+
+            fondo_blanco.alpha_composite(
+                imagen_rgba
+            )
+
+            imagen = fondo_blanco.convert(
+                "RGB"
+            )
+
+        else:
+
+            imagen = imagen.convert(
+                "RGB"
+            )
+
+        escala = min(
+            ANCHO_CATALOGO
+            / imagen.width,
+            ALTO_CATALOGO
+            / imagen.height,
+        )
+
+        nuevo_ancho = max(
+            1,
+            int(
+                imagen.width
+                * escala
+            ),
+        )
+
+        nuevo_alto = max(
+            1,
+            int(
+                imagen.height
+                * escala
+            ),
+        )
+
+        imagen = imagen.resize(
+            (
+                nuevo_ancho,
+                nuevo_alto,
+            ),
+            Image.Resampling.LANCZOS,
+        )
+
+        lienzo = Image.new(
+            "RGB",
+            (
+                ANCHO_CATALOGO,
+                ALTO_CATALOGO,
+            ),
+            (
+                245,
+                245,
+                245,
+            ),
+        )
+
+        posicion_x = (
+            ANCHO_CATALOGO
+            - nuevo_ancho
+        ) // 2
+
+        posicion_y = (
+            ALTO_CATALOGO
+            - nuevo_alto
+        ) // 2
+
+        lienzo.paste(
+            imagen,
+            (
+                posicion_x,
+                posicion_y,
+            ),
+        )
+
+        lienzo = aplicar_marca_yunpar(
+            lienzo
+        )
+
+        salida = io.BytesIO()
+
+        lienzo.save(
+            salida,
+            format="WEBP",
+            quality=CALIDAD_WEBP,
+            method=6,
+        )
+
+        salida.seek(0)
+        salida.name = nombre_salida
+
+        return salida
+
+    except Exception as e:
+
+        raise RuntimeError(
+            "No se pudo preparar "
+            f"la imagen final YUNPAR: {e}"
+        )
 
 
 # =========================================================
@@ -250,13 +615,8 @@ def extraer_json_respuesta(
         texto,
     )
 
-    inicio = texto.find(
-        "{"
-    )
-
-    fin = texto.rfind(
-        "}"
-    )
+    inicio = texto.find("{")
+    fin = texto.rfind("}")
 
     if (
         inicio == -1
@@ -379,7 +739,7 @@ def normalizar_clasificacion(
 
 
 # =========================================================
-# ANALIZAR MOCKUPS CON IA
+# ANALIZAR MOCKUPS CON GEMINI
 # =========================================================
 
 def analizar_mockups_con_ia(
@@ -756,7 +1116,7 @@ def construir_paquete_catalogo(
         ),
 
         "modo": (
-            "PRUEBA"
+            "PREPARACION"
         ),
 
         "codigo_orden": (
@@ -956,7 +1316,7 @@ def mostrar_estado_proceso(
         )
 
         st.caption(
-            "Clasificación con IA."
+            "Clasificación con Gemini."
         )
 
     with col4:
@@ -995,9 +1355,9 @@ def mostrar_estado_proceso(
         )
 
     st.warning(
-        "🔒 El módulo continúa en modo de preparación. "
-        "No se ha escrito ni modificado ningún dato "
-        "en Supabase."
+        "🔌 Integración pendiente: el flujo funcional está completo. "
+        "La escritura final en Supabase permanece desactivada "
+        "hasta realizar la conexión definitiva."
     )
 
 
@@ -1011,11 +1371,13 @@ MODELO_IMAGEN_CATALOGO = "gemini-nano-banana-2.1"
 def descargar_imagen_desde_url(url):
 
     if not url:
+
         raise RuntimeError(
             "La orden no tiene un arte disponible."
         )
 
     try:
+
         solicitud = urllib.request.Request(
             str(url),
             headers={
@@ -1027,28 +1389,84 @@ def descargar_imagen_desde_url(url):
             solicitud,
             timeout=30,
         ) as respuesta:
+
             datos = respuesta.read()
 
         imagen = Image.open(
-            io.BytesIO(datos)
+            io.BytesIO(
+                datos
+            )
         )
 
-        return imagen.convert("RGB")
+        return imagen.convert(
+            "RGB"
+        )
 
     except Exception as e:
+
         raise RuntimeError(
             f"No se pudo descargar el arte original: {e}"
         )
 
+
+# =========================================================
+# CORRECCIÓN IMPORTANTE:
+# GOOGLE GENAI IMAGE -> PILLOW
+# =========================================================
 
 def imagen_a_archivo_virtual(
     imagen,
     nombre,
 ):
 
+    if imagen is None:
+
+        raise RuntimeError(
+            "Gemini no devolvió una imagen válida."
+        )
+
+    if not isinstance(
+        imagen,
+        Image.Image,
+    ):
+
+        image_bytes = getattr(
+            imagen,
+            "image_bytes",
+            None,
+        )
+
+        if image_bytes is None:
+
+            raise RuntimeError(
+                "Gemini devolvió una imagen, "
+                "pero no fue posible leer sus bytes."
+            )
+
+        try:
+
+            imagen = Image.open(
+                io.BytesIO(
+                    image_bytes
+                )
+            )
+
+        except Exception as e:
+
+            raise RuntimeError(
+                "No se pudo convertir la imagen "
+                f"generada por Gemini a Pillow: {e}"
+            )
+
     memoria = io.BytesIO()
 
-    imagen.convert("RGB").save(
+    imagen = ImageOps.exif_transpose(
+        imagen
+    ).convert(
+        "RGB"
+    )
+
+    imagen.save(
         memoria,
         format="PNG",
         optimize=True,
@@ -1067,7 +1485,11 @@ def generar_mockup_automatico(
     referencia_frente=None,
 ):
 
-    if genai_imagen is None or genai_types is None:
+    if (
+        genai_imagen is None
+        or genai_types is None
+    ):
+
         raise RuntimeError(
             "No está disponible la librería google-genai. "
             "Ejecuta la instalación que ya utilizamos para "
@@ -1075,19 +1497,24 @@ def generar_mockup_automatico(
         )
 
     try:
+
         api_key = st.secrets[
             "gemini"
         ][
             "api_key"
         ]
+
     except Exception:
+
         raise RuntimeError(
             "No se encontró la API key de Gemini "
             "en secrets.toml."
         )
 
-    arte_original = descargar_imagen_desde_url(
-        arte_url
+    arte_original = (
+        descargar_imagen_desde_url(
+            arte_url
+        )
     )
 
     prompt = generar_prompt_mockup(
@@ -1135,7 +1562,9 @@ No copies el frente cuando se solicita espalda o lateral.
         model=MODELO_IMAGEN_CATALOGO,
         contents=contenidos,
         config=genai_types.GenerateContentConfig(
-            response_modalities=["IMAGE"],
+            response_modalities=[
+                "IMAGE"
+            ],
             image_config=genai_types.ImageConfig(
                 aspect_ratio="4:5",
                 image_size="1K",
@@ -1146,7 +1575,11 @@ No copies el frente cuando se solicita espalda o lateral.
     imagen_generada = None
 
     for parte in (
-        getattr(respuesta, "parts", None)
+        getattr(
+            respuesta,
+            "parts",
+            None,
+        )
         or []
     ):
 
@@ -1155,17 +1588,27 @@ No copies el frente cuando se solicita espalda o lateral.
             "thought",
             False,
         ):
+
             continue
 
         try:
-            imagen_parte = parte.as_image()
+
+            imagen_parte = (
+                parte.as_image()
+            )
+
         except Exception:
+
             imagen_parte = None
 
         if imagen_parte is not None:
-            imagen_generada = imagen_parte
+
+            imagen_generada = (
+                imagen_parte
+            )
 
     if imagen_generada is None:
+
         raise RuntimeError(
             "Gemini respondió, pero no devolvió "
             "una imagen utilizable."
@@ -1204,13 +1647,42 @@ def limpiar_memoria_mockups_orden(
         f"preparacion_espalda_{orden_id}",
         f"preparacion_derecha_{orden_id}",
         f"preparacion_izquierda_{orden_id}",
+        f"preparacion_confirmacion_{orden_id}",
+        f"preparacion_clasificacion_{orden_id}",
+        f"preparacion_clasificacion_confirmada_{orden_id}",
+        f"preparacion_confirmar_clasificacion_{orden_id}",
+        f"preparacion_titulo_publico_{orden_id}",
+        f"preparacion_observacion_final_{orden_id}",
+        f"preparacion_confirmacion_final_{orden_id}",
+        f"preparacion_paquete_catalogo_{orden_id}",
     ]
 
     for clave in claves:
+
         st.session_state.pop(
             clave,
             None,
         )
+
+    st.session_state.pop(
+        "preparacion_catalogo_mockups",
+        None,
+    )
+
+    st.session_state.pop(
+        "preparacion_catalogo_clasificacion",
+        None,
+    )
+
+    st.session_state.pop(
+        "preparacion_catalogo_paquete_final",
+        None,
+    )
+
+    st.session_state.pop(
+        "preparacion_catalogo_mockups_finales",
+        None,
+    )
 
 
 def mostrar_generador_ia_vista(
@@ -1261,7 +1733,7 @@ def mostrar_generador_ia_vista(
     etiqueta_boton = (
         f"🔄 Regenerar {vista.lower()}"
         if resultado is not None
-        else f"🤖 Generar {vista.lower()} con IA"
+        else f"🤖 Generar {vista.lower()} con Gemini"
     )
 
     if st.button(
@@ -1275,8 +1747,10 @@ def mostrar_generador_ia_vista(
     ):
 
         try:
+
             with st.spinner(
-                f"Gemini está generando {vista.lower()}..."
+                f"Gemini está generando "
+                f"{vista.lower()}..."
             ):
 
                 nuevo_resultado = (
@@ -1292,7 +1766,6 @@ def mostrar_generador_ia_vista(
                     )
                 )
 
-            # Reemplaza la generación anterior para no acumular memoria.
             st.session_state[
                 clave_resultado
             ] = nuevo_resultado
@@ -1304,8 +1777,10 @@ def mostrar_generador_ia_vista(
             st.rerun()
 
         except Exception as e:
+
             st.error(
-                f"❌ No se pudo generar {vista.lower()}: {e}"
+                f"❌ No se pudo generar "
+                f"{vista.lower()}: {e}"
             )
 
     resultado = st.session_state.get(
@@ -1320,23 +1795,28 @@ def mostrar_generador_ia_vista(
     )
 
     if resultado is None:
+
         st.caption(
             "Todavía no se ha generado esta vista."
         )
+
         return None, False
 
     st.image(
         resultado,
-        caption=f"Resultado IA - {vista}",
+        caption=f"Resultado Gemini - {vista}",
         width=420,
     )
 
     if aprobado:
+
         st.success(
             f"✅ {vista} aprobado."
         )
 
-    col_aprobar, col_descartar = st.columns(2)
+    col_aprobar, col_descartar = (
+        st.columns(2)
+    )
 
     with col_aprobar:
 
@@ -1419,19 +1899,17 @@ def mostrar_paso_2(
     )
 
     with col_info1:
+
         st.write(
             f"**Orden seleccionada:** {codigo}"
         )
 
     with col_info2:
+
         st.write(
             f"**Cliente:** "
             f"{orden_actual.get('Cliente', '')}"
         )
-
-    # =====================================================
-    # MÉTODO
-    # =====================================================
 
     st.markdown(
         "### 🎨 Método de generación"
@@ -1440,19 +1918,26 @@ def mostrar_paso_2(
     metodo = st.radio(
         "¿Cómo se generarán los mockups?",
         [
-            "🤖 IA integrada YUNPAR",
+            "🤖 Gemini",
             "🎨 Canva IA / Manual",
         ],
         horizontal=True,
         key=f"preparacion_metodo_{orden_id}",
     )
 
+    st.caption(
+        "Generación: Gemini / Canva IA / Manual · "
+        "Clasificación: Gemini"
+    )
+
     clave_metodo_anterior = (
         f"preparacion_metodo_anterior_{orden_id}"
     )
 
-    metodo_anterior = st.session_state.get(
-        clave_metodo_anterior
+    metodo_anterior = (
+        st.session_state.get(
+            clave_metodo_anterior
+        )
     )
 
     if (
@@ -1464,26 +1949,17 @@ def mostrar_paso_2(
             orden_id
         )
 
-        st.session_state.pop(
-            "preparacion_catalogo_mockups",
-            None,
-        )
-
-        st.session_state.pop(
-            "preparacion_catalogo_clasificacion",
-            None,
-        )
-
-        st.session_state.pop(
-            "preparacion_catalogo_paquete_final",
-            None,
+        st.info(
+            "🔄 Cambiaste el método de generación. "
+            "Se limpiaron los resultados temporales "
+            "de esta orden para evitar mezclar procesos."
         )
 
     st.session_state[
         clave_metodo_anterior
     ] = metodo
 
-    if metodo == "🤖 IA integrada YUNPAR":
+    if metodo == "🤖 Gemini":
 
         st.info(
             "🤖 Gemini generará las vistas UNA POR UNA. "
@@ -1500,33 +1976,85 @@ def mostrar_paso_2(
             "y después cargar las cuatro vistas aquí."
         )
 
-    # =====================================================
-    # PRESENTACIÓN
-    # =====================================================
-
     st.markdown(
         "### 👕 Presentación del mockup"
     )
 
+    clave_presentacion = (
+        f"preparacion_presentacion_v2_{orden_id}"
+    )
+
+    valor_presentacion_actual = (
+        st.session_state.get(
+            clave_presentacion
+        )
+    )
+
+    valor_presentacion_normalizado = (
+        normalizar_presentacion_legacy(
+            valor_presentacion_actual
+        )
+    )
+
+    if (
+        valor_presentacion_actual
+        and valor_presentacion_actual
+        != valor_presentacion_normalizado
+    ):
+
+        st.session_state[
+            clave_presentacion
+        ] = valor_presentacion_normalizado
+
     presentacion = st.selectbox(
         "Selecciona cómo se presentará este diseño",
-        [
-            "Solo prenda (sin persona)",
-            "Hombre",
-            "Mujer",
-            "Niño",
-        ],
-        key=f"preparacion_presentacion_v2_{orden_id}",
+        PRESENTACIONES_MOCKUP,
+        format_func=formato_presentacion,
+        key=clave_presentacion,
     )
+
+    clave_presentacion_anterior = (
+        f"preparacion_presentacion_anterior_{orden_id}"
+    )
+
+    presentacion_anterior = (
+        st.session_state.get(
+            clave_presentacion_anterior
+        )
+    )
+
+    if (
+        presentacion_anterior is not None
+        and presentacion_anterior != presentacion
+    ):
+
+        limpiar_memoria_mockups_orden(
+            orden_id
+        )
+
+        st.info(
+            "🔄 Cambiaste el perfil de presentación. "
+            "Se limpiaron los mockups, la clasificación "
+            "y el paquete temporal de esta orden para "
+            "evitar mezclar perfiles diferentes."
+        )
+
+    st.session_state[
+        clave_presentacion_anterior
+    ] = presentacion
 
     st.caption(
         "Esta opción se aplicará a las cuatro vistas "
-        "para mantener consistencia."
+        "para mantener consistencia. El perfil seleccionado "
+        "solo cambia quién presenta la prenda; el diseño, "
+        "los colores, los textos y los logotipos deben "
+        "mantenerse."
     )
 
-    # =====================================================
-    # ARTE ORIGINAL
-    # =====================================================
+    st.success(
+        "✅ Perfil seleccionado: "
+        f"{formato_presentacion(presentacion)}"
+    )
 
     with st.expander(
         "🎨 Ver arte original",
@@ -1534,39 +2062,46 @@ def mostrar_paso_2(
     ):
 
         if arte_url:
+
             try:
+
                 st.image(
                     arte_url,
                     width="stretch",
                 )
+
             except Exception:
+
                 st.warning(
                     "No se pudo mostrar "
                     "la vista previa del arte."
                 )
+
                 st.write(
                     arte_url
                 )
+
         else:
+
             st.warning(
                 "No existe una URL de arte "
                 "para esta orden."
             )
 
-    # =====================================================
-    # PROMPT OFICIAL
-    # =====================================================
-
     st.markdown(
         "### 🧠 Prompt oficial YUNPAR"
     )
 
-    if metodo == "🤖 IA integrada YUNPAR":
+    if metodo == "🤖 Gemini":
+
         st.caption(
-            "La IA integrada utiliza automáticamente "
-            "este mismo estándar visual. Puedes revisarlo aquí."
+            "Gemini utiliza automáticamente "
+            "este mismo estándar visual. "
+            "Puedes revisarlo aquí."
         )
+
     else:
+
         st.caption(
             "Genera las imágenes UNA POR UNA. "
             "Nunca pidas las cuatro vistas "
@@ -1595,6 +2130,7 @@ def mostrar_paso_2(
             metodo == "🎨 Canva IA / Manual"
         ),
     ):
+
         st.code(
             prompt_actual,
             language="text",
@@ -1605,10 +2141,6 @@ def mostrar_paso_2(
         "aprobada se utilizará como referencia visual "
         "para espalda y laterales en el modo automático."
     )
-
-    # =====================================================
-    # REGLAS
-    # =====================================================
 
     with st.expander(
         "📐 Reglas de estandarización YUNPAR",
@@ -1634,10 +2166,6 @@ def mostrar_paso_2(
 """
         )
 
-    # =====================================================
-    # DOS CAMINOS: IA AUTOMÁTICA O MANUAL
-    # =====================================================
-
     st.divider()
 
     frente = None
@@ -1652,15 +2180,16 @@ def mostrar_paso_2(
         "lateral_izquierdo": False,
     }
 
-    if metodo == "🤖 IA integrada YUNPAR":
+    if metodo == "🤖 Gemini":
 
         st.markdown(
-            "### 🤖 Generar mockups dentro de YUNPAR"
+            "### 🤖 Generar mockups con Gemini"
         )
 
         st.caption(
             "Genera, revisa y aprueba cada vista. "
-            "Solo se mantiene una generación por vista en memoria."
+            "Solo se mantiene una generación "
+            "por vista en memoria."
         )
 
         frente, aprobados_ia["frente"] = (
@@ -1685,14 +2214,18 @@ def mostrar_paso_2(
                 slug="espalda",
                 referencia_frente=frente,
                 habilitado=(
-                    aprobados_ia["frente"]
+                    aprobados_ia[
+                        "frente"
+                    ]
                 ),
             )
         )
 
         st.divider()
 
-        lateral_derecho, aprobados_ia["lateral_derecho"] = (
+        lateral_derecho, aprobados_ia[
+            "lateral_derecho"
+        ] = (
             mostrar_generador_ia_vista(
                 orden_id=orden_id,
                 arte_url=arte_url,
@@ -1701,14 +2234,18 @@ def mostrar_paso_2(
                 slug="lateral_derecho",
                 referencia_frente=frente,
                 habilitado=(
-                    aprobados_ia["frente"]
+                    aprobados_ia[
+                        "frente"
+                    ]
                 ),
             )
         )
 
         st.divider()
 
-        lateral_izquierdo, aprobados_ia["lateral_izquierdo"] = (
+        lateral_izquierdo, aprobados_ia[
+            "lateral_izquierdo"
+        ] = (
             mostrar_generador_ia_vista(
                 orden_id=orden_id,
                 arte_url=arte_url,
@@ -1717,7 +2254,9 @@ def mostrar_paso_2(
                 slug="lateral_izquierdo",
                 referencia_frente=frente,
                 habilitado=(
-                    aprobados_ia["frente"]
+                    aprobados_ia[
+                        "frente"
+                    ]
                 ),
             )
         )
@@ -1748,11 +2287,13 @@ def mostrar_paso_2(
         )
 
         if frente is not None:
+
             st.image(
                 frente,
                 caption="Frente",
                 width=350,
             )
+
             st.success(
                 "✅ Frente cargado."
             )
@@ -1773,11 +2314,13 @@ def mostrar_paso_2(
         )
 
         if espalda is not None:
+
             st.image(
                 espalda,
                 caption="Espalda",
                 width=350,
             )
+
             st.success(
                 "✅ Espalda cargada."
             )
@@ -1798,11 +2341,13 @@ def mostrar_paso_2(
         )
 
         if lateral_derecho is not None:
+
             st.image(
                 lateral_derecho,
                 caption="Lateral derecho",
                 width=350,
             )
+
             st.success(
                 "✅ Lateral derecho cargado."
             )
@@ -1823,18 +2368,16 @@ def mostrar_paso_2(
         )
 
         if lateral_izquierdo is not None:
+
             st.image(
                 lateral_izquierdo,
                 caption="Lateral izquierdo",
                 width=350,
             )
+
             st.success(
                 "✅ Lateral izquierdo cargado."
             )
-
-    # =====================================================
-    # ESTADO COMÚN
-    # =====================================================
 
     st.divider()
 
@@ -1848,7 +2391,7 @@ def mostrar_paso_2(
             "Archivo": frente,
             "Aprobado": (
                 aprobados_ia["frente"]
-                if metodo == "🤖 IA integrada YUNPAR"
+                if metodo == "🤖 Gemini"
                 else frente is not None
             ),
         },
@@ -1857,7 +2400,7 @@ def mostrar_paso_2(
             "Archivo": espalda,
             "Aprobado": (
                 aprobados_ia["espalda"]
-                if metodo == "🤖 IA integrada YUNPAR"
+                if metodo == "🤖 Gemini"
                 else espalda is not None
             ),
         },
@@ -1865,8 +2408,10 @@ def mostrar_paso_2(
             "Vista": "Lateral derecho",
             "Archivo": lateral_derecho,
             "Aprobado": (
-                aprobados_ia["lateral_derecho"]
-                if metodo == "🤖 IA integrada YUNPAR"
+                aprobados_ia[
+                    "lateral_derecho"
+                ]
+                if metodo == "🤖 Gemini"
                 else lateral_derecho is not None
             ),
         },
@@ -1874,8 +2419,10 @@ def mostrar_paso_2(
             "Vista": "Lateral izquierdo",
             "Archivo": lateral_izquierdo,
             "Aprobado": (
-                aprobados_ia["lateral_izquierdo"]
-                if metodo == "🤖 IA integrada YUNPAR"
+                aprobados_ia[
+                    "lateral_izquierdo"
+                ]
+                if metodo == "🤖 Gemini"
                 else lateral_izquierdo is not None
             ),
         },
@@ -1886,22 +2433,38 @@ def mostrar_paso_2(
 
     for mockup in mockups:
 
-        archivo = mockup["Archivo"]
-        aprobado = mockup["Aprobado"]
+        archivo = mockup[
+            "Archivo"
+        ]
 
-        if archivo is not None and aprobado:
+        aprobado = mockup[
+            "Aprobado"
+        ]
+
+        if (
+            archivo is not None
+            and aprobado
+        ):
+
             cantidad_listos += 1
 
         if archivo is None:
+
             estado = "⏳ Pendiente"
+
         elif aprobado:
+
             estado = "✅ Aprobado"
+
         else:
+
             estado = "🔎 Por revisar"
 
         registros_estado.append(
             {
-                "Vista": mockup["Vista"],
+                "Vista": mockup[
+                    "Vista"
+                ],
                 "Estado": estado,
                 "Archivo": (
                     getattr(
@@ -1923,8 +2486,14 @@ def mostrar_paso_2(
         width="stretch",
     )
 
-    progreso = cantidad_listos / 4
-    st.progress(progreso)
+    progreso = (
+        cantidad_listos
+        / 4
+    )
+
+    st.progress(
+        progreso
+    )
 
     st.caption(
         f"{cantidad_listos} de 4 mockups listos."
@@ -1948,26 +2517,33 @@ def mostrar_paso_2(
         )
 
         if confirmado:
+
             st.success(
                 "✅ Mockups confirmados para este arte."
             )
+
         else:
+
             st.warning(
-                "⚠️ Revisa las cuatro imágenes y confirma "
-                "su relación con el arte original."
+                "⚠️ Revisa las cuatro imágenes "
+                "y confirma su relación "
+                "con el arte original."
             )
 
     else:
 
-        if metodo == "🤖 IA integrada YUNPAR":
+        if metodo == "🤖 Gemini":
+
             st.info(
                 "Genera y aprueba las cuatro vistas "
                 "para completar el Paso 2."
             )
+
         else:
+
             st.info(
-                "Carga las cuatro vistas para "
-                "completar el Paso 2."
+                "Carga las cuatro vistas "
+                "para completar el Paso 2."
             )
 
     paso2_completo = (
@@ -2012,7 +2588,7 @@ def mostrar_paso_2(
 
 # =========================================================
 # PASO 3
-# CLASIFICACIÓN IA
+# CLASIFICACIÓN GEMINI
 # =========================================================
 
 def mostrar_paso_3(
@@ -2023,16 +2599,16 @@ def mostrar_paso_3(
     st.divider()
 
     st.markdown(
-        "## 3️⃣ Clasificación automática con IA"
+        "## 3️⃣ Clasificación automática con Gemini"
     )
 
     st.caption(
-        "La IA analizará las cuatro vistas del producto "
+        "Gemini analizará las cuatro vistas del producto "
         "y propondrá información útil para el catálogo."
     )
 
     st.info(
-        "🤖 La IA solamente propone la clasificación. "
+        "🤖 Gemini solamente propone la clasificación. "
         "El operador debe revisarla y confirmarla "
         "antes de continuar."
     )
@@ -2078,12 +2654,8 @@ def mostrar_paso_3(
         f"preparacion_clasificacion_confirmada_{orden_id}"
     )
 
-    # =====================================================
-    # ANALIZAR
-    # =====================================================
-
     if st.button(
-        "🤖 Analizar mockups con IA",
+        "🤖 Analizar mockups con Gemini",
         type="primary",
         width="stretch",
         key=f"preparacion_analizar_ia_{orden_id}",
@@ -2122,7 +2694,7 @@ def mostrar_paso_3(
 
             st.error(
                 f"❌ No se pudo realizar "
-                f"la clasificación con IA: {e}"
+                f"la clasificación con Gemini: {e}"
             )
 
     clasificacion = (
@@ -2140,12 +2712,8 @@ def mostrar_paso_3(
 
         return False
 
-    # =====================================================
-    # RESULTADOS
-    # =====================================================
-
     st.markdown(
-        "### 🧠 Resultado propuesto por la IA"
+        "### 🧠 Resultado propuesto por Gemini"
     )
 
     colores_iniciales = (
@@ -2322,10 +2890,6 @@ def mostrar_paso_3(
         )
     )
 
-    # =====================================================
-    # RESUMEN
-    # =====================================================
-
     st.markdown(
         "### 📋 Clasificación actual"
     )
@@ -2421,10 +2985,6 @@ def mostrar_paso_3(
         or "Sin descripción"
     )
 
-    # =====================================================
-    # TEXTO SEMÁNTICO
-    # =====================================================
-
     texto_semantico = (
         generar_texto_semantico(
             clasificacion
@@ -2444,10 +3004,6 @@ def mostrar_paso_3(
         texto_semantico,
         language="text",
     )
-
-    # =====================================================
-    # CONFIRMAR
-    # =====================================================
 
     st.divider()
 
@@ -2475,13 +3031,9 @@ def mostrar_paso_3(
             "preparacion_catalogo_clasificacion"
         ] = {
 
-            "orden_id": (
-                orden_id
-            ),
+            "orden_id": orden_id,
 
-            "codigo": (
-                codigo
-            ),
+            "codigo": codigo,
 
             "clasificacion": (
                 clasificacion
@@ -2597,9 +3149,95 @@ def mostrar_paso_4(
         )
     )
 
-    # =====================================================
-    # TÍTULO
-    # =====================================================
+    if not FONDO_CATALOGO.exists():
+
+        st.error(
+            "❌ No se encontró assets/fondo-yunpar.png. "
+            "No se puede preparar la versión final "
+            "de las imágenes para el catálogo."
+        )
+
+        return False
+
+    try:
+
+        datos_mockups_finales = (
+            datos_mockups.copy()
+        )
+
+        datos_mockups_finales[
+            "frente"
+        ] = preparar_mockup_final_yunpar(
+            datos_mockups.get(
+                "frente"
+            ),
+            "01_frente_yunpar.webp",
+        )
+
+        datos_mockups_finales[
+            "espalda"
+        ] = preparar_mockup_final_yunpar(
+            datos_mockups.get(
+                "espalda"
+            ),
+            "02_espalda_yunpar.webp",
+        )
+
+        datos_mockups_finales[
+            "lateral_derecho"
+        ] = preparar_mockup_final_yunpar(
+            datos_mockups.get(
+                "lateral_derecho"
+            ),
+            "03_derecha_yunpar.webp",
+        )
+
+        datos_mockups_finales[
+            "lateral_izquierdo"
+        ] = preparar_mockup_final_yunpar(
+            datos_mockups.get(
+                "lateral_izquierdo"
+            ),
+            "04_izquierda_yunpar.webp",
+        )
+
+        if not all(
+            [
+                datos_mockups_finales.get(
+                    "frente"
+                ),
+                datos_mockups_finales.get(
+                    "espalda"
+                ),
+                datos_mockups_finales.get(
+                    "lateral_derecho"
+                ),
+                datos_mockups_finales.get(
+                    "lateral_izquierdo"
+                ),
+            ]
+        ):
+
+            raise RuntimeError(
+                "No se pudieron preparar "
+                "las cuatro imágenes finales."
+            )
+
+        st.session_state[
+            "preparacion_catalogo_mockups_finales"
+        ] = {
+            "orden_id": orden_id,
+            "imagenes": datos_mockups_finales,
+        }
+
+    except Exception as e:
+
+        st.error(
+            "❌ No se pudieron preparar las imágenes "
+            f"con la identidad visual YUNPAR: {e}"
+        )
+
+        return False
 
     tipo_producto = (
         clasificacion.get(
@@ -2630,10 +3268,6 @@ def mostrar_paso_4(
         ),
         key=f"preparacion_observacion_final_{orden_id}",
     )
-
-    # =====================================================
-    # RESUMEN
-    # =====================================================
 
     st.markdown(
         "### 📦 Resumen del paquete"
@@ -2671,17 +3305,13 @@ def mostrar_paso_4(
     with col3:
 
         st.metric(
-            "Clasificación IA",
+            "Clasificación Gemini",
             "Confirmada",
         )
 
         st.caption(
             "Revisada por el operador"
         )
-
-    # =====================================================
-    # DATOS CLASIFICADOS
-    # =====================================================
 
     resumen_final = pd.DataFrame(
         [
@@ -2752,9 +3382,19 @@ def mostrar_paso_4(
         width="stretch",
     )
 
-    # =====================================================
-    # MOCKUPS
-    # =====================================================
+    st.markdown(
+        "### 🎨 Preparación visual YUNPAR"
+    )
+
+    st.success(
+        "✅ Fondo y marca YUNPAR aplicados "
+        "a las cuatro imágenes."
+    )
+
+    st.caption(
+        "1080 × 1350 px · WEBP · "
+        "Calidad 85 · Marca YUNPAR"
+    )
 
     st.markdown(
         "### 🖼️ Imágenes que se enviarán"
@@ -2766,12 +3406,12 @@ def mostrar_paso_4(
 
     with col_img1:
 
-        if datos_mockups.get(
+        if datos_mockups_finales.get(
             "frente"
         ):
 
             st.image(
-                datos_mockups[
+                datos_mockups_finales[
                     "frente"
                 ],
                 caption="⭐ Frente",
@@ -2780,12 +3420,12 @@ def mostrar_paso_4(
 
     with col_img2:
 
-        if datos_mockups.get(
+        if datos_mockups_finales.get(
             "espalda"
         ):
 
             st.image(
-                datos_mockups[
+                datos_mockups_finales[
                     "espalda"
                 ],
                 caption="Espalda",
@@ -2794,12 +3434,12 @@ def mostrar_paso_4(
 
     with col_img3:
 
-        if datos_mockups.get(
+        if datos_mockups_finales.get(
             "lateral_derecho"
         ):
 
             st.image(
-                datos_mockups[
+                datos_mockups_finales[
                     "lateral_derecho"
                 ],
                 caption="Lateral derecho",
@@ -2808,21 +3448,17 @@ def mostrar_paso_4(
 
     with col_img4:
 
-        if datos_mockups.get(
+        if datos_mockups_finales.get(
             "lateral_izquierdo"
         ):
 
             st.image(
-                datos_mockups[
+                datos_mockups_finales[
                     "lateral_izquierdo"
                 ],
                 caption="Lateral izquierdo",
                 width="stretch",
             )
-
-    # =====================================================
-    # BÚSQUEDA INTELIGENTE
-    # =====================================================
 
     st.markdown(
         "### 🔎 Preparación para búsqueda inteligente"
@@ -2843,10 +3479,6 @@ def mostrar_paso_4(
         "en Supabase."
     )
 
-    # =====================================================
-    # VALIDACIÓN FINAL
-    # =====================================================
-
     st.divider()
 
     confirmacion_final = st.checkbox(
@@ -2863,7 +3495,7 @@ def mostrar_paso_4(
     )
 
     if st.button(
-        "📦 Enviar al Catálogo de Diseños (MODO PRUEBA)",
+        "📦 Preparar para Catálogo de Diseños",
         type="primary",
         disabled=(
             not confirmacion_final
@@ -2875,12 +3507,24 @@ def mostrar_paso_4(
 
         paquete = construir_paquete_catalogo(
             orden_actual=orden_actual,
-            datos_mockups=datos_mockups,
+            datos_mockups=datos_mockups_finales,
             clasificacion=clasificacion,
             texto_semantico=texto_semantico,
             titulo_publico=titulo_publico,
             observacion_operador=observacion_operador,
         )
+
+        # =====================================================
+        # PUNTO DE INTEGRACIÓN SUPABASE
+        # =====================================================
+        # El paquete ya contiene toda la información final del diseño.
+        # Cuando se habilite la persistencia definitiva, este es el punto
+        # donde debe llamarse al servicio/repositorio encargado de:
+        # 1) subir los mockups a Supabase Storage,
+        # 2) guardar el registro del catálogo en la base de datos, y
+        # 3) asociar el registro con la orden correspondiente.
+        # Mientras esa integración no esté activa, el paquete se conserva
+        # únicamente en la sesión para no escribir datos incompletos.
 
         st.session_state[
             clave_paquete
@@ -2906,24 +3550,17 @@ def mostrar_paso_4(
 
         return False
 
-    # =====================================================
-    # PASO 4 COMPLETO
-    # =====================================================
-
     st.success(
-        "✅ PASO 4 COMPLETADO EN MODO PRUEBA. "
+        "✅ PASO 4 COMPLETADO. "
         "El paquete quedó preparado para "
         "Catálogo de Diseños."
     )
 
     st.info(
-        "🔒 No se creó ningún registro ni archivo "
-        "nuevo en Supabase."
+        "🔌 Paquete listo para integración. "
+        "La escritura final en Supabase permanece desactivada "
+        "hasta que se conecte la persistencia."
     )
-
-    # =====================================================
-    # DETALLE DEL PAQUETE
-    # =====================================================
 
     with st.expander(
         "📋 Ver paquete preparado",
@@ -2934,10 +3571,6 @@ def mostrar_paso_4(
             paquete
         )
 
-    # =====================================================
-    # DESCARGAR EVIDENCIA JSON
-    # =====================================================
-
     paquete_json = json.dumps(
         paquete,
         ensure_ascii=False,
@@ -2945,10 +3578,10 @@ def mostrar_paso_4(
     )
 
     st.download_button(
-        label="⬇️ Descargar paquete de prueba (.json)",
+        label="⬇️ Descargar paquete preparado (.json)",
         data=paquete_json,
         file_name=(
-            f"{codigo}_catalogo_prueba.json"
+            f"{codigo}_catalogo_preparado.json"
         ),
         mime="application/json",
         width="stretch",
@@ -2956,9 +3589,8 @@ def mostrar_paso_4(
     )
 
     st.caption(
-        "Este archivo es únicamente una evidencia "
-        "del paquete preparado. "
-        "No reemplaza el futuro registro en Supabase."
+        "Este archivo sirve como evidencia y respaldo del paquete preparado. "
+        "La persistencia definitiva se activará al conectar Supabase."
     )
 
     return True
@@ -2972,10 +3604,6 @@ def render(
     supabase,
 ):
 
-    # =====================================================
-    # CABECERA
-    # =====================================================
-
     st.header(
         "🤖 Preparación de Catálogo",
         divider="blue",
@@ -2987,15 +3615,12 @@ def render(
     )
 
     st.info(
-        "🔒 Módulo en construcción. "
-        "Actualmente trabaja con consultas, "
-        "archivos temporales y clasificación IA. "
-        "No modifica información en Supabase."
+        "🔌 LISTO PARA INTEGRACIÓN. "
+        "El módulo consulta órdenes, genera o recibe mockups, "
+        "permite seleccionar el perfil de presentación, "
+        "clasifica con Gemini y construye el paquete final. "
+        "La escritura definitiva se activará al conectar la persistencia en Supabase."
     )
-
-    # =====================================================
-    # FLUJO GENERAL
-    # =====================================================
 
     st.markdown(
         "## 📌 Flujo de trabajo"
@@ -3023,7 +3648,7 @@ def render(
 
         st.metric(
             "Paso 3",
-            "Clasificación IA",
+            "Clasificación Gemini",
         )
 
     with col4:
@@ -3035,11 +3660,6 @@ def render(
 
     st.divider()
 
-    # =====================================================
-    # PASO 1
-    # ÓRDENES
-    # =====================================================
-
     st.markdown(
         "## 1️⃣ Órdenes con arte disponible"
     )
@@ -3048,10 +3668,6 @@ def render(
         "Aquí aparecen únicamente las órdenes "
         "que tienen un arte cargado en el sistema."
     )
-
-    # =====================================================
-    # BUSCADORES
-    # =====================================================
 
     col_bus1, col_bus2 = (
         st.columns(2)
@@ -3072,10 +3688,6 @@ def render(
             placeholder="Ej: AGRISUM",
             key="preparacion_buscar_cliente",
         )
-
-    # =====================================================
-    # CONSULTAR ÓRDENES
-    # =====================================================
 
     try:
 
@@ -3114,10 +3726,6 @@ def render(
 
         return
 
-    # =====================================================
-    # SOLO CON ARTE
-    # =====================================================
-
     ordenes_con_arte = []
 
     for orden in ordenes:
@@ -3154,10 +3762,6 @@ def render(
         )
 
         return
-
-    # =====================================================
-    # CLIENTES
-    # =====================================================
 
     ids_clientes = list(
         {
@@ -3210,10 +3814,6 @@ def render(
         except Exception:
 
             mapa_clientes = {}
-
-    # =====================================================
-    # DATAFRAME
-    # =====================================================
 
     registros = []
 
@@ -3301,10 +3901,6 @@ def render(
         registros
     )
 
-    # =====================================================
-    # FILTROS
-    # =====================================================
-
     if buscar_codigo:
 
         df = df[
@@ -3332,10 +3928,6 @@ def render(
     df = df.reset_index(
         drop=True
     )
-
-    # =====================================================
-    # MÉTRICAS
-    # =====================================================
 
     col_res1, col_res2 = (
         st.columns(2)
@@ -3368,10 +3960,6 @@ def render(
 
         return
 
-    # =====================================================
-    # BANDEJA
-    # =====================================================
-
     st.markdown(
         "### 📥 Bandeja de trabajos disponibles"
     )
@@ -3396,10 +3984,6 @@ def render(
         selection_mode="single-row",
         key="preparacion_tabla_ordenes",
     )
-
-    # =====================================================
-    # SELECCIÓN
-    # =====================================================
 
     if evento.selection.rows:
 
@@ -3442,21 +4026,6 @@ def render(
             and id_anterior != id_nueva
         ):
 
-            st.session_state.pop(
-                "preparacion_catalogo_mockups",
-                None,
-            )
-
-            st.session_state.pop(
-                "preparacion_catalogo_clasificacion",
-                None,
-            )
-
-            st.session_state.pop(
-                "preparacion_catalogo_paquete_final",
-                None,
-            )
-
             limpiar_memoria_mockups_orden(
                 id_anterior
             )
@@ -3470,10 +4039,6 @@ def render(
             "preparacion_catalogo_orden_actual"
         )
     )
-
-    # =====================================================
-    # SIN SELECCIÓN
-    # =====================================================
 
     if not orden_actual:
 
@@ -3490,10 +4055,6 @@ def render(
         )
 
         return
-
-    # =====================================================
-    # VALIDAR FILTRO
-    # =====================================================
 
     ids_actuales = (
         df[
@@ -3530,10 +4091,6 @@ def render(
         )
 
         return
-
-    # =====================================================
-    # ARTE
-    # =====================================================
 
     st.divider()
 
@@ -3652,19 +4209,11 @@ def render(
                 observaciones
             )
 
-    # =====================================================
-    # PASO 1
-    # =====================================================
-
     st.success(
         "✅ PASO 1 COMPLETADO. "
         "La orden tiene un arte disponible "
         "y quedó seleccionada."
     )
-
-    # =====================================================
-    # PASO 2
-    # =====================================================
 
     (
         paso2_completo,
@@ -3672,10 +4221,6 @@ def render(
     ) = mostrar_paso_2(
         orden_actual
     )
-
-    # =====================================================
-    # PASO 3
-    # =====================================================
 
     paso3_completo = False
 
@@ -3688,10 +4233,6 @@ def render(
             )
         )
 
-    # =====================================================
-    # PASO 4
-    # =====================================================
-
     paso4_completo = False
 
     if paso3_completo:
@@ -3702,10 +4243,6 @@ def render(
                 datos_mockups,
             )
         )
-
-    # =====================================================
-    # ESTADO GENERAL
-    # =====================================================
 
     mostrar_estado_proceso(
         paso1_completo=True,
