@@ -17,7 +17,7 @@ from modulos import catalogo_storage
 # NO CAMBIAR TODAVÍA.
 # =========================================================
 
-MODO_DB_REAL = False
+MODO_DB_REAL = True
 
 
 # =========================================================

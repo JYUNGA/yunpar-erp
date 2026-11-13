@@ -34,7 +34,7 @@ MIME_PERMITIDOS = [
 # NO CAMBIAR TODAVÍA.
 # =========================================================
 
-MODO_SUPABASE_REAL = False
+MODO_SUPABASE_REAL = True
 
 
 # =========================================================
