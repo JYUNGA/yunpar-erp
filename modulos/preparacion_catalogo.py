@@ -22,6 +22,8 @@ import pytz
 
 from PIL import Image, ImageOps, ImageDraw, ImageFilter, ImageChops
 
+from modulos import catalogo_db
+
 
 # =========================================================
 # MÓDULO: PREPARACIÓN DE CATÁLOGO
@@ -1033,6 +1035,8 @@ def construir_paquete_catalogo(
     clasificacion,
     texto_semantico,
     titulo_publico,
+    tipo_producto_catalogo,
+    categoria_catalogo,
     observacion_operador,
 ):
 
@@ -1143,6 +1147,10 @@ def construir_paquete_catalogo(
             titulo_publico.strip()
         ),
 
+         "categoria": (
+            categoria_catalogo
+        ),
+
         "descripcion_publica": (
             clasificacion.get(
                 "descripcion",
@@ -1151,10 +1159,7 @@ def construir_paquete_catalogo(
         ),
 
         "tipo_producto": (
-            clasificacion.get(
-                "tipo_producto",
-                "",
-            )
+            tipo_producto_catalogo
         ),
 
         "tipo_prenda": (
@@ -1354,11 +1359,7 @@ def mostrar_estado_proceso(
             "al Paso 4."
         )
 
-    st.warning(
-        "🔌 Integración pendiente: el flujo funcional está completo. "
-        "La escritura final en Supabase permanece desactivada "
-        "hasta realizar la conexión definitiva."
-    )
+    
 
 
 # =========================================================
@@ -3095,11 +3096,7 @@ def mostrar_paso_4(
         "al módulo de administración del catálogo."
     )
 
-    st.warning(
-        "🧪 MODO PRUEBA ACTIVO. "
-        "El paquete se preparará únicamente en memoria. "
-        "Todavía NO se escribirá en Supabase."
-    )
+    
 
     orden_id = orden_actual.get(
         "ID"
@@ -3260,6 +3257,35 @@ def mostrar_paso_4(
         key=f"preparacion_titulo_publico_{orden_id}",
     )
 
+    tipo_producto_catalogo = st.selectbox(
+        "Tipo de producto del catálogo",
+        options=[
+            "Uniforme / conjunto deportivo",
+            "Camiseta",
+            "Pantaloneta",
+            "Gorra",
+            "Bandera",
+            "Polín",
+            "Campaña / colección",
+            "Producto promocional",
+        ],
+        key=f"preparacion_tipo_producto_catalogo_{orden_id}",
+    )
+
+    categoria_catalogo = st.selectbox(
+    "Categoría del catálogo",
+    options=[
+        "Deportivo",
+        "Corporativo",
+        "Escolar",
+        "Promocional",
+        "Campaña",
+        "Eventos",
+        "Otro",
+    ],
+    key=f"preparacion_categoria_catalogo_{orden_id}",
+)
+    
     observacion_operador = st.text_area(
         "Observación interna del operador",
         placeholder=(
@@ -3495,7 +3521,7 @@ def mostrar_paso_4(
     )
 
     if st.button(
-        "📦 Preparar para Catálogo de Diseños",
+        "📦 Enviar al Catálogo de Diseños",
         type="primary",
         disabled=(
             not confirmacion_final
@@ -3511,20 +3537,180 @@ def mostrar_paso_4(
             clasificacion=clasificacion,
             texto_semantico=texto_semantico,
             titulo_publico=titulo_publico,
+            tipo_producto_catalogo=tipo_producto_catalogo,
+            categoria_catalogo=categoria_catalogo,
             observacion_operador=observacion_operador,
         )
 
         # =====================================================
-        # PUNTO DE INTEGRACIÓN SUPABASE
+        # PREPARAR IMÁGENES PARA SUPABASE
         # =====================================================
-        # El paquete ya contiene toda la información final del diseño.
-        # Cuando se habilite la persistencia definitiva, este es el punto
-        # donde debe llamarse al servicio/repositorio encargado de:
-        # 1) subir los mockups a Supabase Storage,
-        # 2) guardar el registro del catálogo en la base de datos, y
-        # 3) asociar el registro con la orden correspondiente.
-        # Mientras esa integración no esté activa, el paquete se conserva
-        # únicamente en la sesión para no escribir datos incompletos.
+
+        imagenes_db = []
+
+        configuracion_imagenes = [
+            (
+                1,
+                "frente",
+                "Frente",
+                True,
+            ),
+            (
+                2,
+                "espalda",
+                "Espalda",
+                False,
+            ),
+            (
+                3,
+                "lateral_derecho",
+                "Lateral derecho",
+                False,
+            ),
+            (
+                4,
+                "lateral_izquierdo",
+                "Lateral izquierdo",
+                False,
+            ),
+        ]
+
+        for (
+            orden_imagen,
+            clave_imagen,
+            nombre_imagen,
+            es_portada,
+        ) in configuracion_imagenes:
+
+            archivo_imagen = (
+                datos_mockups_finales.get(
+                    clave_imagen
+                )
+            )
+
+            if archivo_imagen is None:
+
+                st.error(
+                    f"❌ Falta la imagen: "
+                    f"{nombre_imagen}"
+                )
+
+                return False
+
+            bytes_imagen = (
+                archivo_imagen.getvalue()
+            )
+
+            imagenes_db.append(
+                {
+                    "orden": orden_imagen,
+                    "nombre": nombre_imagen,
+                    "es_portada": es_portada,
+                    "bytes": bytes_imagen,
+                    "peso_optimizado": len(
+                        bytes_imagen
+                    ),
+                    "ancho": ANCHO_CATALOGO,
+                    "alto": ALTO_CATALOGO,
+                    "formato": "WEBP",
+                }
+            )
+
+        # =====================================================
+        # CONSTRUIR BORRADOR REAL
+        # =====================================================
+
+        borrador_db = {
+
+            "estado": "BORRADOR",
+
+            "modo": "REAL",
+
+            "orden_id": orden_id,
+
+            "codigo_orden": paquete.get(
+                "codigo_orden",
+                "",
+            ),
+
+            "cliente": paquete.get(
+                "cliente",
+                "",
+            ),
+
+            "arte_original": orden_actual.get(
+                "Arte",
+                "",
+            ),
+
+            "tipo_producto": paquete.get(
+                "tipo_producto",
+                "",
+            ),
+
+            "categoria": paquete.get(
+                "categoria",
+                "",
+            ),
+
+            "titulo": paquete.get(
+                "titulo_publico",
+                "",
+            ),
+
+            "descripcion": paquete.get(
+                "descripcion_publica",
+                "",
+            ),
+
+            "colores": paquete.get(
+                "colores",
+                [],
+            ),
+
+            "etiquetas": paquete.get(
+                "etiquetas",
+                [],
+            ),
+
+            "relacion_confirmada": True,
+
+            "cantidad_imagenes": len(
+                imagenes_db
+            ),
+
+            "imagenes": imagenes_db,
+        }
+
+        # =====================================================
+        # GUARDAR REALMENTE EN SUPABASE
+        # =====================================================
+
+        try:
+
+            catalogo_db.validar_borrador(
+                borrador_db
+            )
+
+            resultado_guardado = (
+                catalogo_db
+                .guardar_borrador_real(
+                    borrador_db
+                )
+            )
+
+        except Exception as e:
+
+            st.error(
+                "❌ No se pudo guardar "
+                f"el diseño en Supabase: {e}"
+            )
+
+            return False
+
+        # =====================================================
+        # GUARDAR RESULTADO EN LA SESIÓN
+        # =====================================================
 
         st.session_state[
             clave_paquete
@@ -3534,8 +3720,17 @@ def mostrar_paso_4(
             "preparacion_catalogo_paquete_final"
         ] = paquete
 
+        st.session_state[
+            f"preparacion_borrador_db_{orden_id}"
+        ] = borrador_db
+
+        st.session_state[
+            f"preparacion_resultado_db_{orden_id}"
+        ] = resultado_guardado
+
         st.success(
-            "✅ Paquete preparado correctamente."
+            "✅ Diseño guardado correctamente "
+            "en Supabase."
         )
 
         st.rerun()
@@ -3552,15 +3747,11 @@ def mostrar_paso_4(
 
     st.success(
         "✅ PASO 4 COMPLETADO. "
-        "El paquete quedó preparado para "
+        "El diseño fue enviado al "
         "Catálogo de Diseños."
     )
 
-    st.info(
-        "🔌 Paquete listo para integración. "
-        "La escritura final en Supabase permanece desactivada "
-        "hasta que se conecte la persistencia."
-    )
+    
 
     with st.expander(
         "📋 Ver paquete preparado",
@@ -3589,8 +3780,8 @@ def mostrar_paso_4(
     )
 
     st.caption(
-        "Este archivo sirve como evidencia y respaldo del paquete preparado. "
-        "La persistencia definitiva se activará al conectar Supabase."
+        "Este archivo JSON sirve como evidencia y respaldo "
+        "de la información enviada al catálogo."
     )
 
     return True
@@ -3614,13 +3805,7 @@ def render(
         "antes de enviarlos al catálogo digital de YUNPAR."
     )
 
-    st.info(
-        "🔌 LISTO PARA INTEGRACIÓN. "
-        "El módulo consulta órdenes, genera o recibe mockups, "
-        "permite seleccionar el perfil de presentación, "
-        "clasifica con Gemini y construye el paquete final. "
-        "La escritura definitiva se activará al conectar la persistencia en Supabase."
-    )
+    
 
     st.markdown(
         "## 📌 Flujo de trabajo"
