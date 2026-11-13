@@ -1,0 +1,128 @@
+YUNPAR ERP — ENTREGA FINAL PARA EL INGENIERO
+=============================================
+
+ESTADO GENERAL
+--------------
+La versión entregada corresponde al proyecto limpio, sin módulos de demo activos
+y con App.py apuntando nuevamente a los módulos normales.
+
+FUNCIONALIDADES IMPLEMENTADAS / PREPARADAS
+------------------------------------------
+1. Varias imágenes por arte:
+   - carga de múltiples archivos;
+   - selección de arte principal;
+   - cambio de principal;
+   - control de duplicados;
+   - interfaz responsive.
+
+2. Puede ir / No puede ir al catálogo:
+   - lógica preparada;
+   - migración SQL incluida.
+
+3. Gemini + perfiles/modelos de presentación:
+   - generación de mockups;
+   - perfiles como niño, joven, adulto, mujer, etc.;
+   - consistencia de vistas.
+
+4. Preparación de Catálogo:
+   - selección de arte;
+   - creación/revisión de mockups;
+   - clasificación con Gemini;
+   - preparación del paquete final.
+
+5. Diseño IA desde Cotizaciones:
+   - referencia del cliente;
+   - propuesta con Gemini;
+   - ajustes/revisión;
+   - aprobación;
+   - envío al diseñador;
+   - continuación a cotización.
+
+6. Evitar preparar dos veces el mismo diseño:
+   - comparación por huella SHA-256;
+   - una nueva orden puede seguir siendo válida para Producción;
+   - si reutiliza un arte ya preparado, Preparación de Catálogo no debe volver
+     a generar mockups, llamar a Gemini ni preparar otro paquete.
+
+SUPABASE — PASOS QUE REALIZA EL INGENIERO
+-----------------------------------------
+El usuario NO ejecutó migraciones ni hizo cambios manuales en Supabase.
+
+Revisar y ejecutar únicamente las migraciones que todavía estén pendientes:
+
+- sql/catalogo_digital_v1.sql
+  Migración/base del catálogo digital. Verificar primero si ya está aplicada.
+
+- sql/catalogo_permiso_ordenes.sql
+  Activa los campos necesarios para "Puede ir / No puede ir al catálogo".
+
+- sql/disenos_ia_ventas.sql
+  Activa la persistencia del flujo Diseño IA de Cotizaciones.
+
+- sql/catalogo_antiduplicados.sql
+  Añade arte_original_hash e índices para evitar preparar/publicar dos veces
+  exactamente el mismo diseño en órdenes diferentes.
+
+IMPORTANTE:
+No ejecutar migraciones a ciegas si ya fueron aplicadas previamente.
+Verificar primero el esquema actual de la base.
+
+PRUEBAS RECOMENDADAS DESPUÉS DE ACTIVAR SUPABASE
+------------------------------------------------
+A. Diseño IA:
+   Cotizaciones -> Diseño IA -> cliente -> referencia -> propuesta -> ajustes
+   -> aprobación -> envío al diseñador -> crear cotización.
+
+B. Preparación de Catálogo:
+   seleccionar una orden autorizada -> mockups -> Gemini -> paquete final.
+
+C. Antiduplicados:
+   - preparar/publicar una orden con un arte;
+   - abrir otra orden que reutilice exactamente el mismo archivo;
+   - Preparación de Catálogo debe reconocer que ya fue preparado y detener
+     el flujo antes de generar nuevamente mockups/Gemini.
+
+D. Producción:
+   la segunda orden debe seguir siendo válida para Producción aunque el arte
+   ya haya sido preparado anteriormente para catálogo.
+
+ARCHIVOS IMPORTANTES
+--------------------
+App.py
+config.py
+modulos/cotizaciones.py
+modulos/disenador.py
+modulos/produccion.py
+modulos/preparacion_catalogo.py
+modulos/catalogo_db.py
+modulos/catalogo_disenos.py
+modulos/catalogo_storage.py
+sql/catalogo_digital_v1.sql
+sql/catalogo_permiso_ordenes.sql
+sql/disenos_ia_ventas.sql
+sql/catalogo_antiduplicados.sql
+
+ANTES DE COMPRIMIR / ENTREGAR
+-----------------------------
+- App.py debe importar:
+      cotizaciones,
+      preparacion_catalogo,
+  y NO módulos *_modo_prueba o *_demo.
+
+- Eliminar __pycache__ si aparece. Python puede volver a crearlo al ejecutar.
+
+- No incluir archivos *_RESPALDO*, *_demo*, *_modo_prueba* o backups temporales.
+
+- Sustituir/eliminar LEEME_DEMO.txt y dejar este archivo:
+      LEEME_ENTREGA_INGENIERO.txt
+
+- Revisar .streamlit/secrets.toml:
+  si contiene claves privadas, tokens o credenciales que NO deban viajar en el ZIP,
+  retirarlo del paquete y compartir esas credenciales por un canal seguro.
+  Si el ingeniero ya administra esas credenciales y debe recibirlas, conservarlo
+  solo con autorización.
+
+RESULTADO ESPERADO
+------------------
+El proyecto queda listo para que el ingeniero revise el código, ejecute las
+migraciones pendientes en Supabase y haga la prueba final de integración.

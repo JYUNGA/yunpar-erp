@@ -6,8 +6,177 @@ import urllib.parse
 import os
 import qrcode
 import tempfile
+import uuid
+import mimetypes
+import requests
 from fpdf import FPDF
 from num2words import num2words
+from config import OrderState, transicionar_estado
+
+
+
+def _inyectar_estilos_responsive():
+    """Ajustes visuales para escritorio y, sobre todo, celular."""
+    st.markdown(
+        """
+        <style>
+        html { scroll-behavior: smooth; }
+
+        [data-testid="stAppViewContainer"] {
+            overflow-x: hidden;
+        }
+
+        [data-testid="stMainBlockContainer"] {
+            max-width: 1320px;
+            padding-top: 1.6rem;
+            padding-bottom: 4rem;
+        }
+
+        .stTabs [data-baseweb="tab-list"] {
+            gap: .25rem;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            flex-wrap: nowrap !important;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+            padding-bottom: .15rem;
+        }
+
+        .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar {
+            display: none;
+        }
+
+        .stTabs [data-baseweb="tab"] {
+            flex: 0 0 auto !important;
+            white-space: nowrap !important;
+            min-width: max-content !important;
+            padding-left: .65rem !important;
+            padding-right: .65rem !important;
+        }
+
+        .stButton > button,
+        .stDownloadButton > button,
+        [data-testid="stLinkButton"] a {
+            border-radius: 11px !important;
+            min-height: 42px;
+        }
+
+        [data-testid="stImage"] img {
+            border-radius: 14px;
+            object-fit: contain;
+        }
+
+        [data-testid="stAlert"] {
+            border-radius: 14px;
+        }
+
+        @media (max-width: 700px) {
+            [data-testid="stMainBlockContainer"] {
+                max-width: 100% !important;
+                padding: .75rem .7rem 4.5rem !important;
+            }
+
+            h1 {
+                font-size: 1.65rem !important;
+                line-height: 1.12 !important;
+                margin-bottom: .6rem !important;
+            }
+
+            h2 {
+                font-size: 1.35rem !important;
+                line-height: 1.15 !important;
+            }
+
+            h3 {
+                font-size: 1.18rem !important;
+                line-height: 1.2 !important;
+            }
+
+            h4 {
+                font-size: 1.04rem !important;
+                line-height: 1.2 !important;
+            }
+
+            p, label, .stCaption {
+                line-height: 1.4 !important;
+            }
+
+            [data-testid="stHorizontalBlock"] {
+                flex-direction: column !important;
+                gap: .55rem !important;
+            }
+
+            [data-testid="column"] {
+                width: 100% !important;
+                flex: 1 1 100% !important;
+                min-width: 0 !important;
+            }
+
+            .stButton > button,
+            .stDownloadButton > button,
+            [data-testid="stLinkButton"] a {
+                width: 100% !important;
+                min-height: 46px !important;
+                font-size: .90rem !important;
+            }
+
+            .stTabs [data-baseweb="tab-list"] {
+                width: 100% !important;
+                gap: .12rem !important;
+                scroll-snap-type: x proximity;
+            }
+
+            .stTabs [data-baseweb="tab"] {
+                scroll-snap-align: start;
+                font-size: .82rem !important;
+                padding: .45rem .48rem !important;
+            }
+
+            [data-baseweb="select"],
+            [data-baseweb="input"],
+            textarea,
+            input {
+                max-width: 100% !important;
+            }
+
+            [data-testid="stDataFrame"],
+            [data-testid="stDataEditor"] {
+                max-width: 100% !important;
+                overflow-x: auto !important;
+                border-radius: 12px;
+            }
+
+            [data-testid="stImage"] {
+                width: 100% !important;
+            }
+
+            [data-testid="stImage"] img {
+                max-width: 100% !important;
+                height: auto !important;
+                max-height: 520px !important;
+                object-fit: contain !important;
+            }
+
+            [data-testid="stVerticalBlock"] {
+                gap: .72rem !important;
+            }
+
+            hr {
+                margin: 1rem 0 !important;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _dia_rerun_local():
+    """Rerun solo del fragmento cuando sea posible para no mandar el scroll arriba."""
+    try:
+        st.rerun(scope="fragment")
+    except Exception:
+        st.rerun()
 
 
 # --- CLASE PDF CON PLANTILLA VISUAL ---
@@ -244,8 +413,813 @@ def generar_pdf_final(cabecera, items, observaciones, vigencia_fecha, total_letr
     return bytes(pdf.output())
 
 
+
+# --- DISEÑO CON IA (PRODUCCIÓN / SUPABASE) ---
+_DIA_TABLE = "disenos_ia_ventas"
+_DIA_BUCKET = "ordenes_produccion"
+
+
+def _dia_now_iso():
+    return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def _dia_api_key_gemini():
+    try:
+        return st.secrets["gemini"]["api_key"]
+    except Exception:
+        return None
+
+
+def _dia_tabla_disponible(supabase):
+    try:
+        supabase.table(_DIA_TABLE).select("id").limit(1).execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+def _dia_codigo_siguiente(supabase):
+    try:
+        res = (
+            supabase.table(_DIA_TABLE)
+            .select("codigo")
+            .order("id", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if res.data:
+            ultimo = str(res.data[0].get("codigo") or "")
+            if ultimo.startswith("DIA-") and ultimo[4:].isdigit():
+                return f"DIA-{int(ultimo[4:]) + 1:04d}"
+    except Exception:
+        pass
+    return f"DIA-{int(time.time()) % 100000:05d}"
+
+
+def _dia_codigo_orden(supabase):
+    try:
+        res = (
+            supabase.table("ordenes")
+            .select("codigo_orden")
+            .ilike("codigo_orden", "ORD-%")
+            .order("codigo_orden", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if res.data:
+            ultimo = str(res.data[0].get("codigo_orden") or "")
+            if ultimo.startswith("ORD-") and ultimo[4:].isdigit():
+                return f"ORD-{int(ultimo[4:]) + 1:04d}"
+    except Exception:
+        pass
+    return f"ORD-{int(time.time())}"
+
+
+def _dia_extension_mime(mime):
+    mime = (mime or "image/png").lower()
+    if "webp" in mime:
+        return ".webp"
+    if "jpeg" in mime or "jpg" in mime:
+        return ".jpg"
+    return ".png"
+
+
+def _dia_subir_bytes(supabase, contenido, mime, carpeta, nombre_base):
+    if not contenido:
+        return None
+    ext = _dia_extension_mime(mime)
+    ruta = f"{carpeta}/{nombre_base}_{uuid.uuid4().hex[:10]}{ext}"
+    supabase.storage.from_(_DIA_BUCKET).upload(
+        path=ruta,
+        file=bytes(contenido),
+        file_options={"content-type": mime or "image/png"},
+    )
+    return supabase.storage.from_(_DIA_BUCKET).get_public_url(ruta)
+
+
+def _dia_descargar_imagen(url):
+    if not url or not str(url).lower().startswith(("http://", "https://")):
+        return None, None
+    try:
+        resp = requests.get(str(url), timeout=12)
+        resp.raise_for_status()
+        mime = (resp.headers.get("content-type") or "").split(";")[0].strip()
+        if mime and not mime.startswith("image/"):
+            return None, None
+        return bytes(resp.content), mime or "image/png"
+    except Exception:
+        return None, None
+
+
+def _dia_generar_imagen_gemini(registro):
+    """Genera la propuesta comercial con Gemini. El arte técnico sigue a cargo del diseñador."""
+    import base64
+    import io
+
+    try:
+        from google import genai
+        from PIL import Image
+    except Exception as e:
+        raise RuntimeError(
+            "Faltan dependencias para Gemini/Pillow. Instale 'google-genai' y 'Pillow'. "
+            f"Detalle: {e}"
+        )
+
+    api_key = _dia_api_key_gemini()
+    if not api_key:
+        raise RuntimeError("No se encontró [gemini][api_key] en .streamlit/secrets.toml.")
+
+    producto = registro.get("producto") or registro.get("producto_descripcion") or "Prenda por definir"
+    tecnica = registro.get("tecnica") or "Por definir"
+    colores = registro.get("colores") or "No especificados"
+    brief = registro.get("instrucciones") or ""
+    ajuste = registro.get("ajuste_solicitado") or ""
+
+    prompt = f"""
+Crea UNA propuesta visual profesional para presentar a un cliente de una empresa de confección.
+
+OBJETIVO:
+Generar un mockup de una prenda terminada que sirva como PROPUESTA COMERCIAL para aprobación del cliente.
+No es un arte técnico definitivo para impresión; el diseñador humano hará luego la preparación de producción.
+
+PRENDA / REFERENCIA DE PRODUCTO:
+{producto}
+
+TÉCNICA PREVISTA:
+{tecnica}
+
+COLORES SOLICITADOS:
+{colores}
+
+BRIEF DEL CLIENTE:
+{brief}
+
+AJUSTE DE LA REVISIÓN ACTUAL:
+{ajuste if ajuste else 'Sin ajustes adicionales.'}
+
+REGLAS IMPORTANTES:
+- Usa la imagen de referencia del cliente como guía principal cuando esté disponible.
+- Conserva los elementos esenciales solicitados por el cliente.
+- No inventes texto legible, nombres, marcas o escudos nuevos que no estén en la referencia o en el brief.
+- Muestra solamente una prenda terminada, sin persona y sin maniquí visible.
+- Vista frontal clara y comercial.
+- Fondo blanco limpio.
+- Iluminación de estudio.
+- Producto centrado y completamente visible.
+- Estética profesional de catálogo.
+- No hagas collage.
+- No muestres varias opciones en una misma imagen.
+- Mantén coherencia de colores, logotipo/escudo y composición con la referencia.
+
+Genera solamente la imagen de la propuesta visual.
+""".strip()
+
+    contenido = [{"type": "text", "text": prompt}]
+
+    ref_bytes = registro.get("referencia_bytes")
+    ref_mime = registro.get("referencia_tipo") or "image/png"
+    if not ref_bytes:
+        ref_bytes, ref_mime_desc = _dia_descargar_imagen(
+            registro.get("referencia_url") or registro.get("referencia_link")
+        )
+        if ref_mime_desc:
+            ref_mime = ref_mime_desc
+
+    if ref_bytes:
+        contenido.append(
+            {
+                "type": "image",
+                "data": base64.b64encode(ref_bytes).decode("utf-8"),
+                "mime_type": ref_mime,
+            }
+        )
+
+    cliente = genai.Client(api_key=api_key)
+    interaction = cliente.interactions.create(
+        model="gemini-nano-banana-2.1",
+        input=contenido,
+        response_format={"type": "image", "aspect_ratio": "4:5"},
+    )
+
+    if interaction is None or interaction.output_image is None:
+        raise RuntimeError("Gemini respondió sin devolver una imagen.")
+
+    salida = interaction.output_image.data
+    if not salida:
+        raise RuntimeError("Gemini devolvió una imagen vacía.")
+    if isinstance(salida, str):
+        salida = base64.b64decode(salida)
+    salida = bytes(salida)
+
+    try:
+        img = Image.open(io.BytesIO(salida))
+        formato = (img.format or "PNG").upper()
+        img.verify()
+    except Exception as e:
+        raise RuntimeError(f"La respuesta de Gemini no parece una imagen válida: {e}")
+
+    mime = {
+        "PNG": "image/png",
+        "JPEG": "image/jpeg",
+        "JPG": "image/jpeg",
+        "WEBP": "image/webp",
+    }.get(formato, "image/png")
+    return salida, mime
+
+
+def _dia_cargar_registros(supabase):
+    try:
+        return (
+            supabase.table(_DIA_TABLE)
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(100)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return []
+
+
+def _dia_buscar_registro_db(supabase, codigo):
+    try:
+        res = (
+            supabase.table(_DIA_TABLE)
+            .select("*")
+            .eq("codigo", codigo)
+            .limit(1)
+            .execute()
+        )
+        return res.data[0] if res.data else None
+    except Exception:
+        return None
+
+
+def _dia_actualizar(supabase, registro_id, datos):
+    payload = dict(datos)
+    payload["updated_at"] = _dia_now_iso()
+    return supabase.table(_DIA_TABLE).update(payload).eq("id", int(registro_id)).execute()
+
+
+def _dia_limpiar_formulario():
+    for key in [
+        "dia_cliente",
+        "dia_producto",
+        "dia_tecnica",
+        "dia_colores",
+        "dia_ref_link",
+        "dia_instrucciones",
+        "dia_ref_img",
+        "dia_fecha_entrega",
+    ]:
+        st.session_state.pop(key, None)
+    st.session_state.pop("_diseno_ia_actual", None)
+
+
+def _dia_crear_orden_para_disenador(supabase, registro, productos):
+    if registro.get("orden_id"):
+        return int(registro["orden_id"]), None
+
+    codigo_orden = _dia_codigo_orden(supabase)
+    prod_obj = next(
+        (p for p in productos if p.get("id") == registro.get("producto_id")),
+        None,
+    )
+    precio = float((prod_obj or {}).get("precio_unitario") or 0)
+
+    observaciones = [
+        f"DISEÑO IA: {registro.get('codigo')}",
+        f"Técnica: {registro.get('tecnica') or 'Por definir'}",
+        f"Colores: {registro.get('colores') or 'No especificados'}",
+        f"Brief: {registro.get('instrucciones') or ''}",
+    ]
+    if registro.get("ajuste_solicitado"):
+        observaciones.append(f"Último ajuste: {registro.get('ajuste_solicitado')}")
+    if registro.get("referencia_link"):
+        observaciones.append(f"Enlace externo: {registro.get('referencia_link')}")
+
+    fecha_entrega = registro.get("fecha_entrega_estimada") or (
+        datetime.date.today() + datetime.timedelta(days=7)
+    ).isoformat()
+
+    data_orden = {
+        "codigo_orden": codigo_orden,
+        "cliente_id": registro.get("cliente_id"),
+        "fecha_entrega": str(fecha_entrega),
+        "creado_por_id": st.session_state.get("id_usuario"),
+        "estado": "PENDIENTE DISEÑO",
+        "total_estimado": precio,
+        "observaciones_generales": " | ".join(observaciones),
+        "url_boceto_vendedora": registro.get("propuesta_url"),
+        "alerta_cambios": False,
+    }
+    res = supabase.table("ordenes").insert(data_orden).execute()
+    if not res.data:
+        raise RuntimeError("Supabase no devolvió la orden creada.")
+    orden_id = int(res.data[0]["id"])
+
+    # Trazabilidad igual que el resto del ERP.
+    try:
+        transicionar_estado(
+            supabase,
+            orden_id,
+            OrderState.PENDIENTE,
+            st.session_state.get("id_usuario"),
+            notas=f"Creación desde Diseño IA {registro.get('codigo')}",
+        )
+    except Exception:
+        # La orden ya está creada; un fallo de historial no debe bloquear el flujo comercial.
+        pass
+
+    if prod_obj:
+        supabase.table("items_orden").insert(
+            {
+                "orden_id": orden_id,
+                "producto_id": prod_obj.get("id"),
+                "familia_producto": prod_obj.get("tipo_prenda") or prod_obj.get("descripcion"),
+                "descripcion_item": prod_obj.get("descripcion"),
+                "cantidad_total": 1,
+                "precio_aplicado": precio,
+            }
+        ).execute()
+
+    return orden_id, codigo_orden
+
+
+@st.fragment
+def _render_diseno_ia(supabase):
+    """Diseño IA integrado con Supabase y el módulo Diseño."""
+    st.subheader("🎨 Diseño con IA")
+    st.caption(
+        "Referencia del cliente → propuesta IA → ajustes → aprobación → diseñador → cotización."
+    )
+
+    tabla_ok, error_tabla = _dia_tabla_disponible(supabase)
+    if not tabla_ok:
+        st.info(
+            "✅ Módulo Diseño IA listo para integración. "
+            "La persistencia definitiva será activada por el ingeniero ejecutando "
+            "sql/disenos_ia_ventas.sql en Supabase. "
+            "Después de esa activación, este flujo se habilitará automáticamente."
+        )
+        with st.expander("🔧 Información para integración"):
+            st.markdown(
+                "**Pendiente del ingeniero:** ejecutar una sola vez "
+                "`sql/disenos_ia_ventas.sql` en Supabase y recargar YUNPAR."
+            )
+            if error_tabla:
+                st.caption("Detalle técnico detectado:")
+                st.code(error_tabla)
+        return
+
+    try:
+        clientes = supabase.table("clientes").select("*").execute().data or []
+    except Exception as e:
+        st.error(f"No se pudieron cargar los clientes: {e}")
+        return
+    mapa_clientes = {
+        f"{c.get('nombre_completo', 'SIN NOMBRE')} | {c.get('cedula_ruc', '')}": c
+        for c in clientes
+    }
+
+    try:
+        productos = (
+            supabase.table("productos_catalogo")
+            .select("*")
+            .eq("activo", True)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:
+        st.error(f"No se pudieron cargar los productos: {e}")
+        return
+    mapa_productos = {
+        f"{p.get('codigo_referencia', '')} | {p.get('descripcion', '')}": p
+        for p in productos
+    }
+
+    cab1, cab2 = st.columns([5, 1])
+    cab1.markdown("#### 1️⃣ Datos del cliente y referencia")
+    if cab2.button("🆕 Nueva", use_container_width=True, key="dia_nueva_propuesta"):
+        _dia_limpiar_formulario()
+        _dia_rerun_local()
+
+    c1, c2 = st.columns(2)
+    with c1:
+        sel_cliente = st.selectbox(
+            "Cliente *", [""] + list(mapa_clientes.keys()), key="dia_cliente"
+        )
+        sel_producto = st.selectbox(
+            "Prenda / producto de referencia",
+            ["Sin definir"] + list(mapa_productos.keys()),
+            key="dia_producto",
+        )
+        tecnica = st.selectbox(
+            "Técnica prevista",
+            ["Por definir", "Sublimado", "DTF", "Bordado", "Mixto"],
+            key="dia_tecnica",
+        )
+        colores = st.text_input(
+            "Colores solicitados",
+            placeholder="Ej: azul marino, dorado y blanco",
+            key="dia_colores",
+        )
+        fecha_entrega = st.date_input(
+            "Fecha estimada de entrega",
+            value=datetime.date.today() + datetime.timedelta(days=7),
+            key="dia_fecha_entrega",
+        )
+
+    with c2:
+        ref_img = st.file_uploader(
+            "📷 Imagen enviada por el cliente",
+            type=["png", "jpg", "jpeg", "webp"],
+            key="dia_ref_img",
+        )
+        ref_link = st.text_input(
+            "🔗 Enlace de referencia (opcional)",
+            placeholder="https://...",
+            key="dia_ref_link",
+        )
+        if ref_img is not None:
+            st.image(ref_img, caption="Referencia cargada", use_container_width=True)
+
+    instrucciones = st.text_area(
+        "✍️ ¿Qué desea el cliente? *",
+        placeholder=(
+            "Ej: conservar el escudo, usar azul oscuro, agregar líneas doradas "
+            "y dejar espacio para número y apellido."
+        ),
+        height=120,
+        key="dia_instrucciones",
+    )
+
+    st.markdown("#### 2️⃣ Preparar propuesta")
+    api_ok = bool(_dia_api_key_gemini())
+    if api_ok:
+        st.caption("✅ Gemini listo para generar la propuesta visual.")
+    else:
+        st.error("Gemini no está configurado. Agregue [gemini][api_key] en secrets.toml.")
+
+    if st.button(
+        "✨ PREPARAR PROPUESTA CON IA",
+        type="primary",
+        use_container_width=True,
+        key="dia_generar",
+        disabled=not api_ok,
+    ):
+        errores = []
+        if not sel_cliente:
+            errores.append("selecciona un cliente")
+        if ref_img is None and not ref_link.strip():
+            errores.append("sube una imagen o agrega un enlace de referencia")
+        if not instrucciones.strip():
+            errores.append("escribe las indicaciones del cliente")
+
+        if errores:
+            st.error("Antes de continuar: " + "; ".join(errores) + ".")
+        else:
+            cliente = mapa_clientes[sel_cliente]
+            prod = mapa_productos.get(sel_producto) if sel_producto != "Sin definir" else None
+            codigo = _dia_codigo_siguiente(supabase)
+            registro_local = {
+                "codigo": codigo,
+                "cliente_id": cliente.get("id"),
+                "cliente": cliente.get("nombre_completo", ""),
+                "producto_id": prod.get("id") if prod else None,
+                "producto": (
+                    f"{prod.get('codigo_referencia', '')} | {prod.get('descripcion', '')}"
+                    if prod else "Sin definir"
+                ),
+                "tecnica": tecnica,
+                "colores": colores.strip(),
+                "instrucciones": instrucciones.strip(),
+                "referencia_link": ref_link.strip(),
+                "referencia_bytes": ref_img.getvalue() if ref_img is not None else None,
+                "referencia_tipo": ref_img.type if ref_img is not None else None,
+                "ajuste_solicitado": "",
+            }
+
+            try:
+                with st.spinner("Gemini está preparando la propuesta visual..."):
+                    propuesta_bytes, propuesta_mime = _dia_generar_imagen_gemini(registro_local)
+
+                referencia_url = None
+                if ref_img is not None:
+                    referencia_url = _dia_subir_bytes(
+                        supabase,
+                        ref_img.getvalue(),
+                        ref_img.type or "image/png",
+                        f"disenos-ia/{codigo}",
+                        "referencia",
+                    )
+
+                propuesta_url = _dia_subir_bytes(
+                    supabase,
+                    propuesta_bytes,
+                    propuesta_mime,
+                    f"disenos-ia/{codigo}",
+                    "propuesta_r1",
+                )
+
+                payload = {
+                    "codigo": codigo,
+                    "cliente_id": cliente.get("id"),
+                    "cliente_nombre": cliente.get("nombre_completo", ""),
+                    "producto_id": prod.get("id") if prod else None,
+                    "producto_codigo": prod.get("codigo_referencia") if prod else None,
+                    "producto_descripcion": prod.get("descripcion") if prod else "Sin definir",
+                    "tecnica": tecnica,
+                    "colores": colores.strip(),
+                    "instrucciones": instrucciones.strip(),
+                    "referencia_url": referencia_url,
+                    "referencia_link": ref_link.strip() or None,
+                    "propuesta_url": propuesta_url,
+                    "generacion_real": True,
+                    "estado": "PROPUESTA PREPARADA",
+                    "revision": 1,
+                    "ajuste_solicitado": "",
+                    "fecha_entrega_estimada": str(fecha_entrega),
+                    "creado_por_id": st.session_state.get("id_usuario"),
+                    "updated_at": _dia_now_iso(),
+                }
+                ins = supabase.table(_DIA_TABLE).insert(payload).execute()
+                if not ins.data:
+                    raise RuntimeError("No se pudo registrar la propuesta en Supabase.")
+
+                st.session_state["_diseno_ia_actual"] = codigo
+                st.success(f"{codigo} creado y guardado correctamente.")
+                _dia_rerun_local()
+            except Exception as e:
+                st.error(f"No se pudo preparar la propuesta: {e}")
+
+    registros = _dia_cargar_registros(supabase)
+    if not registros:
+        st.caption("Aún no hay propuestas registradas.")
+        return
+
+    st.markdown("#### 3️⃣ Revisión con el cliente")
+    codigos = [r.get("codigo") for r in registros if r.get("codigo")]
+    actual = st.session_state.get("_diseno_ia_actual")
+    idx_actual = codigos.index(actual) if actual in codigos else 0
+    codigo_sel = st.selectbox(
+        "Propuesta activa", codigos, index=idx_actual, key="dia_propuesta_activa"
+    )
+    st.session_state["_diseno_ia_actual"] = codigo_sel
+    registro = _dia_buscar_registro_db(supabase, codigo_sel)
+    if not registro:
+        st.warning("No se pudo cargar la propuesta seleccionada.")
+        return
+
+    estado_actual = registro.get("estado") or "PROPUESTA PREPARADA"
+    estado_icono = {
+        "PROPUESTA PREPARADA": "🟡",
+        "AJUSTES SOLICITADOS": "🟠",
+        "PROPUESTA REGENERADA": "🟣",
+        "APROBADO POR CLIENTE": "🟢",
+        "ENVIADO A DISEÑADOR": "🔵",
+    }.get(estado_actual, "⚪")
+    st.markdown(f"### {estado_icono} {registro.get('codigo')} — {estado_actual}")
+
+    vista1, vista2 = st.columns(2)
+    with vista1:
+        st.markdown("**Referencia original**")
+        ref_visual = registro.get("referencia_url") or registro.get("referencia_link")
+        if ref_visual:
+            try:
+                st.image(ref_visual, caption="Referencia del cliente", use_container_width=True)
+            except Exception:
+                st.markdown(f"[Abrir referencia]({ref_visual})")
+        else:
+            st.caption("Sin referencia visual guardada.")
+
+    with vista2:
+        st.markdown("**Propuesta IA**")
+        if registro.get("propuesta_url"):
+            st.image(
+                registro.get("propuesta_url"),
+                caption=f"{registro.get('codigo')} · Revisión {registro.get('revision', 1)}",
+                use_container_width=True,
+            )
+            st.caption("✨ Imagen generada con Gemini")
+        else:
+            st.warning("No hay propuesta visual almacenada.")
+
+        producto_txt = " | ".join(
+            [x for x in [registro.get("producto_codigo"), registro.get("producto_descripcion")] if x]
+        ) or "Sin definir"
+        st.write(f"**Cliente:** {registro.get('cliente_nombre', '')}")
+        st.write(f"**Producto:** {producto_txt}")
+        st.write(f"**Técnica:** {registro.get('tecnica') or 'Por definir'}")
+        st.write(f"**Colores:** {registro.get('colores') or 'No especificados'}")
+        st.write(f"**Revisión:** {registro.get('revision', 1)}")
+        st.write("**Brief:**")
+        st.write(registro.get("instrucciones") or "")
+
+    ajuste_key = f"dia_ajuste_{registro.get('codigo')}"
+    if ajuste_key not in st.session_state:
+        st.session_state[ajuste_key] = registro.get("ajuste_solicitado") or ""
+    ajuste = st.text_area(
+        "📝 Ajustes solicitados por el cliente",
+        placeholder="Ej: reducir el dorado y mover el escudo.",
+        key=ajuste_key,
+    )
+
+    siguientes = {
+        "PROPUESTA PREPARADA": "Si el cliente pide cambios, guarda el ajuste; si está conforme, aprueba.",
+        "AJUSTES SOLICITADOS": "Regenera con IA antes de aprobar.",
+        "PROPUESTA REGENERADA": "Revisa la nueva imagen con el cliente.",
+        "APROBADO POR CLIENTE": "Envía la propuesta al diseñador.",
+        "ENVIADO A DISEÑADOR": "Ya está en la bandeja de Diseño. Puedes crear la cotización.",
+    }
+    st.caption("➡️ " + siguientes.get(estado_actual, "Continúa con el flujo."))
+
+    b1, b2, b3, b4 = st.columns(4)
+    bloquear = estado_actual in ["APROBADO POR CLIENTE", "ENVIADO A DISEÑADOR"]
+
+    if b1.button(
+        "💾 Guardar ajuste",
+        use_container_width=True,
+        key=f"dia_ajustar_{registro.get('codigo')}",
+        disabled=bloquear,
+    ):
+        ajuste_limpio = str(ajuste or "").strip()
+        if not ajuste_limpio:
+            st.warning("Escribe primero el ajuste solicitado por el cliente.")
+        else:
+            _dia_actualizar(
+                supabase,
+                registro["id"],
+                {
+                    "ajuste_solicitado": ajuste_limpio,
+                    "estado": "AJUSTES SOLICITADOS",
+                },
+            )
+            st.success("Ajuste guardado. Ahora regenera la propuesta.")
+            _dia_rerun_local()
+
+    puede_regenerar = estado_actual == "AJUSTES SOLICITADOS" and api_ok
+    if b2.button(
+        "✨ Regenerar con IA",
+        use_container_width=True,
+        key=f"dia_regenerar_{registro.get('codigo')}",
+        disabled=not puede_regenerar,
+    ):
+        try:
+            registro_gen = dict(registro)
+            with st.spinner("Generando nueva revisión..."):
+                imagen, mime = _dia_generar_imagen_gemini(registro_gen)
+            nueva_revision = int(registro.get("revision") or 1) + 1
+            propuesta_url = _dia_subir_bytes(
+                supabase,
+                imagen,
+                mime,
+                f"disenos-ia/{registro.get('codigo')}",
+                f"propuesta_r{nueva_revision}",
+            )
+            _dia_actualizar(
+                supabase,
+                registro["id"],
+                {
+                    "propuesta_url": propuesta_url,
+                    "generacion_real": True,
+                    "revision": nueva_revision,
+                    "estado": "PROPUESTA REGENERADA",
+                },
+            )
+            st.success(f"Revisión {nueva_revision} generada y guardada.")
+            _dia_rerun_local()
+        except Exception as e:
+            st.error(f"No se pudo regenerar la propuesta: {e}")
+
+    puede_aprobar = estado_actual in ["PROPUESTA PREPARADA", "PROPUESTA REGENERADA"] and bool(registro.get("propuesta_url"))
+    if b3.button(
+        "✅ Cliente aprueba",
+        use_container_width=True,
+        key=f"dia_aprobar_{registro.get('codigo')}",
+        disabled=not puede_aprobar,
+    ):
+        _dia_actualizar(
+            supabase,
+            registro["id"],
+            {
+                "estado": "APROBADO POR CLIENTE",
+                "fecha_aprobacion": _dia_now_iso(),
+            },
+        )
+        st.success("Propuesta aprobada por el cliente.")
+        _dia_rerun_local()
+
+    if b4.button(
+        "📤 Enviar al diseñador",
+        use_container_width=True,
+        key=f"dia_enviar_{registro.get('codigo')}",
+        disabled=estado_actual != "APROBADO POR CLIENTE",
+    ):
+        try:
+            orden_id, codigo_orden = _dia_crear_orden_para_disenador(
+                supabase, registro, productos
+            )
+            _dia_actualizar(
+                supabase,
+                registro["id"],
+                {
+                    "estado": "ENVIADO A DISEÑADOR",
+                    "orden_id": orden_id,
+                    "fecha_envio_diseno": _dia_now_iso(),
+                },
+            )
+            st.success(
+                f"Enviado a Diseño correctamente. Orden {codigo_orden or orden_id} creada en Supabase."
+            )
+            _dia_rerun_local()
+        except Exception as e:
+            st.error(f"No se pudo enviar al diseñador: {e}")
+
+    st.markdown("#### 4️⃣ Continuar a cotización")
+    puede_cotizar = estado_actual == "ENVIADO A DISEÑADOR"
+    if st.button(
+        "🧾 CREAR COTIZACIÓN CON ESTE DISEÑO",
+        use_container_width=True,
+        key=f"dia_cotizar_{registro.get('codigo')}",
+        disabled=not puede_cotizar,
+    ):
+        st.session_state["cliente_id_edicion"] = registro.get("cliente_id")
+        st.session_state["modo_edicion_cot"] = False
+        st.session_state["cot_items"] = []
+        st.session_state["_dia_enlace_cotizacion_id"] = registro.get("id")
+
+        prod_obj = next(
+            (p for p in productos if p.get("id") == registro.get("producto_id")),
+            None,
+        )
+        if prod_obj:
+            precio = float(prod_obj.get("precio_unitario") or 0)
+            st.session_state["cot_items"] = [
+                {
+                    "id": prod_obj.get("id"),
+                    "codigo": prod_obj.get("codigo_referencia", ""),
+                    "descripcion": prod_obj.get("descripcion", ""),
+                    "cantidad": 1.0,
+                    "precio": precio,
+                    "subtotal": precio,
+                    "obj_raw": prod_obj,
+                }
+            ]
+
+        partes_obs = [
+            f"Diseño IA {registro.get('codigo')}",
+            f"Orden Diseño: {registro.get('orden_id') or 'pendiente'}",
+            f"Producto: {registro.get('producto_codigo') or ''} | {registro.get('producto_descripcion') or ''}",
+            f"Técnica: {registro.get('tecnica') or 'Por definir'}",
+            f"Colores: {registro.get('colores') or 'No especificados'}",
+            f"Brief: {registro.get('instrucciones') or ''}",
+        ]
+        if registro.get("ajuste_solicitado"):
+            partes_obs.append(f"Último ajuste: {registro.get('ajuste_solicitado')}")
+        st.session_state["cot_obs_temp"] = " | ".join(partes_obs)
+        st.session_state["vista_cot"] = "EDITOR"
+        st.rerun()
+
+    st.divider()
+    st.markdown("#### Historial de diseños")
+    st.caption("Propuestas guardadas en Supabase.")
+    registros_hist = registros
+    for i in range(0, len(registros_hist), 3):
+        fila = registros_hist[i:i + 3]
+        cols = st.columns(len(fila))
+        for col, r in zip(cols, fila):
+            with col:
+                with st.container(border=True):
+                    icon = {
+                        "PROPUESTA PREPARADA": "🟡",
+                        "AJUSTES SOLICITADOS": "🟠",
+                        "PROPUESTA REGENERADA": "🟣",
+                        "APROBADO POR CLIENTE": "🟢",
+                        "ENVIADO A DISEÑADOR": "🔵",
+                    }.get(r.get("estado"), "⚪")
+                    st.markdown(f"**{icon} {r.get('codigo', '')}**")
+                    st.caption(r.get("cliente_nombre") or "Sin cliente")
+                    st.write(
+                        " | ".join(
+                            [x for x in [r.get("producto_codigo"), r.get("producto_descripcion")] if x]
+                        ) or "Sin producto"
+                    )
+                    st.markdown(f"**Estado:** {r.get('estado', '')}")
+                    extras = [f"Revisión {r.get('revision', 1)}"]
+                    if r.get("orden_id"):
+                        extras.append(f"Orden #{r.get('orden_id')}")
+                    if r.get("cotizacion_id"):
+                        extras.append(f"Cotización #{r.get('cotizacion_id')}")
+                    st.caption(" · ".join(extras))
+
+
 # --- RENDER PRINCIPAL ---
 def render(supabase):
+    _inyectar_estilos_responsive()
+
     if "vista_cot" not in st.session_state:
         st.session_state["vista_cot"] = "LISTA"
     if "cot_items" not in st.session_state:
@@ -255,8 +1229,8 @@ def render(supabase):
         st.title("📑 Catálogo y Cotizaciones")
 
         # --- NUEVA ARQUITECTURA MÓVIL: Separación de intenciones ---
-        tab_rapida, tab_formal = st.tabs(
-            ["🔎 Precios Rápidos", "📋 Cotizaciones Formales"]
+        tab_rapida, tab_formal, tab_diseno = st.tabs(
+            ["🔎 Precios", "📋 Cotizaciones", "🎨 Diseño IA"]
         )
 
         # 1. MÓDULO DE CONSULTA ÁGIL (Pensado 100% para celular)
@@ -391,50 +1365,59 @@ def render(supabase):
                 )
                 h_f_fin = col_fil3.date_input("Hasta", value=datetime.date.today())
 
-        query = (
-            supabase.table("cotizaciones").select("*").order("created_at", desc=True)
-        )
-        query = query.gte("created_at", str(h_f_ini)).lte(
-            "created_at", str(h_f_fin) + " 23:59:59"
-        )
-        resp_cots = query.execute()
-        df_cots = pd.DataFrame(resp_cots.data)
-
-        if not df_cots.empty:
-            ids_cli = df_cots["cliente_id"].unique().tolist()
-            if ids_cli:
-                resp_clis = (
-                    supabase.table("clientes")
-                    .select("id, nombre_completo")
-                    .in_("id", ids_cli)
-                    .execute()
-                )
-                mapa_cli = {c["id"]: c["nombre_completo"] for c in resp_clis.data}
-                df_cots["Cliente"] = df_cots["cliente_id"].map(mapa_cli)
-
-            if h_f_txt:
-                df_cots = df_cots[
-                    df_cots["codigo_cotizacion"].str.contains(h_f_txt, case=False)
-                    | df_cots["Cliente"].str.contains(h_f_txt, case=False, na=False)
-                ]
-
-            st.dataframe(
-                df_cots[
-                    ["codigo_cotizacion", "fecha_emision", "Cliente", "total", "estado"]
-                ],
-                use_container_width=True,
-                hide_index=True,
-                selection_mode="single-row",
-                on_select="rerun",
-                key="grid_cot_hist",
+            query = (
+                supabase.table("cotizaciones").select("*").order("created_at", desc=True)
             )
+            query = query.gte("created_at", str(h_f_ini)).lte(
+                "created_at", str(h_f_fin) + " 23:59:59"
+            )
+            resp_cots = query.execute()
+            df_cots = pd.DataFrame(resp_cots.data)
 
-            if st.session_state.grid_cot_hist.selection.rows:
-                idx = st.session_state.grid_cot_hist.selection.rows[0]
-                row_sel = df_cots.iloc[idx]
+            if not df_cots.empty:
+                ids_cli = df_cots["cliente_id"].unique().tolist()
+                if ids_cli:
+                    resp_clis = (
+                        supabase.table("clientes")
+                        .select("id, nombre_completo")
+                        .in_("id", ids_cli)
+                        .execute()
+                    )
+                    mapa_cli = {c["id"]: c["nombre_completo"] for c in resp_clis.data}
+                    df_cots["Cliente"] = df_cots["cliente_id"].map(mapa_cli)
+
+                if h_f_txt:
+                    df_cots = df_cots[
+                        df_cots["codigo_cotizacion"].str.contains(h_f_txt, case=False)
+                        | df_cots["Cliente"].str.contains(h_f_txt, case=False, na=False)
+                    ]
+
+                opciones_cot = {}
+                for idx, row in df_cots.iterrows():
+                    etiqueta = (
+                        f"{row['codigo_cotizacion']} · {row.get('Cliente', 'Sin cliente')} · "
+                        f"${float(row.get('total', 0) or 0):.2f} · {row.get('estado', '')}"
+                    )
+                    opciones_cot[etiqueta] = idx
+
+                etiqueta_sel = st.selectbox(
+                    "Selecciona una cotización",
+                    list(opciones_cot.keys()),
+                    key="cot_hist_selector",
+                )
+                idx = opciones_cot[etiqueta_sel]
+                row_sel = df_cots.loc[idx]
+
                 with st.container(border=True):
-                    st.markdown(
-                        f"#### ⚙️ {row_sel['codigo_cotizacion']} - {row_sel['Cliente']}"
+                    c_res1, c_res2 = st.columns([2, 1])
+                    c_res1.markdown(
+                        f"#### ⚙️ {row_sel['codigo_cotizacion']}\n"
+                        f"**{row_sel.get('Cliente', 'Sin cliente')}**"
+                    )
+                    c_res2.metric("Total", f"${float(row_sel.get('total', 0) or 0):.2f}")
+                    st.caption(
+                        f"📅 {row_sel.get('fecha_emision', '')} · "
+                        f"Estado: {row_sel.get('estado', '')}"
                     )
                     b1, b2, b3, b4 = st.columns(4)
 
@@ -597,8 +1580,12 @@ def render(supabase):
                         b4.link_button("📲 WA", lnk, use_container_width=True)
                     else:
                         b4.button("No Telf", disabled=True)
-        else:
-            st.info("Sin registros.")
+            else:
+                st.info("Sin registros.")
+
+        # 3. DISEÑO CON IA (INTEGRADO)
+        with tab_diseno:
+            _render_diseno_ia(supabase)
 
     elif st.session_state["vista_cot"] == "EDITOR":
         c_b, c_h = st.columns([1, 6])
@@ -962,6 +1949,21 @@ def render(supabase):
                                 }
                             )
                         supabase.table("detalles_cotizacion").insert(detalles).execute()
+
+                        # Si la cotización nació desde Diseño IA, dejamos la relación persistida.
+                        diseno_enlace_id = st.session_state.get("_dia_enlace_cotizacion_id")
+                        if diseno_enlace_id:
+                            try:
+                                _dia_actualizar(
+                                    supabase,
+                                    diseno_enlace_id,
+                                    {"cotizacion_id": cot_id},
+                                )
+                                st.session_state.pop("_dia_enlace_cotizacion_id", None)
+                            except Exception as e_link:
+                                st.warning(
+                                    f"La cotización se guardó, pero no se pudo enlazar con Diseño IA: {e_link}"
+                                )
 
                         st.success(f"Cotización {cod} guardada con éxito")
                         st.session_state["vista_cot"] = "LISTA"

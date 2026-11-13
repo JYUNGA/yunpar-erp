@@ -249,6 +249,25 @@ def render(supabase):
         orden = st.session_state["orden_diseno_actual"]
         order_id = orden["id"]
 
+        # Si la orden nació desde Diseño IA en Cotizaciones, recuperamos la
+        # referencia original y la propuesta aprobada por el cliente.
+        solicitud_ia = None
+        try:
+            res_ia = (
+                supabase.table("disenos_ia_ventas")
+                .select("*")
+                .eq("orden_id", order_id)
+                .order("id", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if res_ia.data:
+                solicitud_ia = res_ia.data[0]
+        except Exception:
+            # Compatibilidad: el módulo Diseño sigue funcionando aunque la
+            # migración de Diseño IA aún no se haya ejecutado.
+            solicitud_ia = None
+
         st.divider()
         col_i1, col_i2, col_i3 = st.columns(3)
         col_i1.markdown(
@@ -297,37 +316,88 @@ def render(supabase):
 
         # --- IMÁGENES DE REFERENCIA ---
         st.markdown("### 🖼️ Referencias Visuales")
-        col_img1, col_img2 = st.columns(2)
 
-        with col_img1:
-            st.caption("Boceto Vendedora")
-            url_boceto = orden.get("url_boceto_vendedora")
-            if url_boceto and str(url_boceto).strip() != "":
-                try:
-                    st.image(url_boceto, use_container_width=True)
-                except Exception:
-                    st.warning("⚠️ Formato no soportado para vista previa.")
-                    st.markdown(
-                        f"[🔗 Hacer clic aquí para abrir archivo original]({url_boceto})"
-                    )
-            else:
-                st.info("No hay boceto registrado.")
-
-        with col_img2:
-            st.caption("Arte Final / Diseño")
-            url_imagen_final = orden.get("url_arte_final") or orden.get(
-                "url_diseno_final"
+        if solicitud_ia:
+            st.info(
+                f"✨ Solicitud de Ventas con IA: **{solicitud_ia.get('codigo', '')}** · "
+                f"Revisión {solicitud_ia.get('revision', 1)} · "
+                f"Estado comercial: {solicitud_ia.get('estado', '')}"
             )
-            if url_imagen_final and str(url_imagen_final).strip() != "":
-                try:
-                    st.image(url_imagen_final, use_container_width=True)
-                except Exception:
-                    st.warning("⚠️ Formato no soportado para vista previa.")
-                    st.markdown(
-                        f"[🔗 Hacer clic aquí para abrir archivo original]({url_imagen_final})"
-                    )
-            else:
-                st.info("No hay arte final registrado en la base de datos.")
+            col_ref, col_prop, col_final = st.columns(3)
+
+            with col_ref:
+                st.caption("Referencia original del cliente")
+                url_ref = solicitud_ia.get("referencia_url") or solicitud_ia.get("referencia_link")
+                if url_ref:
+                    try:
+                        st.image(url_ref, use_container_width=True)
+                    except Exception:
+                        st.markdown(f"[🔗 Abrir referencia original]({url_ref})")
+                else:
+                    st.info("Sin referencia original guardada.")
+
+            with col_prop:
+                st.caption("Propuesta IA aprobada")
+                url_prop = solicitud_ia.get("propuesta_url") or orden.get("url_boceto_vendedora")
+                if url_prop:
+                    try:
+                        st.image(url_prop, use_container_width=True)
+                    except Exception:
+                        st.markdown(f"[🔗 Abrir propuesta IA]({url_prop})")
+                else:
+                    st.info("Sin propuesta IA guardada.")
+
+            with col_final:
+                st.caption("Arte Final / Diseño")
+                url_imagen_final = orden.get("url_arte_final") or orden.get("url_diseno_final")
+                if url_imagen_final and str(url_imagen_final).strip() != "":
+                    try:
+                        st.image(url_imagen_final, use_container_width=True)
+                    except Exception:
+                        st.markdown(f"[🔗 Abrir arte final]({url_imagen_final})")
+                else:
+                    st.info("Pendiente de arte final del diseñador.")
+
+            with st.expander("📋 Ver brief comercial y último ajuste"):
+                st.write(f"**Técnica:** {solicitud_ia.get('tecnica') or 'Por definir'}")
+                st.write(f"**Colores:** {solicitud_ia.get('colores') or 'No especificados'}")
+                st.write("**Brief del cliente:**")
+                st.write(solicitud_ia.get("instrucciones") or "Sin brief")
+                if solicitud_ia.get("ajuste_solicitado"):
+                    st.write("**Último ajuste aprobado:**")
+                    st.write(solicitud_ia.get("ajuste_solicitado"))
+        else:
+            col_img1, col_img2 = st.columns(2)
+
+            with col_img1:
+                st.caption("Boceto Vendedora")
+                url_boceto = orden.get("url_boceto_vendedora")
+                if url_boceto and str(url_boceto).strip() != "":
+                    try:
+                        st.image(url_boceto, use_container_width=True)
+                    except Exception:
+                        st.warning("⚠️ Formato no soportado para vista previa.")
+                        st.markdown(
+                            f"[🔗 Hacer clic aquí para abrir archivo original]({url_boceto})"
+                        )
+                else:
+                    st.info("No hay boceto registrado.")
+
+            with col_img2:
+                st.caption("Arte Final / Diseño")
+                url_imagen_final = orden.get("url_arte_final") or orden.get(
+                    "url_diseno_final"
+                )
+                if url_imagen_final and str(url_imagen_final).strip() != "":
+                    try:
+                        st.image(url_imagen_final, use_container_width=True)
+                    except Exception:
+                        st.warning("⚠️ Formato no soportado para vista previa.")
+                        st.markdown(
+                            f"[🔗 Hacer clic aquí para abrir archivo original]({url_imagen_final})"
+                        )
+                else:
+                    st.info("No hay arte final registrado en la base de datos.")
 
         st.markdown("### 📝 Observaciones Generales de la Orden")
 
