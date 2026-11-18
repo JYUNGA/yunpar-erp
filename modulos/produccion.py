@@ -6,6 +6,8 @@ import uuid
 import hashlib
 import requests
 import os
+from copy import deepcopy
+from types import SimpleNamespace
 from config import OrderState, transicionar_estado
 
 # ==============================================================================
@@ -65,6 +67,8 @@ def es_imagen_segura(url):
 
 
 def cod_ord(supabase):
+    if isinstance(supabase, _ProdPrueba):
+        return supabase.siguiente_codigo()
     try:
         # Hacemos que Supabase busque el código más alto (DESC) y solo nos devuelva 1 registro
         res = (
@@ -412,7 +416,255 @@ def guardar_decision_catalogo_orden(
 # ==============================================================================
 
 
+def _prod_reiniciar_editor():
+    """Inicia un editor independiente sin arrastrar datos de otro pedido."""
+    estado = st.session_state
+    for clave in list(estado):
+        if clave.startswith("_prod_editor_"):
+            estado.pop(clave, None)
+    estado["_prod_editor_token"] = uuid.uuid4().hex
+    estado.update({
+        "editando_orden_id": None,
+        "editando_orden_cod": None,
+        "editando_cliente_id": None,
+        "prod_items": [],
+        "url_boceto_view": None,
+        "url_diseno_view": None,
+        "fecha_entrega_edit": datetime.date.today(),
+        "editando_obs_g": "",
+        "editando_notas_fac": "",
+        "form_data_cache": None,
+        "restore_product_id": None,
+        "restore_fabric_id": None,
+        "restore_price": None,
+        "reset_matrix_key_trigger": True,
+        "reset_matrix_key": estado.get("reset_matrix_key", 0) + 1,
+    })
+    estado.pop("df_temp_matriz", None)
+    estado.pop("last_fam", None)
+
+
+def _prod_widget_key(nombre):
+    """Las claves permanecen estables durante la edición de una sola orden."""
+    estado = st.session_state
+    if "_prod_editor_token" not in estado:
+        estado["_prod_editor_token"] = uuid.uuid4().hex
+    return f"_prod_editor_{estado['_prod_editor_token']}_{nombre}"
+
+
+def _prod_texto_nota(valor):
+    return str(valor) if pd.notna(valor) else ""
+
+
+def _prod_recordar_nota(campo, clave):
+    # Conserva la nota del pedido actual aunque el widget desaparezca al
+    # editar/eliminar temporalmente todos los grupos de productos.
+    st.session_state[campo] = st.session_state.get(clave, "")
+
+
+# Modo de prueba de Producción: las consultas reales son solo de lectura.
+# Las órdenes nuevas, sus productos, especificaciones y pagos viven en la sesión.
+_PROD_PRUEBA_TABLAS = {"ordenes", "items_orden", "especificaciones_producto", "pagos"}
+_PROD_LECTURA_TABLAS = {"clientes", "productos_catalogo", "insumos", "catalogo_tipos_cliente"}
+
+
+def _prod_modo_prueba():
+    return os.environ.get("YUNPAR_PROD_MODO_PRUEBA", "0") == "1"
+
+
+class _ProdStorageLectura:
+    def __init__(self, real):
+        self._real = real
+
+    def from_(self, bucket):
+        return _ProdBucketLectura(self._real.from_(bucket))
+
+
+class _ProdBucketLectura:
+    def __init__(self, real):
+        self._real = real
+
+    def list(self, *args, **kwargs):
+        return self._real.list(*args, **kwargs)
+
+    def get_public_url(self, *args, **kwargs):
+        return self._real.get_public_url(*args, **kwargs)
+
+    def upload(self, *args, **kwargs):
+        raise RuntimeError("Modo prueba: subida de archivos reales bloqueada.")
+
+    def remove(self, *args, **kwargs):
+        raise RuntimeError("Modo prueba: eliminación de archivos reales bloqueada.")
+
+
+class _ProdPrueba:
+    def __init__(self, real):
+        self._real = real
+        self.storage = _ProdStorageLectura(real.storage)
+        clave = "_yunpar_prod_prueba_v1"
+        if clave not in st.session_state:
+            st.session_state[clave] = {t: [] for t in _PROD_PRUEBA_TABLAS}
+        self.datos = st.session_state[clave]
+
+    def table(self, nombre):
+        if nombre not in _PROD_PRUEBA_TABLAS | _PROD_LECTURA_TABLAS:
+            raise RuntimeError("Tabla no habilitada en modo prueba: " + nombre)
+        return _ProdConsultaPrueba(self, nombre)
+
+    def siguiente_codigo(self):
+        numeros = [int(r["codigo_orden"].split("-")[-1]) for r in self.datos["ordenes"]]
+        return f"ORD-PRUEBA-{max(numeros, default=0) + 1:04d}"
+
+
+class _ProdConsultaPrueba:
+    def __init__(self, db, nombre):
+        self.db, self.nombre = db, nombre
+        self.accion, self.campos, self.payload = "select", "*", None
+        self.ops = []
+
+    def select(self, campos="*"):
+        self.campos = campos
+        return self
+
+    def eq(self, campo, valor):
+        self.ops.append(("eq", (campo, valor), {}))
+        return self
+
+    def in_(self, campo, valores):
+        self.ops.append(("in_", (campo, valores), {}))
+        return self
+
+    def ilike(self, campo, valor):
+        self.ops.append(("ilike", (campo, valor), {}))
+        return self
+
+    def gte(self, campo, valor):
+        self.ops.append(("gte", (campo, valor), {}))
+        return self
+
+    def lte(self, campo, valor):
+        self.ops.append(("lte", (campo, valor), {}))
+        return self
+
+    def order(self, campo, desc=False):
+        self.ops.append(("order", (campo,), {"desc": desc}))
+        return self
+
+    def limit(self, cantidad):
+        self.ops.append(("limit", (cantidad,), {}))
+        return self
+
+    def insert(self, payload):
+        self.accion, self.payload = "insert", payload
+        return self
+
+    def update(self, payload):
+        self.accion, self.payload = "update", payload
+        return self
+
+    def delete(self):
+        self.accion = "delete"
+        return self
+
+    def _coincide(self, fila):
+        for op, args, _ in self.ops:
+            if op in {"order", "limit"}:
+                continue
+            campo, valor = args
+            actual = fila.get(campo)
+            if op == "eq" and actual != valor:
+                return False
+            if op == "in_" and actual not in valor:
+                return False
+            if op == "ilike" and not str(actual or "").lower().startswith(str(valor).rstrip("%").lower()):
+                return False
+            if op in {"gte", "lte"}:
+                if actual is None:
+                    return False
+                a, b = str(actual).replace("T", " "), str(valor).replace("T", " ")
+                if (op == "gte" and a < b) or (op == "lte" and a > b):
+                    return False
+        return True
+
+    def _relacion(self, fila, tabla, campo):
+        resultado = self.db._real.table(tabla).select("*").eq("id", fila[campo]).execute().data
+        return resultado[0] if resultado else None
+
+    def _proyectar(self, fila):
+        fila = deepcopy(fila)
+        if self.campos.startswith("*,"):
+            if self.nombre == "ordenes" and "clientes(" in self.campos:
+                fila["clientes"] = self._relacion(fila, "clientes", "cliente_id")
+            if self.nombre == "items_orden" and "productos_catalogo(" in self.campos:
+                fila["productos_catalogo"] = self._relacion(fila, "productos_catalogo", "producto_id")
+            return fila
+        if self.campos == "*":
+            return fila
+        return {c.strip(): fila.get(c.strip()) for c in self.campos.split(",")}
+
+    def execute(self):
+        filas = self.db.datos.get(self.nombre, [])
+        if self.accion == "select":
+            # Nunca se envía una consulta de escritura al cliente real.
+            q = self.db._real.table(self.nombre).select(self.campos)
+            for op, args, kwargs in self.ops:
+                q = getattr(q, op)(*args, **kwargs)
+            reales = q.execute().data or []
+            locales = [self._proyectar(r) for r in filas if self._coincide(r)]
+            salida = locales + reales
+            for op, args, kwargs in self.ops:
+                if op == "order":
+                    campo = args[0]
+                    salida.sort(key=lambda r: (r.get(campo) is not None, str(r.get(campo) or "")), reverse=kwargs["desc"])
+                elif op == "limit":
+                    salida = salida[:args[0]]
+            return SimpleNamespace(data=salida)
+
+        if self.nombre not in _PROD_PRUEBA_TABLAS:
+            raise RuntimeError("Modo prueba: escritura real bloqueada en " + self.nombre)
+        if self.accion == "insert":
+            lote = self.payload if isinstance(self.payload, list) else [self.payload]
+            salida = []
+            for original in lote:
+                fila = deepcopy(original)
+                fila["id"] = min([0] + [r["id"] for r in filas]) - 1
+                if self.nombre == "ordenes":
+                    if not str(fila.get("codigo_orden", "")).startswith("ORD-PRUEBA-"):
+                        raise RuntimeError("Código de prueba obligatorio")
+                    if any(r["codigo_orden"] == fila["codigo_orden"] for r in filas):
+                        raise RuntimeError("Código de prueba duplicado")
+                    fila["estado"] = getattr(fila.get("estado"), "value", fila.get("estado"))
+                    fila["created_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+                elif self.nombre in {"items_orden", "pagos"}:
+                    if not any(r["id"] == fila.get("orden_id") for r in self.db.datos["ordenes"]):
+                        raise RuntimeError("Orden local no encontrada")
+                elif self.nombre == "especificaciones_producto":
+                    if not any(r["id"] == fila.get("item_orden_id") for r in self.db.datos["items_orden"]):
+                        raise RuntimeError("Ítem local no encontrado")
+                filas.append(fila)
+                salida.append(deepcopy(fila))
+            return SimpleNamespace(data=salida)
+        # Sólo se permite modificar filas ficticias, nunca registros de producción.
+        if not self.ops or not any(op in {"eq", "in_"} and args[0] in {"id", "orden_id", "item_orden_id"} for op, args, _ in self.ops):
+            raise RuntimeError("Modo prueba: operación sin identificador bloqueada")
+        for op, args, _ in self.ops:
+            if op in {"eq", "in_"} and args[0] in {"id", "orden_id", "item_orden_id"}:
+                valores = [args[1]] if op == "eq" else args[1]
+                if not all(isinstance(v, int) and v < 0 for v in valores):
+                    raise RuntimeError("Modo prueba: modificación de orden real bloqueada")
+        salida = [r for r in filas if self._coincide(r)]
+        if self.accion == "update":
+            for r in salida:
+                r.update(deepcopy(self.payload))
+        elif self.accion == "delete":
+            filas[:] = [r for r in filas if not self._coincide(r)]
+        return SimpleNamespace(data=deepcopy(salida))
+
+
 def render(supabase):
+    if _prod_modo_prueba():
+        supabase = _ProdPrueba(supabase)
+        st.caption("MODO PRUEBA LOCAL · Producción: órdenes y pagos ficticios; escrituras reales y archivos bloqueados.")
     # --------------------------------------------------------------------------
     # AJUSTES RESPONSIVE PARA CELULAR / TABLET
     # Solo afectan la presentación visual. No modifican lógica ni datos.
@@ -553,15 +805,7 @@ def render(supabase):
             c_new, c_txt, c_des, c_has = st.columns([1.2, 2, 1, 1])
 
             if c_new.button("➕ NUEVA ORDEN", type="primary", use_container_width=True):
-                st.session_state["editando_orden_id"] = None
-                st.session_state["prod_items"] = []
-                st.session_state["url_boceto_view"] = None
-                st.session_state["url_diseno_view"] = None
-                st.session_state["editando_cliente_id"] = None
-                st.session_state["fecha_entrega_edit"] = datetime.date.today()
-                st.session_state["editando_obs_g"] = (
-                    ""  # <--- NUEVO: Limpiamos la memoria de las observaciones
-                )
+                _prod_reiniciar_editor()
                 st.session_state["vista_prod"] = "EDITOR"
                 st.rerun()
             txt_bus = c_txt.text_input(
@@ -775,6 +1019,7 @@ def render(supabase):
                             }
                         )
 
+                    _prod_reiniciar_editor()
                     st.session_state["prod_items"] = recup
                     st.session_state["editando_orden_id"] = id_s
                     st.session_state["editando_orden_cod"] = cod_on
@@ -787,12 +1032,12 @@ def render(supabase):
                     st.session_state["editando_cliente_id"] = row_seleccionada[
                         "cliente_id"
                     ]
-                    st.session_state["editando_obs_g"] = row_seleccionada.get(
-                        "observaciones_generales", ""
+                    st.session_state["editando_obs_g"] = _prod_texto_nota(
+                        row_seleccionada.get("observaciones_generales")
                     )
                     # --- NUEVO: Cargamos las notas de facturación a la memoria ---
-                    st.session_state["editando_notas_fac"] = row_seleccionada.get(
-                        "notas_facturacion", ""
+                    st.session_state["editando_notas_fac"] = _prod_texto_nota(
+                        row_seleccionada.get("notas_facturacion")
                     )
 
                     try:
@@ -1222,8 +1467,8 @@ def render(supabase):
             with c2.popover("➕ Crear Cliente Nuevo", use_container_width=True):
                 with st.form("nc_full", clear_on_submit=True):
                     st.markdown("##### Nuevo Cliente")
-                    f_ruc = st.text_input("RUC/CI *", key="new_cli_ruc")
-                    f_nom = st.text_input("Nombre *", key="new_cli_nom")
+                    f_ruc = st.text_input("RUC/CI *", key=_prod_widget_key("new_cli_ruc"))
+                    f_nom = st.text_input("Nombre *", key=_prod_widget_key("new_cli_nom"))
                     f_tel = st.text_input("Telf")
                     f_ema = st.text_input("Email")
                     f_ciu = st.text_input("Ciudad")
@@ -1322,7 +1567,7 @@ def render(supabase):
                         f"[🔗 Hacer clic aquí para abrir archivo original]({url_b})"
                     )
 
-                if st.button("🗑️ Eliminar Boceto", key="d_boc"):
+                if st.button("🗑️ Eliminar Boceto", key=_prod_widget_key("d_boc")):
                     borrar_img(supabase, url_b)
                     st.session_state["url_boceto_view"] = None
                     if st.session_state.get("editando_orden_id"):
@@ -1332,7 +1577,7 @@ def render(supabase):
                     st.rerun()
             else:
                 boceto_file = st.file_uploader(
-                    "Subir Boceto", type=["jpg", "png", "pdf"], key="up_boc"
+                    "Subir Boceto", type=["jpg", "png", "pdf"], key=_prod_widget_key("up_boc")
                 )
                 if boceto_file:
                     url_b = subir_img(supabase, boceto_file, "bocetos")
@@ -1357,7 +1602,7 @@ def render(supabase):
                         f"[🔗 Hacer clic aquí para abrir archivo original]({url_a})"
                     )
 
-                if st.button("🗑️ Eliminar Diseño", key="d_art"):
+                if st.button("🗑️ Eliminar Diseño", key=_prod_widget_key("d_art")):
                     borrar_img(supabase, url_a)
                     st.session_state["url_diseno_view"] = None
                     if st.session_state.get("editando_orden_id"):
@@ -1367,7 +1612,7 @@ def render(supabase):
                     st.rerun()
             else:
                 arte_file = st.file_uploader(
-                    "Cargar Diseño Final", type=["jpg", "png", "pdf"], key="up_art"
+                    "Cargar Diseño Final", type=["jpg", "png", "pdf"], key=_prod_widget_key("up_art")
                 )
                 if arte_file:
                     url_a = subir_img(supabase, arte_file, "artes")
@@ -1608,7 +1853,7 @@ def render(supabase):
                     "Tarifa",
                     opciones_tarifa,
                     index=tarifa_sel_def,
-                    key=f"tar_sel_{prod_obj['id']}",
+                    key=_prod_widget_key(f"tar_sel_{prod_obj['id']}"),
                 )
 
                 # 2. Cálculo del Precio Base
@@ -1632,7 +1877,7 @@ def render(supabase):
                         precio_base = float(restore_price)
                     else:
                         precio_base = st.session_state.get(
-                            f'p_man_val_{prod_obj["id"]}',
+                            _prod_widget_key(f'p_man_val_{prod_obj["id"]}'),
                             float(prod_obj.get("precio_unitario", 0)),
                         )
 
@@ -1644,7 +1889,7 @@ def render(supabase):
                         value=precio_base,
                         format="%.2f",
                         disabled=True,
-                        key=f"p_auto_{prod_obj['id']}_{tarifa_sel}",
+                        key=_prod_widget_key(f"p_auto_{prod_obj['id']}_{tarifa_sel}"),
                     )
                 else:
                     prec = c2.number_input(
@@ -1652,15 +1897,15 @@ def render(supabase):
                         value=precio_base,
                         format="%.2f",
                         disabled=False,
-                        key=f"p_man_{prod_obj['id']}",
+                        key=_prod_widget_key(f"p_man_{prod_obj['id']}"),
                     )
-                    st.session_state[f'p_man_val_{prod_obj["id"]}'] = prec
+                    st.session_state[_prod_widget_key(f'p_man_val_{prod_obj["id"]}')] = prec
 
                 # 4. PIN de autorización (valor centralizado en secrets, no hardcodeado)
                 auto = True
                 if es_manual:
                     pin = c3.text_input(
-                        "PIN Autorización", type="password", key=f"pin_{prod_obj['id']}"
+                        "PIN Autorización", type="password", key=_prod_widget_key(f"pin_{prod_obj['id']}")
                     )
                     pin_ok = False
                     try:
@@ -1850,14 +2095,14 @@ def render(supabase):
                 columnas_orden.append("Obs")
 
                 # Crea un contenedor estable
-                with st.container(key="contenedor_editor_matriz"):
+                with st.container(key=_prod_widget_key("contenedor_editor_matriz")):
                     edit_df = st.data_editor(
                         st.session_state["df_temp_matriz"],
                         column_order=columnas_orden,
                         column_config=cols_cfg,
                         num_rows="dynamic",
                         use_container_width=True,
-                        key=f"ed_{st.session_state['reset_matrix_key']}",
+                        key=_prod_widget_key(f"ed_{st.session_state['reset_matrix_key']}"),
                     )
 
                     # --- BOTÓN PARA AUTORELLENAR POLINES (SOLO UNIFORME COMPLETO) ---
@@ -2208,7 +2453,7 @@ def render(supabase):
                     col_edit, col_del = st.columns([1, 5])
 
                     # --- BOTÓN EDITAR (RECUPERACIÓN COMPLETA INCLUYENDO ACABADO) ---
-                    if col_edit.button("✏️ Editar", key=f"btn_edit_{i}"):
+                    if col_edit.button("✏️ Editar", key=_prod_widget_key(f"btn_edit_{i}")):
                         # 1. Recuperar Metadata
                         st.session_state["restore_product_id"] = it["obj_p"]["id"]
                         st.session_state["restore_fabric_id"] = it["id_tela"]
@@ -2275,7 +2520,7 @@ def render(supabase):
 
                     # --- NUEVO: BOTÓN ELIMINAR ---
                     if col_del.button(
-                        "🗑️ Eliminar Grupo", type="primary", key=f"btn_del_item_{i}"
+                        "🗑️ Eliminar Grupo", type="primary", key=_prod_widget_key(f"btn_del_item_{i}")
                     ):
                         st.session_state["prod_items"].pop(i)
                         st.toast("Productos eliminados del resumen", icon="🗑️")
@@ -2342,18 +2587,30 @@ def render(supabase):
                 st.markdown("### 📝 Notas y Actualizaciones")
 
                 # --- NUEVO: Campo aislado para facturación ---
-                val_notas_fac = st.session_state.get("editando_notas_fac", "")
+                clave_notas = _prod_widget_key("notas_facturacion")
+                if clave_notas not in st.session_state:
+                    st.session_state[clave_notas] = _prod_texto_nota(
+                        st.session_state.get("editando_notas_fac", "")
+                    )
                 notas_fac = st.text_area(
                     "🧾 Notas de Facturación (SRI)",
-                    value=val_notas_fac,
+                    key=clave_notas,
+                    on_change=_prod_recordar_nota,
+                    args=("editando_notas_fac", clave_notas),
                     height=60,
                     help="Instrucciones sobre cómo emitir la factura. Visible también en Facturación.",
                 )
 
-                val_obs = st.session_state.get("editando_obs_g", "")
+                clave_obs = _prod_widget_key("observaciones_generales")
+                if clave_obs not in st.session_state:
+                    st.session_state[clave_obs] = _prod_texto_nota(
+                        st.session_state.get("editando_obs_g", "")
+                    )
                 obs_g = st.text_area(
                     "Observaciones Generales del Taller",
-                    value=val_obs,
+                    key=clave_obs,
+                    on_change=_prod_recordar_nota,
+                    args=("editando_obs_g", clave_obs),
                     height=100,
                     placeholder="Escriba aquí notas de confección o instrucciones generales...",
                 )
@@ -2363,6 +2620,7 @@ def render(supabase):
                     st.warning("⚠️ Estás editando una orden existente.")
                     detalle_cambios_txt = st.text_area(
                         "¿Qué cambios realizaste? (Obligatorio para notificar a diseño)",
+                        key=_prod_widget_key("detalle_cambios"),
                         placeholder="Ej: Se cambió la talla del jugador X, o se cambió el cuello...",
                         height=100,
                     )
@@ -2376,11 +2634,24 @@ def render(supabase):
                     True  # Obliga a la vendedora a escribir algo si está editando
                 )
 
+            # El bloqueo pertenece a este editor, no a otras órdenes ni sesiones.
+            clave_guardado = _prod_widget_key("guardado_iniciado")
+            guardado_iniciado = st.session_state.get(clave_guardado, False)
+            orden_real_en_prueba = (
+                isinstance(supabase, _ProdPrueba)
+                and es_edicion_ui
+                and int(st.session_state["editando_orden_id"]) > 0
+            )
+            if orden_real_en_prueba:
+                st.caption("Modo prueba: las órdenes reales solo se pueden consultar.")
+            if guardado_iniciado:
+                st.warning("Este guardado ya se inició. Si hubo un error, verifica el historial antes de crear otra orden.")
             if st.button(
                 "💾 GUARDAR ORDEN",
                 type="primary",
                 use_container_width=True,
-                disabled=btn_disabled,
+                key=_prod_widget_key("guardar_orden"),
+                disabled=btn_disabled or guardado_iniciado or orden_real_en_prueba,
             ):
                 # --- VALIDACIÓN DE CLIENTE OBLIGATORIO ---
                 if not st.session_state.get("editando_cliente_id"):
@@ -2389,6 +2660,16 @@ def render(supabase):
                     )
                     st.stop()  # Detiene la ejecución del callback
 
+                if not st.session_state["prod_items"] or any(
+                    not it.get("detalles") for it in st.session_state["prod_items"]
+                ):
+                    st.error("Agrega productos con sus detalles antes de guardar.")
+                    st.stop()
+                if st.session_state.get(clave_guardado) or orden_real_en_prueba:
+                    st.stop()
+                # No volver a ejecutar el guardado si llega un segundo clic.
+                # Mantener el bloqueo ante errores evita reintentar una escritura incierta.
+                st.session_state[clave_guardado] = True
                 try:
                     # 1. Definir si es NUEVA o EDICIÓN
                     es_edicion = (
@@ -2582,13 +2863,16 @@ def render(supabase):
                         # -------------------------------------------------------------
 
                         # Inyectar el primer estado en el historial
-                        transicionar_estado(
-                            supabase,
-                            id_o,
-                            OrderState.PENDIENTE,
-                            id_usuario_actual,
-                            notas="Orden creada",
-                        )
+                        if not isinstance(supabase, _ProdPrueba):
+                            transicionar_estado(
+                                supabase,
+                                id_o,
+                                OrderState.PENDIENTE,
+                                id_usuario_actual,
+                                notas="Orden creada",
+                            )
+                        # En prueba la cabecera conserva el estado inicial;
+                        # no se llama al historial real de estados.
 
                         # 🟢 INTEGRACIÓN FINANZAS: Registrar el Abono completo en Pagos
                         if mnt > 0:
@@ -2773,10 +3057,14 @@ def render(supabase):
                             ).execute()
 
                     # 5. Éxito y Salida
-                    st.success(f"✅ Orden {cod} Guardada correctamente.")
-                    st.info(
-                        "💡 Para imprimir el contrato, vaya al módulo de 'Reportes'."
-                    )
+                    if isinstance(supabase, _ProdPrueba):
+                        st.success(f"✅ Orden {cod} guardada en modo prueba (solo local).")
+                        st.info("La orden ficticia no estará disponible en Reportes reales.")
+                    else:
+                        st.success(f"✅ Orden {cod} Guardada correctamente.")
+                        st.info(
+                            "💡 Para imprimir el contrato, vaya al módulo de 'Reportes'."
+                        )
 
                     time.sleep(1.5)
                     st.session_state["vista_prod"] = "LISTA"
@@ -2787,3 +3075,4 @@ def render(supabase):
 
                 except Exception as e:
                     st.error(f"Error crítico al guardar: {e}")
+                    st.warning("No repitas el guardado. Comprueba primero si la orden o sus detalles quedaron registrados.")
