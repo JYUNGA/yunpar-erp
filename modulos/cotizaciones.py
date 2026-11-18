@@ -11,6 +11,9 @@ import mimetypes
 import requests
 from fpdf import FPDF
 from num2words import num2words
+from decimal import Decimal, ROUND_HALF_UP
+from copy import deepcopy
+from types import SimpleNamespace
 from config import OrderState, transicionar_estado
 
 
@@ -238,6 +241,74 @@ class PDFCotizacion(FPDF):
 
 
 # --- FUNCIONES AUXILIARES ---
+_COT_IVA_OPCIONES = {
+    "INCLUIDO": "Precio final ya incluye IVA",
+    "AGREGADO": "Agregar IVA al precio",
+}
+_COT_IVA_TASA = Decimal("0.15")
+_COT_CENTAVO = Decimal("0.01")
+
+
+def _cot_dinero(valor):
+    return Decimal(str(0 if pd.isna(valor) else valor)).quantize(
+        _COT_CENTAVO, rounding=ROUND_HALF_UP
+    )
+
+
+def _cot_calcular_iva(items, modalidad):
+    # Los precios y subtotales de los items conservan el importe ingresado.
+    importe = sum((_cot_dinero(i["subtotal"]) for i in items), Decimal("0.00"))
+    if modalidad == "INCLUIDO":
+        total = importe
+        subtotal = _cot_dinero(total / (1 + _COT_IVA_TASA))
+        iva = total - subtotal
+    elif modalidad == "AGREGADO":
+        subtotal = importe
+        iva = _cot_dinero(subtotal * _COT_IVA_TASA)
+        total = subtotal + iva
+    else:
+        raise ValueError("Modalidad de IVA no válida.")
+    return subtotal, iva, total
+
+
+def _cot_modalidad_guardada(cabecera):
+    # Las cotizaciones anteriores al cambio se calculaban con IVA incluido.
+    valor = cabecera.get("modalidad_iva")
+    # Solo lectura: respetar posibles proformas históricas sin IVA.
+    if isinstance(valor, str) and (valor in _COT_IVA_OPCIONES or valor == "SIN_IVA"):
+        return valor
+    return "INCLUIDO"
+
+
+def _cot_totales_guardados(cabecera):
+    # Nunca volver a aplicar IVA a una cotización histórica.
+    total = _cot_dinero(cabecera["total"])
+    subtotal = cabecera.get("subtotal")
+    iva = cabecera.get("iva")
+    if _cot_modalidad_guardada(cabecera) == "SIN_IVA":
+        # Proforma comercial sin impuesto añadido; no implica exención fiscal.
+        if (pd.notna(subtotal) and _cot_dinero(subtotal) != total) or (
+            pd.notna(iva) and _cot_dinero(iva) != Decimal("0.00")
+        ):
+            raise ValueError("Importes inconsistentes en cotización sin incluir IVA.")
+        return total, Decimal("0.00"), total
+    if pd.notna(subtotal) and pd.notna(iva):
+        return _cot_dinero(subtotal), _cot_dinero(iva), total
+    if pd.notna(subtotal):
+        base = _cot_dinero(subtotal)
+        return base, total - base, total
+    if pd.notna(iva):
+        impuesto = _cot_dinero(iva)
+        return total - impuesto, impuesto, total
+    base = _cot_dinero(total / (1 + _COT_IVA_TASA))
+    return base, total - base, total
+
+
+def _cot_iniciar_modalidad(modalidad="INCLUIDO"):
+    st.session_state["cot_modalidad_iva"] = modalidad
+    st.session_state.pop("cot_modalidad_iva_widget", None)
+
+
 def limpiar_texto_pdf(texto):
     if not texto:
         return ""
@@ -263,19 +334,219 @@ def limpiar_texto_pdf(texto):
     return t.encode("latin-1", "replace").decode("latin-1")
 
 
+# --- MODO DE PRUEBA LOCAL: SOLO COTIZACIONES ---
+# Activar antes de arrancar App.py: $env:YUNPAR_COT_MODO_PRUEBA="1"
+# Por defecto desactivado. No cambia el cliente Supabase global.
+def _cot_modo_prueba():
+    return os.environ.get("YUNPAR_COT_MODO_PRUEBA", "0") == "1"
+
+
+_COT_PRUEBA_TABLAS = frozenset({
+    "cotizaciones", "detalles_cotizacion", "clientes",
+    "productos_catalogo", "catalogo_tipos_cliente",
+})
+_COT_PRUEBA_EDITABLES = frozenset({
+    "cotizaciones", "detalles_cotizacion", "clientes",
+})
+
+
+def _cot_prueba_fecha(valor):
+    fecha = datetime.datetime.fromisoformat(str(valor).replace("Z", "+00:00"))
+    if fecha.tzinfo is not None:
+        fecha = fecha.astimezone().replace(tzinfo=None)
+    return fecha
+
+
+class _CotConsultaPrueba:
+    """Consultas sobre una copia en memoria; nunca ejecuta escrituras remotas."""
+
+    def __init__(self, nombre, datos):
+        self.nombre = nombre
+        self.datos = datos
+        self.accion = "select"
+        self.campos = "*"
+        self.payload = None
+        self.filtros = []
+        self.orden = None
+        self.tope = None
+        self.unico = False
+
+    def select(self, campos="*"):
+        self.campos = campos
+        return self
+
+    def eq(self, campo, valor):
+        self.filtros.append(lambda r: r.get(campo) == valor)
+        return self
+
+    def in_(self, campo, valores):
+        self.filtros.append(lambda r: r.get(campo) in valores)
+        return self
+
+    def gte(self, campo, valor):
+        self.filtros.append(lambda r: r.get(campo) is not None and (
+            _cot_prueba_fecha(r[campo]) >= _cot_prueba_fecha(valor)
+            if campo == "created_at" else r[campo] >= valor))
+        return self
+
+    def lte(self, campo, valor):
+        self.filtros.append(lambda r: r.get(campo) is not None and (
+            _cot_prueba_fecha(r[campo]) <= _cot_prueba_fecha(valor)
+            if campo == "created_at" else r[campo] <= valor))
+        return self
+
+    def order(self, campo, desc=False):
+        self.orden = (campo, desc)
+        return self
+
+    def limit(self, cantidad):
+        self.tope = cantidad
+        return self
+
+    def single(self):
+        self.unico = True
+        return self
+
+    def insert(self, payload):
+        self.accion, self.payload = "insert", payload
+        return self
+
+    def update(self, payload):
+        self.accion, self.payload = "update", payload
+        return self
+
+    def delete(self):
+        self.accion = "delete"
+        return self
+
+    def _validar(self, fila, otras):
+        if self.nombre == "cotizaciones":
+            if fila.get("modalidad_iva") not in _COT_IVA_OPCIONES:
+                raise ValueError("Modalidad IVA no válida")
+            if any(r.get("codigo_cotizacion") == fila.get("codigo_cotizacion")
+                   and r.get("id") != fila.get("id") for r in otras):
+                raise ValueError("Código de cotización duplicado")
+            if not any(r.get("id") == fila.get("cliente_id")
+                       for r in self.datos["clientes"]):
+                raise ValueError("Cliente no encontrado en la copia local")
+        elif self.nombre == "detalles_cotizacion":
+            if not any(r.get("id") == fila.get("cotizacion_id")
+                       for r in self.datos["cotizaciones"]):
+                raise ValueError("Cotización no encontrada en la copia local")
+            if not any(r.get("id") == fila.get("producto_id")
+                       for r in self.datos["productos_catalogo"]):
+                raise ValueError("Producto no encontrado en la copia local")
+        elif self.nombre == "clientes":
+            if any(r.get("cedula_ruc") == fila.get("cedula_ruc")
+                   and r.get("id") != fila.get("id") for r in otras):
+                raise ValueError("RUC/CI duplicado en la copia local")
+
+    def execute(self):
+        filas = self.datos[self.nombre]
+        def coincide(r):
+            return all(f(r) for f in self.filtros)
+
+        if self.accion == "select":
+            salida = [deepcopy(r) for r in filas if coincide(r)]
+            if self.orden:
+                campo, desc = self.orden
+                def clave(r):
+                    valor = r.get(campo)
+                    if campo == "created_at" and valor is not None:
+                        valor = _cot_prueba_fecha(valor)
+                    return valor is not None, valor
+                salida.sort(key=clave, reverse=desc)
+            if self.tope is not None:
+                salida = salida[:self.tope]
+            if self.campos != "*":
+                campos = [c.strip() for c in self.campos.split(",")]
+                salida = [{c: r[c] for c in campos} for r in salida]
+        else:
+            if self.nombre not in _COT_PRUEBA_EDITABLES:
+                raise RuntimeError("Modo prueba: escritura bloqueada en " + self.nombre)
+            copia = deepcopy(filas)
+            salida = []
+            if self.accion == "insert":
+                lote = self.payload if isinstance(self.payload, list) else [self.payload]
+                for original in lote:
+                    fila = deepcopy(original)
+                    # ID negativo: no puede confundirse con los IDs reales existentes.
+                    fila["id"] = min([0] + [int(r["id"]) for r in copia]) - 1
+                    if self.nombre == "cotizaciones":
+                        fila.setdefault("created_at", datetime.datetime.now().isoformat(timespec="seconds"))
+                        fila.setdefault("validez_dias", 30)
+                    self._validar(fila, copia)
+                    copia.append(fila)
+                    salida.append(deepcopy(fila))
+            elif self.accion == "update":
+                if not self.filtros:
+                    raise RuntimeError("Actualización sin filtro bloqueada")
+                for fila in copia:
+                    if coincide(fila):
+                        fila.update(deepcopy(self.payload))
+                        self._validar(fila, copia)
+                        salida.append(deepcopy(fila))
+            elif self.accion == "delete":
+                if not self.filtros:
+                    raise RuntimeError("Borrado sin filtro bloqueado")
+                salida = [deepcopy(r) for r in copia if coincide(r)]
+                copia = [r for r in copia if not coincide(r)]
+            else:
+                raise RuntimeError("Operación no implementada")
+            filas[:] = copia
+        if self.unico:
+            if len(salida) != 1:
+                raise RuntimeError("Se esperaba un registro")
+            salida = salida[0]
+        return SimpleNamespace(data=salida)
+
+
+class _CotSupabasePrueba:
+    def __init__(self, datos):
+        self.datos = datos
+
+    def table(self, nombre):
+        if nombre not in _COT_PRUEBA_TABLAS:
+            raise RuntimeError("Tabla no permitida en modo prueba: " + nombre)
+        return _CotConsultaPrueba(nombre, self.datos)
+
+
+def _cot_cargar_copia_prueba(supabase):
+    # Solo SELECT al servidor real. Una copia independiente por sesión de Streamlit.
+    clave = "_yunpar_cot_prueba_datos_v1"
+    if clave not in st.session_state:
+        datos = {}
+        for nombre in sorted(_COT_PRUEBA_TABLAS):
+            filas = []
+            offset = 0
+            # Paginar incluso si Supabase limita el número de filas por respuesta.
+            while True:
+                campo_orden = "nombre" if nombre == "catalogo_tipos_cliente" else "id"
+                lote = (supabase.table(nombre).select("*").order(campo_orden)
+                        .range(offset, offset + 499).execute().data or [])
+                if not lote:
+                    break
+                filas.extend(deepcopy(lote))
+                offset += len(lote)
+            datos[nombre] = filas
+        st.session_state[clave] = datos
+    return _CotSupabasePrueba(st.session_state[clave])
+
+
 def generar_siguiente_codigo_cot(supabase):
+    prefijo = "PRUEBA-COT-" if isinstance(supabase, _CotSupabasePrueba) else "COT-"
     try:
         resp = supabase.table("cotizaciones").select("codigo_cotizacion").execute()
         codigos = [d["codigo_cotizacion"] for d in resp.data]
         max_num = 0
         for c in codigos:
-            if c.startswith("COT-") and c[4:].isdigit():
-                num = int(c[4:])
+            if c.startswith(prefijo) and c[len(prefijo):].isdigit():
+                num = int(c[len(prefijo):])
                 if num > max_num:
                     max_num = num
-        return f"COT-{str(max_num + 1).zfill(4)}"
+        return f"{prefijo}{str(max_num + 1).zfill(4)}"
     except:
-        return "COT-0001"
+        return f"{prefijo}0001"
 
 
 def generar_pdf_final(cabecera, items, observaciones, vigencia_fecha, total_letras):
@@ -292,6 +563,7 @@ def generar_pdf_final(cabecera, items, observaciones, vigencia_fecha, total_letr
     pdf.cell(w_cod, 8, "Codigo", 1, 0, "C", True)
     pdf.cell(w_desc, 8, "Descripcion", 1, 0, "C", True)
     pdf.cell(w_cant, 8, "Cant", 1, 0, "C", True)
+    modalidad_pdf = _cot_modalidad_guardada(cabecera)
     pdf.cell(w_unit, 8, "P.Unit", 1, 0, "C", True)
     pdf.cell(w_tot, 8, "Total", 1, 1, "C", True)
     pdf.ln(8)
@@ -331,7 +603,24 @@ def generar_pdf_final(cabecera, items, observaciones, vigencia_fecha, total_letr
         pdf.set_draw_color(0, 0, 0)
         qr_data_string += f"- {item['codigo']} ({c_txt})\n"
 
-    pdf.ln(5)
+    pdf.ln(2)
+    pdf.set_x(52)
+    pdf.set_font("Arial", "I", 8)
+    pdf.cell(
+        0, 4,
+        {
+            "INCLUIDO": "Precios de los items: IVA incluido",
+            "AGREGADO": "Precios de los items: sin IVA (se agrega al subtotal)",
+            "SIN_IVA": "Precios cotizados sin incluir IVA.",
+        }[modalidad_pdf],
+        0, 1,
+    )
+    if cabecera.get("modo_prueba"):
+        pdf.set_x(52)
+        pdf.set_text_color(180, 0, 0)
+        pdf.cell(0, 4, "MODO PRUEBA - NO VALIDO PARA CLIENTES", 0, 1)
+        pdf.set_text_color(0, 0, 0)
+    pdf.ln(1)
     y = pdf.get_y()
     if y > 230:
         pdf.add_page()
@@ -348,9 +637,10 @@ def generar_pdf_final(cabecera, items, observaciones, vigencia_fecha, total_letr
     pdf.set_font("Arial", "", 10)
     pdf.cell(20, 5, "Subtotal:", 0, 0, "R")
     pdf.cell(25, 5, f"${float(cabecera['subtotal']):.2f}", 0, 1, "R")
-    pdf.set_x(x_totales)
-    pdf.cell(20, 5, "IVA (15%):", 0, 0, "R")
-    pdf.cell(25, 5, f"${float(cabecera['iva']):.2f}", 0, 1, "R")
+    if modalidad_pdf != "SIN_IVA" and _cot_dinero(cabecera["iva"]) != Decimal("0.00"):
+        pdf.set_x(x_totales)
+        pdf.cell(20, 5, "IVA (15%):", 0, 0, "R")
+        pdf.cell(25, 5, f"${float(cabecera['iva']):.2f}", 0, 1, "R")
     pdf.set_x(x_totales)
     pdf.set_font("Arial", "B", 12)
     pdf.set_text_color(18, 38, 122)
@@ -1149,6 +1439,9 @@ def _render_diseno_ia(supabase):
         st.session_state["cliente_id_edicion"] = registro.get("cliente_id")
         st.session_state["modo_edicion_cot"] = False
         st.session_state["cot_items"] = []
+        st.session_state.pop("codigo_edicion", None)
+        st.session_state.pop("id_cot_edicion", None)
+        _cot_iniciar_modalidad()
         st.session_state["_dia_enlace_cotizacion_id"] = registro.get("id")
 
         prod_obj = next(
@@ -1345,6 +1638,9 @@ def render(supabase):
 
         # 2. MÓDULO TRADICIONAL DE COTIZACIONES
         with tab_formal:
+            cot_db = _cot_cargar_copia_prueba(supabase) if _cot_modo_prueba() else supabase
+            if _cot_modo_prueba():
+                st.caption("MODO PRUEBA LOCAL · Los cambios de Cotizaciones no se guardan en Supabase.")
             c_tit, c_btn = st.columns([3, 2])
             c_tit.subheader("Historial")
             if c_btn.button(
@@ -1355,6 +1651,10 @@ def render(supabase):
                 st.session_state["cot_items"] = []
                 st.session_state["cot_obs_temp"] = ""
                 st.session_state["cliente_id_edicion"] = None
+                st.session_state.pop("codigo_edicion", None)
+                st.session_state.pop("id_cot_edicion", None)
+                st.session_state.pop("_dia_enlace_cotizacion_id", None)
+                _cot_iniciar_modalidad()
                 st.rerun()
 
             with st.container(border=True):
@@ -1366,7 +1666,7 @@ def render(supabase):
                 h_f_fin = col_fil3.date_input("Hasta", value=datetime.date.today())
 
             query = (
-                supabase.table("cotizaciones").select("*").order("created_at", desc=True)
+                cot_db.table("cotizaciones").select("*").order("created_at", desc=True)
             )
             query = query.gte("created_at", str(h_f_ini)).lte(
                 "created_at", str(h_f_fin) + " 23:59:59"
@@ -1378,7 +1678,7 @@ def render(supabase):
                 ids_cli = df_cots["cliente_id"].unique().tolist()
                 if ids_cli:
                     resp_clis = (
-                        supabase.table("clientes")
+                        cot_db.table("clientes")
                         .select("id, nombre_completo")
                         .in_("id", ids_cli)
                         .execute()
@@ -1423,7 +1723,7 @@ def render(supabase):
 
                     if b1.button("✏️ EDITAR", use_container_width=True):
                         detalles = (
-                            supabase.table("detalles_cotizacion")
+                            cot_db.table("detalles_cotizacion")
                             .select("*")
                             .eq("cotizacion_id", int(row_sel["id"]))
                             .execute()
@@ -1433,7 +1733,7 @@ def render(supabase):
                         for d in detalles:
                             try:
                                 prod = (
-                                    supabase.table("productos_catalogo")
+                                    cot_db.table("productos_catalogo")
                                     .select("*")
                                     .eq("id", d["producto_id"])
                                     .single()
@@ -1463,12 +1763,14 @@ def render(supabase):
                             "codigo_cotizacion"
                         ]
                         st.session_state["cot_obs_temp"] = row_sel["observaciones"]
+                        st.session_state.pop("_dia_enlace_cotizacion_id", None)
+                        _cot_iniciar_modalidad(_cot_modalidad_guardada(row_sel))
                         st.session_state["vista_cot"] = "EDITOR"
                         st.rerun()
 
                     if b2.button("📄 PDF", use_container_width=True):
                         detalles = (
-                            supabase.table("detalles_cotizacion")
+                            cot_db.table("detalles_cotizacion")
                             .select("*")
                             .eq("cotizacion_id", int(row_sel["id"]))
                             .execute()
@@ -1477,7 +1779,7 @@ def render(supabase):
                         items_pdf = []
                         for d in detalles:
                             prod = (
-                                supabase.table("productos_catalogo")
+                                cot_db.table("productos_catalogo")
                                 .select("codigo_referencia")
                                 .eq("id", d["producto_id"])
                                 .single()
@@ -1495,14 +1797,15 @@ def render(supabase):
                             )
 
                         cli_data = (
-                            supabase.table("clientes")
+                            cot_db.table("clientes")
                             .select("*")
                             .eq("id", int(row_sel["cliente_id"]))
                             .single()
                             .execute()
                             .data
                         )
-                        tl = num2words(row_sel["total"], lang="es").upper() + " DÓLARES"
+                        subtotal_pdf, iva_pdf, total_pdf = _cot_totales_guardados(row_sel)
+                        tl = num2words(float(total_pdf), lang="es").upper() + " DÓLARES"
 
                         try:
                             f_em = datetime.datetime.strptime(
@@ -1526,11 +1829,12 @@ def render(supabase):
                                 "telefono": cli_data["telefono"],
                                 "fecha": str(row_sel["fecha_emision"]),
                                 "codigo": row_sel["codigo_cotizacion"],
-                                "subtotal": float(row_sel["total"]) / 1.15,
-                                "iva": float(row_sel["total"])
-                                - (float(row_sel["total"]) / 1.15),
-                                "total": row_sel["total"],
+                                "subtotal": float(subtotal_pdf),
+                                "iva": float(iva_pdf),
+                                "total": float(total_pdf),
+                                "modalidad_iva": _cot_modalidad_guardada(row_sel),
                                 "tipo": cli_data.get("tipo_institucion", ""),
+                                "modo_prueba": _cot_modo_prueba(),
                             },
                             items=items_pdf,
                             observaciones=row_sel["observaciones"],
@@ -1553,7 +1857,7 @@ def render(supabase):
                         disabled=not confirmar_borrar,
                     ):
                         # Borrado lógico: marcamos como ANULADO en vez de eliminar.
-                        supabase.table("cotizaciones").update(
+                        cot_db.table("cotizaciones").update(
                             {"estado": "ANULADO"}
                         ).eq("id", int(row_sel["id"])).execute()
                         st.toast("Cotización anulada")
@@ -1563,7 +1867,7 @@ def render(supabase):
                     tel_cl = ""
                     try:
                         tel_cl = (
-                            supabase.table("clientes")
+                            cot_db.table("clientes")
                             .select("telefono")
                             .eq("id", int(row_sel["cliente_id"]))
                             .single()
@@ -1572,7 +1876,9 @@ def render(supabase):
                         )
                     except:
                         pass
-                    if tel_cl:
+                    if _cot_modo_prueba():
+                        b4.button("📲 WA", disabled=True, help="Envío a clientes bloqueado en modo prueba")
+                    elif tel_cl:
                         tc = "".join(filter(str.isdigit, str(tel_cl)))
                         if len(tc) > 0 and not tc.startswith("593"):
                             tc = "593" + tc
@@ -1588,6 +1894,9 @@ def render(supabase):
             _render_diseno_ia(supabase)
 
     elif st.session_state["vista_cot"] == "EDITOR":
+        cot_db = _cot_cargar_copia_prueba(supabase) if _cot_modo_prueba() else supabase
+        if _cot_modo_prueba():
+            st.caption("MODO PRUEBA LOCAL · Guardado simulado; Supabase no se modifica desde Cotizaciones.")
         c_b, c_h = st.columns([1, 6])
         if c_b.button("🔙 Volver", use_container_width=True):
             st.session_state["vista_cot"] = "LISTA"
@@ -1602,7 +1911,7 @@ def render(supabase):
         c_cli, c_dat = st.columns([2, 1])
         with c_cli:
             try:
-                cli_db = supabase.table("clientes").select("*").execute().data
+                cli_db = cot_db.table("clientes").select("*").execute().data
                 opciones_cli = {
                     f"{c['nombre_completo']} | {c['cedula_ruc']}": c for c in cli_db
                 }
@@ -1631,7 +1940,7 @@ def render(supabase):
                     ciu = st.text_input("Ciudad")
                     try:
                         res_tip = (
-                            supabase.table("catalogo_tipos_cliente")
+                            cot_db.table("catalogo_tipos_cliente")
                             .select("nombre")
                             .eq("activo", True)
                             .order("nombre")
@@ -1651,7 +1960,7 @@ def render(supabase):
                         if ruc and nom:
                             try:
                                 res = (
-                                    supabase.table("clientes")
+                                    cot_db.table("clientes")
                                     .insert(
                                         {
                                             "cedula_ruc": ruc,
@@ -1681,7 +1990,7 @@ def render(supabase):
         with st.container(border=True):
             st.markdown("🔍 **Filtros de Búsqueda (Catálogo)**")
             prods = (
-                supabase.table("productos_catalogo")
+                cot_db.table("productos_catalogo")
                 .select("*")
                 .eq("activo", True)
                 .execute()
@@ -1800,7 +2109,7 @@ def render(supabase):
                                     "descripcion": obj["descripcion"],
                                     "cantidad": cant,
                                     "precio": final_p,
-                                    "subtotal": cant * final_p,
+                                    "subtotal": float(_cot_dinero(Decimal(str(cant)) * Decimal(str(final_p)))),
                                     "obj_raw": obj,
                                 }
                             )
@@ -1861,7 +2170,7 @@ def render(supabase):
                                 "descripcion": orig["descripcion"],
                                 "cantidad": nueva_cant,
                                 "precio": orig["precio"],
-                                "subtotal": nueva_cant * orig["precio"],
+                                "subtotal": float(_cot_dinero(Decimal(str(nueva_cant)) * Decimal(str(orig["precio"])))),
                                 "obj_raw": orig.get("obj_raw"),
                             }
                         )
@@ -1891,9 +2200,42 @@ def render(supabase):
                 st.toast("Ítem eliminado", icon="🗑️")
                 st.rerun()
 
-            # --- El resto de tu lógica de totales y guardado se mantiene igual ---
-            tot = sum([x["subtotal"] for x in st.session_state["cot_items"]])
-            st.markdown(f"### Total Cotizado: :green[${tot:.2f}]")
+            # --- TRATAMIENTO DEL IVA ---
+            st.markdown("#### 🧾 Tratamiento del IVA")
+            opciones_iva = list(_COT_IVA_OPCIONES)
+            modalidad_actual = st.session_state.get("cot_modalidad_iva", "INCLUIDO")
+            if modalidad_actual == "SIN_IVA":
+                st.info(
+                    "Esta cotización se guardó sin incluir IVA. "
+                    "Selecciona una de las dos modalidades vigentes para actualizarla."
+                )
+            indice_iva = (
+                opciones_iva.index(modalidad_actual)
+                if modalidad_actual in opciones_iva else None
+            )
+            modalidad_iva = st.radio(
+                "¿Cómo se manejará el IVA en esta cotización?",
+                opciones_iva,
+                index=indice_iva,
+                format_func=lambda opcion: _COT_IVA_OPCIONES[opcion],
+                key="cot_modalidad_iva_widget",
+            )
+            if modalidad_iva not in _COT_IVA_OPCIONES:
+                st.stop()  # No guardar ni recalcular importes históricos sin elegir IVA.
+            st.session_state["cot_modalidad_iva"] = modalidad_iva
+            subtotal_sin_iva, iva_cotizacion, total_final = _cot_calcular_iva(
+                st.session_state["cot_items"], modalidad_iva
+            )
+            st.caption(
+                {
+                    "INCLUIDO": "Los precios ingresados ya incluyen IVA.",
+                    "AGREGADO": "Los precios ingresados son sin IVA. El 15% se agrega al subtotal.",
+                }[modalidad_iva]
+            )
+            col_base, col_iva, col_total = st.columns(3)
+            col_iva.metric("IVA (15%)", f"${iva_cotizacion:.2f}")
+            col_base.metric("Subtotal sin IVA", f"${subtotal_sin_iva:.2f}")
+            col_total.metric("Total cotizado", f"${total_final:.2f}")
 
             obs = st.text_area(
                 "Observaciones de la Cotización",
@@ -1905,15 +2247,29 @@ def render(supabase):
             ):
                 if sel_id:
                     try:
-                        cod = st.session_state.get(
-                            "codigo_edicion"
-                        ) or generar_siguiente_codigo_cot(supabase)
+                        # Verificación de esquema: no escribir si falta la columna.
+                        try:
+                            cot_db.table("cotizaciones").select(
+                                "modalidad_iva"
+                            ).limit(1).execute()
+                        except Exception as e:
+                            raise RuntimeError(
+                                "No se pudo verificar la columna modalidad_iva. "
+                                "Revisa la migración de IVA en Supabase antes de guardar."
+                            ) from e
+
+                        cod = (
+                            st.session_state["codigo_edicion"]
+                            if st.session_state.get("modo_edicion_cot")
+                            else generar_siguiente_codigo_cot(cot_db)
+                        )
                         data_head = {
                             "codigo_cotizacion": cod,
                             "cliente_id": sel_id,
-                            "subtotal": tot / 1.15,
-                            "iva": tot - (tot / 1.15),
-                            "total": tot,
+                            "subtotal": float(subtotal_sin_iva),
+                            "iva": float(iva_cotizacion),
+                            "total": float(total_final),
+                            "modalidad_iva": modalidad_iva,
                             "observaciones": obs,
                             "fecha_emision": str(f_em),
                             "estado": "BORRADOR",
@@ -1921,16 +2277,16 @@ def render(supabase):
                         }
 
                         if st.session_state.get("modo_edicion_cot"):
-                            supabase.table("cotizaciones").update(data_head).eq(
+                            cot_db.table("cotizaciones").update(data_head).eq(
                                 "id", st.session_state["id_cot_edicion"]
                             ).execute()
                             cot_id = st.session_state["id_cot_edicion"]
-                            supabase.table("detalles_cotizacion").delete().eq(
+                            cot_db.table("detalles_cotizacion").delete().eq(
                                 "cotizacion_id", cot_id
                             ).execute()
                         else:
                             res = (
-                                supabase.table("cotizaciones")
+                                cot_db.table("cotizaciones")
                                 .insert(data_head)
                                 .execute()
                             )
@@ -1948,14 +2304,17 @@ def render(supabase):
                                     "descripcion_snapshot": i["descripcion"],
                                 }
                             )
-                        supabase.table("detalles_cotizacion").insert(detalles).execute()
+                        cot_db.table("detalles_cotizacion").insert(detalles).execute()
 
                         # Si la cotización nació desde Diseño IA, dejamos la relación persistida.
                         diseno_enlace_id = st.session_state.get("_dia_enlace_cotizacion_id")
-                        if diseno_enlace_id:
+                        if diseno_enlace_id and _cot_modo_prueba():
+                            # Nunca enlazar una cotización ficticia con un diseño real.
+                            st.session_state.pop("_dia_enlace_cotizacion_id", None)
+                        elif diseno_enlace_id:
                             try:
                                 _dia_actualizar(
-                                    supabase,
+                                    cot_db,
                                     diseno_enlace_id,
                                     {"cotizacion_id": cot_id},
                                 )
@@ -1965,7 +2324,10 @@ def render(supabase):
                                     f"La cotización se guardó, pero no se pudo enlazar con Diseño IA: {e_link}"
                                 )
 
-                        st.success(f"Cotización {cod} guardada con éxito")
+                        st.success(
+                            f"Cotización {cod} guardada en modo prueba (solo local)"
+                            if _cot_modo_prueba() else f"Cotización {cod} guardada con éxito"
+                        )
                         st.session_state["vista_cot"] = "LISTA"
                         time.sleep(1)
                         st.rerun()
