@@ -13,3 +13,4 @@ pytz
 google-generativeai
 xlrd
 openpyxl
+google-genai
