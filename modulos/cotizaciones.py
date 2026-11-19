@@ -707,6 +707,171 @@ def generar_pdf_final(cabecera, items, observaciones, vigencia_fecha, total_letr
 # --- DISEÑO CON IA (PRODUCCIÓN / SUPABASE) ---
 _DIA_TABLE = "disenos_ia_ventas"
 _DIA_BUCKET = "ordenes_produccion"
+_DIA_MAX_REFERENCIAS = 8
+_DIA_MAX_BYTES = 8 * 1024 * 1024
+_DIA_ZONAS = ["Referencia general", "Frente / pecho", "Pecho derecho", "Pecho izquierdo", "Centro del pecho",
+              "Espalda", "Manga izquierda", "Manga derecha", "Ambas mangas", "Cuello", "Costado",
+              "Logo / patrocinador", "Otro detalle"]
+_DIA_FORMATOS = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
+_DIA_ESTADOS_ELIMINABLES = ("PROPUESTA PREPARADA", "AJUSTES SOLICITADOS", "PROPUESTA REGENERADA")
+
+
+def _dia_logo_institucional():
+    """Recurso opcional local, sin depender de Internet ni modificar Storage."""
+    from pathlib import Path
+    raiz = Path(__file__).resolve().parent.parent
+    for nombre in ("Logo_Yunpar_DIA.png", "Logo_Yunpar.png", "Logo_YUNPAR.png"):
+        ruta = raiz / nombre
+        if ruta.is_file():
+            datos = ruta.read_bytes()
+            return datos, _dia_validar_imagen(datos)
+    raise FileNotFoundError("Coloca Logo_Yunpar_DIA.png en la carpeta raíz de YUNPAR, junto a App.py.")
+
+
+def _dia_modo_automatico(referencias, *indicaciones, enlace=None):
+    """Por seguridad no invertir logos o texto cuyo contenido no conocemos.
+
+    Solo reflejar si se pide expresamente un espejo sin marcas visibles en los
+    perfiles y no hay referencias de logos/zonas específicas ni enlace externo.
+    """
+    import re
+    import unicodedata
+    def normalizar(texto):
+        return ''.join(c for c in unicodedata.normalize('NFD', str(texto or '').lower())
+                       if unicodedata.category(c) != 'Mn')
+    general = ' '.join(normalizar(t) for t in indicaciones)
+    if enlace or not re.search(r'\b(?:simetric[oa]s?|espejo|identicos)\b', general):
+        return "ind"
+    if not re.search(r'\bsin (?:letras|logos|marcas|texto|numeros)\b', general):
+        return "ind"
+    for ref in referencias:
+        if ref.get("zona") != "Referencia general":
+            return "ind"
+        if re.search(r'\b(?:logo|logotipo|escudo|patrocinador|texto|letras|numero|nombre)s?\b',
+                     normalizar(ref.get("nombre")) + ' ' + normalizar(ref.get("indicacion"))):
+            return "ind"
+    # Cualquier solicitud de asimetría prevalece sobre el espejo.
+    if re.search(r'\b(?:izquierd[oa]s?|derech[oa]s?|diferentes?|asimetric[oa]s?)\b', general):
+        return "ind"
+    # Si está expresamente descrita una prenda sin marcas, el espejo es fiel.
+    return "sim"
+
+
+def _dia_reflejar_lateral(datos):
+    import io
+    from PIL import Image, ImageOps
+    with Image.open(io.BytesIO(datos)) as original:
+        espejo = ImageOps.mirror(ImageOps.exif_transpose(original).convert("RGBA"))
+        salida = io.BytesIO()
+        espejo.save(salida, format="PNG")
+        return salida.getvalue()
+
+
+
+def _dia_modo_prueba():
+    return os.environ.get("YUNPAR_DIA_MODO_PRUEBA", "0") == "1" or _cot_modo_prueba()
+
+
+class _DiaConsultaPrueba(_CotConsultaPrueba):
+    """Persistencia local exclusiva de Diseño IA, sin escrituras remotas."""
+    def execute(self):
+        if self.accion == "select":
+            return super().execute()
+        filas = self.datos[self.nombre]
+        if self.accion == "insert":
+            fila = deepcopy(self.payload)
+            if any(r.get("codigo") == fila.get("codigo") for r in filas):
+                raise ValueError("Código de diseño duplicado")
+            fila["id"] = min([0] + [r["id"] for r in filas]) - 1
+            fila.setdefault("created_at", _dia_now_iso())
+            filas.append(fila)
+            return SimpleNamespace(data=[deepcopy(fila)])
+        if self.accion == "update" and self.filtros:
+            salida = []
+            for fila in filas:
+                if all(f(fila) for f in self.filtros):
+                    fila.update(deepcopy(self.payload))
+                    salida.append(deepcopy(fila))
+            return SimpleNamespace(data=salida)
+        if self.accion == "delete" and self.filtros:
+            borradas = [r for r in filas if all(f(r) for f in self.filtros)]
+            filas[:] = [r for r in filas if not all(f(r) for f in self.filtros)]
+            return SimpleNamespace(data=deepcopy(borradas))
+        raise RuntimeError("Operación no permitida en prueba de Diseño IA")
+
+
+class _DiaSupabasePrueba:
+    def __init__(self, real):
+        self.real = real
+        self.datos = st.session_state.setdefault("_dia_prueba_datos", {_DIA_TABLE: []})
+
+    def table(self, nombre):
+        if nombre == _DIA_TABLE:
+            return _DiaConsultaPrueba(nombre, self.datos)
+        if nombre in {"clientes", "productos_catalogo"}:
+            # El flujo únicamente necesita SELECT del catálogo real.
+            return SimpleNamespace(select=self.real.table(nombre).select)
+        raise RuntimeError("Tabla bloqueada en prueba de Diseño IA: " + nombre)
+
+
+def _dia_referencias_disponibles(supabase):
+    if isinstance(supabase, _DiaSupabasePrueba):
+        return True
+    try:
+        supabase.table(_DIA_TABLE).select("referencias_imagenes").limit(1).execute()
+        return True
+    except Exception:
+        return False
+
+
+def _dia_guardadas(registro):
+    refs = registro.get("referencias_imagenes")
+    if isinstance(refs, list):
+        validas = [r for r in refs if isinstance(r, dict) and r.get("url")]
+        if validas:
+            return validas
+    # Compatibilidad con propuestas creadas antes de la migración.
+    if registro.get("referencia_url"):
+        return [{"url": registro["referencia_url"], "nombre": "Referencia original",
+                 "zona": "Referencia general", "indicacion": ""}]
+    return []
+
+
+def _dia_origen_visual(url):
+    if str(url or "").startswith("dia-prueba://"):
+        archivo = st.session_state.get("_dia_prueba_archivos", {}).get(url)
+        return archivo[0] if archivo else None
+    return url
+
+
+def _dia_validar_imagen(contenido):
+    import io
+    from PIL import Image
+    if not contenido or len(contenido) > _DIA_MAX_BYTES:
+        raise ValueError("Cada referencia debe pesar como máximo 8 MB.")
+    with Image.open(io.BytesIO(contenido)) as imagen:
+        mime = _DIA_FORMATOS.get(imagen.format)
+        if not mime or imagen.width * imagen.height > 30_000_000:
+            raise ValueError("Usa PNG, JPG o WEBP de hasta 30 megapíxeles.")
+        imagen.verify()
+    return mime
+
+
+def _dia_imagen_para_gemini(contenido):
+    # Conservamos el original en Storage; enviamos una copia optimizada a Gemini.
+    import io
+    from PIL import Image, ImageOps
+    with Image.open(io.BytesIO(contenido)) as imagen:
+        if imagen.width * imagen.height > 30_000_000:
+            raise ValueError("La referencia excede 30 megapíxeles.")
+        imagen = ImageOps.exif_transpose(imagen).convert("RGBA")
+        imagen.thumbnail((1600, 1600))
+        fondo = Image.new("RGB", imagen.size, "white")
+        fondo.paste(imagen, mask=imagen.getchannel("A"))
+        salida = io.BytesIO()
+        fondo.save(salida, format="JPEG", quality=90)
+        return salida.getvalue(), "image/jpeg"
+
 
 
 def _dia_now_iso():
@@ -729,6 +894,14 @@ def _dia_tabla_disponible(supabase):
 
 
 def _dia_codigo_siguiente(supabase):
+    if isinstance(supabase, _DiaSupabasePrueba):
+        prefijo = "DIA-PRUEBA-"
+        filas = supabase.table(_DIA_TABLE).select("codigo").execute().data
+        numeros = [int(r["codigo"][len(prefijo):]) for r in filas
+                   if r.get("codigo", "").startswith(prefijo) and r["codigo"][len(prefijo):].isdigit()]
+        siguiente = max(max(numeros, default=0), int(st.session_state.get("_dia_prueba_ultimo_codigo", 0))) + 1
+        st.session_state["_dia_prueba_ultimo_codigo"] = siguiente
+        return f"{prefijo}{siguiente:04d}"
     try:
         res = (
             supabase.table(_DIA_TABLE)
@@ -777,6 +950,10 @@ def _dia_extension_mime(mime):
 def _dia_subir_bytes(supabase, contenido, mime, carpeta, nombre_base):
     if not contenido:
         return None
+    if isinstance(supabase, _DiaSupabasePrueba):
+        url = f"dia-prueba://{carpeta}/{nombre_base}_{uuid.uuid4().hex[:10]}"
+        st.session_state.setdefault("_dia_prueba_archivos", {})[url] = (bytes(contenido), mime)
+        return url
     ext = _dia_extension_mime(mime)
     ruta = f"{carpeta}/{nombre_base}_{uuid.uuid4().hex[:10]}{ext}"
     supabase.storage.from_(_DIA_BUCKET).upload(
@@ -788,21 +965,45 @@ def _dia_subir_bytes(supabase, contenido, mime, carpeta, nombre_base):
 
 
 def _dia_descargar_imagen(url):
+    if str(url or "").startswith("dia-prueba://"):
+        return st.session_state.get("_dia_prueba_archivos", {}).get(url, (None, None))
     if not url or not str(url).lower().startswith(("http://", "https://")):
         return None, None
+    # Solo URLs públicas de imágenes; no acceder a servicios de la red interna.
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit, urljoin
     try:
-        resp = requests.get(str(url), timeout=12)
-        resp.raise_for_status()
-        mime = (resp.headers.get("content-type") or "").split(";")[0].strip()
-        if mime and not mime.startswith("image/"):
-            return None, None
-        return bytes(resp.content), mime or "image/png"
+        destino = str(url)
+        for _ in range(4):
+            partes = urlsplit(destino)
+            if partes.scheme not in {"http", "https"} or not partes.hostname or partes.username or partes.password:
+                return None, None
+            if partes.port not in (None, 80, 443):
+                return None, None
+            ips = socket.getaddrinfo(partes.hostname, partes.port or (443 if partes.scheme == "https" else 80))
+            if not ips or any(not ipaddress.ip_address(i[4][0]).is_global for i in ips):
+                return None, None
+            with requests.get(destino, timeout=(5, 15), stream=True, allow_redirects=False) as resp:
+                if resp.is_redirect:
+                    destino = urljoin(destino, resp.headers["Location"])
+                    continue
+                resp.raise_for_status()
+                mime = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+                if mime and not mime.startswith("image/") and mime != "application/octet-stream":
+                    return None, None
+                datos = bytearray()
+                for fragmento in resp.iter_content(65536):
+                    datos.extend(fragmento)
+                    if len(datos) > 16 * 1024 * 1024:
+                        return None, None
+                return (bytes(datos), mime or "image/png") if datos else (None, None)
     except Exception:
-        return None, None
-
+        pass
+    return None, None
 
 def _dia_generar_imagen_gemini(registro):
-    """Genera la propuesta comercial con Gemini. El arte técnico sigue a cargo del diseñador."""
+    """Genera cuatro vistas individuales y las compone en una sola lámina comercial."""
     import base64
     import io
 
@@ -822,99 +1023,190 @@ def _dia_generar_imagen_gemini(registro):
     producto = registro.get("producto") or registro.get("producto_descripcion") or "Prenda por definir"
     tecnica = registro.get("tecnica") or "Por definir"
     colores = registro.get("colores") or "No especificados"
-    brief = registro.get("instrucciones") or ""
+    brief = registro.get("instrucciones") or "Seguir las referencias visuales y las indicaciones individuales; no inventar cambios."
     ajuste = registro.get("ajuste_solicitado") or ""
+    referencias = registro.get("referencias_locales")
+    if referencias is None:
+        referencias = _dia_guardadas(registro)
+    modo = _dia_modo_automatico(referencias, registro.get("instrucciones"), ajuste,
+                                 enlace=registro.get("referencia_link"))
+    regla_laterales = (
+        "Los costados deben ser simétricos en su tela, paneles, rayas y colores. "
+        "La vista izquierda se reflejará por código; no dibujes letras, logos ni números visibles en el perfil. "
+        "Respeta los logos frontales y posteriores en sus propias vistas."
+        if modo == "sim" else
+        "Los perfiles conservarán los mismos cortes, costuras, paneles y proporciones de color a ambos lados, "
+        "excepto las diferencias expresamente solicitadas. Los logos y textos deben estar orientados correctamente, nunca invertidos. "
+        "Si ambos costados son iguales, conserva EXACTAMENTE la distribución de tela, rayas, ancho y altura de paneles "
+        "del perfil ya generado; cambia únicamente el ángulo y las marcas que correspondan. No inviertas letras."
+    )
 
     prompt = f"""
-Crea UNA propuesta visual profesional para presentar a un cliente de una empresa de confección.
+Crea una vista de boceto comercial de UNA MISMA prenda, para aprobación del cliente.
+No es arte técnico definitivo para impresión.
 
-OBJETIVO:
-Generar un mockup de una prenda terminada que sirva como PROPUESTA COMERCIAL para aprobación del cliente.
-No es un arte técnico definitivo para impresión; el diseñador humano hará luego la preparación de producción.
+PRENDA: {producto}
+TÉCNICA: {tecnica}
+COLORES: {colores}
+INDICACIONES GENERALES: {brief}
+AJUSTE DE ESTA REVISIÓN: {ajuste or 'Sin ajustes adicionales.'}
 
-PRENDA / REFERENCIA DE PRODUCTO:
-{producto}
-
-TÉCNICA PREVISTA:
-{tecnica}
-
-COLORES SOLICITADOS:
-{colores}
-
-BRIEF DEL CLIENTE:
-{brief}
-
-AJUSTE DE LA REVISIÓN ACTUAL:
-{ajuste if ajuste else 'Sin ajustes adicionales.'}
-
-REGLAS IMPORTANTES:
-- Usa la imagen de referencia del cliente como guía principal cuando esté disponible.
-- Conserva los elementos esenciales solicitados por el cliente.
-- No inventes texto legible, nombres, marcas o escudos nuevos que no estén en la referencia o en el brief.
-- Muestra solamente una prenda terminada, sin persona y sin maniquí visible.
-- Vista frontal clara y comercial.
-- Fondo blanco limpio.
-- Iluminación de estudio.
-- Producto centrado y completamente visible.
-- Estética profesional de catálogo.
-- No hagas collage.
-- No muestres varias opciones en una misma imagen.
-- Mantén coherencia de colores, logotipo/escudo y composición con la referencia.
-
-Genera solamente la imagen de la propuesta visual.
+REGLAS COMUNES PARA TODAS LAS VISTAS:
+- Fondo blanco, una sola prenda completa, centrada, sin recortes ni objetos extra.
+- Sin modelos humanos, sin maniquí visible, sin fondos decorativos, sin rótulos ni collage.
+- Conserva el mismo corte, cuello, costuras, logos, colores y proporciones de la prenda.
+- {regla_laterales}
+- Izquierda y derecha corresponden a quien lleva la prenda, no al observador. En FRENTE, el pecho derecho aparece a la izquierda de la imagen; el pecho izquierdo a la derecha.
+- Un logo indicado para el pecho derecho (por ejemplo YUNPAR) debe quedar en el pecho derecho de quien viste la prenda. En LATERAL DERECHO conserva la parte del logo de ese pecho que resulte naturalmente visible desde ese ángulo; no lo omitas si está a la vista. No lo dupliques ni lo traslades a la manga para hacerlo visible.
+- Aplica la regla equivalente al pecho izquierdo y su lateral. Un logo centrado puede verse parcialmente en ambos perfiles dependiendo de su tamaño y ubicación. En una vista posterior no dibujes un logo de pecho.
+- Un logo pedido en ambas mangas debe aparecer correctamente orientado en ambas mangas, y en el perfil correspondiente. Nunca intercambies los escudos o marques solo una manga.
+- Aplica cada logo y detalle SOLO en las posiciones indicadas por el cliente. Respeta su forma, texto y colores salvo cambio solicitado.
+- La solicitud de ajuste más reciente prevalece sobre las indicaciones anteriores en aquello que cambia.
+- Una indicación escrita explícita de una imagen prevalece sobre su etiqueta de zona si hay conflicto.
+- Si se pide quitar rayas, cambiar color o logo, aplica el cambio a todas las vistas afectadas.
+- Conserva todo lo anterior que no se ha pedido cambiar.
+- Las imágenes siguientes se acompañan de una descripción de su uso.
+- No copies flechas, recuadros ni anotaciones de referencia al tejido.
+- No inventes patrocinadores, nombres, números, escudos o adornos no solicitados.
+- Si se proporciona una lámina anterior con varias vistas, no la reproduzcas entera: úsala solo como referencia de diseño.
+- Si se adjunta una vista nueva ya generada en esta misma revisión, úsala como guía de identidad visual.
+- La vista solicitada al final del mensaje es la única que debes generar.
 """.strip()
 
     contenido = [{"type": "text", "text": prompt}]
+    if len(referencias) > _DIA_MAX_REFERENCIAS:
+        raise ValueError("Máximo 8 referencias por propuesta.")
 
-    ref_bytes = registro.get("referencia_bytes")
-    ref_mime = registro.get("referencia_tipo") or "image/png"
-    if not ref_bytes:
-        ref_bytes, ref_mime_desc = _dia_descargar_imagen(
-            registro.get("referencia_url") or registro.get("referencia_link")
-        )
-        if ref_mime_desc:
-            ref_mime = ref_mime_desc
+    def agregar_imagen(datos, etiqueta):
+        if not datos:
+            raise ValueError(f"No se pudo cargar {etiqueta}. Revisa la imagen de referencia.")
+        optimizada, mime = _dia_imagen_para_gemini(datos)
+        contenido.extend([
+            {"type": "text", "text": etiqueta},
+            {"type": "image", "data": base64.b64encode(optimizada).decode("ascii"), "mime_type": mime},
+        ])
 
-    if ref_bytes:
-        contenido.append(
-            {
-                "type": "image",
-                "data": base64.b64encode(ref_bytes).decode("utf-8"),
-                "mime_type": ref_mime,
-            }
-        )
+    for i, ref in enumerate(referencias, 1):
+        datos = ref.get("bytes")
+        if not datos:
+            datos, _ = _dia_descargar_imagen(ref.get("url"))
+        zona = ref.get('zona') or 'Referencia general'
+        indicacion = ref.get('indicacion') or 'Seguir referencia y brief'
+        orientacion = {
+            'Pecho derecho': 'Derecha de quien usa la prenda (izquierda del observador en el frente). Mantener en el lateral derecho donde sea visible.',
+            'Pecho izquierdo': 'Izquierda de quien usa la prenda (derecha del observador en el frente). Mantener en el lateral izquierdo donde sea visible.',
+            'Centro del pecho': 'En el centro del delantero, visible parcialmente de perfil si corresponde.',
+            'Ambas mangas': 'En las dos mangas, sin reflejar letras ni deformar el logo.',
+        }.get(zona, '')
+        agregar_imagen(datos, f"Referencia {i}: {ref.get('nombre', '')}. Zona: {zona}. "
+                       f"Indicación: {indicacion}. {orientacion}")
 
+    enlace = registro.get("referencia_link")
+    if enlace:
+        datos_link, _ = _dia_descargar_imagen(enlace)
+        if datos_link:
+            agregar_imagen(datos_link, "Referencia adicional del enlace directo del cliente.")
+        elif not referencias:
+            raise ValueError("El enlace no devuelve una imagen accesible. Descarga la imagen y adjúntala.")
+        else:
+            st.warning("El enlace externo no es una imagen accesible. Se usarán las imágenes adjuntas; "
+                       "para analizar ese enlace, sube su imagen directamente.")
+    if not referencias and not enlace:
+        raise ValueError("Adjunta al menos una referencia.")
+
+    if registro.get("propuesta_url"):
+        anterior, _ = _dia_descargar_imagen(registro["propuesta_url"])
+        if not anterior:
+            raise ValueError("No se pudo recuperar la propuesta anterior para mantener su coherencia.")
+        agregar_imagen(anterior, "Propuesta anterior: úsala como base del ajuste, sin perder las referencias originales.")
     cliente = genai.Client(api_key=api_key)
-    interaction = cliente.interactions.create(
-        model="gemini-nano-banana-2.1",
-        input=contenido,
-        response_format={"type": "image", "aspect_ratio": "4:5"},
-    )
+    vistas = []
+    anclas = []
+    for rotulo, instruccion_vista in _DIA_VISTAS:
+        if rotulo == "LATERAL DERECHO" and modo == "sim":
+            # Misma geometría y colores, sin reinterpretación de Gemini.
+            vistas.append((rotulo, _dia_reflejar_lateral(vistas[-1][1])))
+            continue
+        entrada = list(contenido) + list(anclas) + [{
+            "type": "text",
+            "text": (f"VISTA EXCLUSIVA: {rotulo}. {instruccion_vista} "
+                     "Devuelve exactamente UNA imagen con UNA sola prenda vista desde ese ángulo. "
+                     "No dibujes otras vistas, no hagas cuadrícula, no escribas etiquetas. "
+                     "Se compondrá la lámina por código después."),
+        }]
+        if sum(len(p.get("data", "")) for p in entrada) > 15 * 1024 * 1024:
+            raise ValueError("Las referencias exceden el tamaño combinado permitido. Reduce sus dimensiones.")
+        try:
+            interaction = cliente.interactions.create(
+                model="gemini-nano-banana-2.1",
+                input=entrada,
+                response_format={"type": "image", "aspect_ratio": "4:5"},
+            )
+            salida = interaction.output_image.data if interaction and interaction.output_image else None
+            if not salida:
+                raise RuntimeError("Gemini no devolvió una imagen.")
+            if isinstance(salida, str):
+                salida = base64.b64decode(salida, validate=True)
+            salida = bytes(salida)
+            with Image.open(io.BytesIO(salida)) as img:
+                if img.format not in _DIA_FORMATOS or img.width * img.height > 30_000_000:
+                    raise ValueError("Formato o tamaño de imagen de salida no válido.")
+                img.verify()
+            if any(salida == datos for _, datos in vistas):
+                raise ValueError("Gemini devolvió una imagen idéntica a otra vista.")
+            vistas.append((rotulo, salida))
+            # Las tres vistas previas sirven de anclas para el perfil derecho independiente.
+            if rotulo in {"FRENTE", "ESPALDA"} or (rotulo == "LATERAL IZQUIERDO" and modo == "ind"):
+                optimizada, mime = _dia_imagen_para_gemini(salida)
+                anclas.extend([
+                    {"type": "text", "text": f"Vista {rotulo} NUEVA de esta misma revisión: conserva su diseño, pero no repitas su ángulo."},
+                    {"type": "image", "data": base64.b64encode(optimizada).decode("ascii"), "mime_type": mime},
+                ])
+        except Exception as e:
+            raise RuntimeError(f"No se completó la vista {rotulo}. No se guardó una lámina incompleta. Detalle: {e}") from e
+    return _dia_componer_lamina(vistas)
 
-    if interaction is None or interaction.output_image is None:
-        raise RuntimeError("Gemini respondió sin devolver una imagen.")
 
-    salida = interaction.output_image.data
-    if not salida:
-        raise RuntimeError("Gemini devolvió una imagen vacía.")
-    if isinstance(salida, str):
-        salida = base64.b64decode(salida)
-    salida = bytes(salida)
+_DIA_VISTAS = (
+    ("FRENTE", "Vista frontal recta: muestra el pecho, el cuello delantero y ambas mangas de frente."),
+    ("ESPALDA", "Vista posterior recta: muestra exclusivamente la espalda y el cuello posterior."),
+    ("LATERAL IZQUIERDO", "Perfil ortogonal izquierdo de quien lleva la prenda, girado 90 grados; solo el costado y la manga izquierda predominan. Conserva los logos del pecho izquierdo donde sean naturalmente visibles, sin trasladarlos a la manga. No mostrar pecho ni espalda completos."),
+    ("LATERAL DERECHO", "Perfil ortogonal derecho de quien lleva la prenda, girado 90 grados en sentido opuesto al lateral izquierdo; solo el costado y la manga derecha predominan. Comprueba el FRENTE nuevo para conservar el logo del pecho derecho en la superficie delantera donde naturalmente sea visible desde este perfil, sin trasladarlo a la manga. Replica los paneles y colores del lateral izquierdo salvo diferencias solicitadas. No mostrar pecho ni espalda completos."),
+)
 
-    try:
-        img = Image.open(io.BytesIO(salida))
-        formato = (img.format or "PNG").upper()
-        img.verify()
-    except Exception as e:
-        raise RuntimeError(f"La respuesta de Gemini no parece una imagen válida: {e}")
 
-    mime = {
-        "PNG": "image/png",
-        "JPEG": "image/jpeg",
-        "JPG": "image/jpeg",
-        "WEBP": "image/webp",
-    }.get(formato, "image/png")
-    return salida, mime
+def _dia_componer_lamina(vistas):
+    """Composición determinista 2 x 2: etiquetas y posiciones controladas por Python."""
+    import io
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+    if [rotulo for rotulo, _ in vistas] != [rotulo for rotulo, _ in _DIA_VISTAS]:
+        raise ValueError("La propuesta debe contener las cuatro vistas en su orden correcto.")
+    ancho, alto = 1800, 1400
+    lamina = Image.new("RGB", (ancho, alto), "white")
+    dibujo = ImageDraw.Draw(lamina)
+    fuente = None
+    for nombre in ("DejaVuSans.ttf", "arial.ttf", "Arial.ttf"):
+        try:
+            fuente = ImageFont.truetype(nombre, 32)
+            break
+        except OSError:
+            continue
+    if fuente is None:
+        fuente = ImageFont.load_default()
+    for i, (rotulo, datos) in enumerate(vistas):
+        x, y = (i % 2) * 900, (i // 2) * 700
+        with Image.open(io.BytesIO(datos)) as original:
+            rgba = ImageOps.exif_transpose(original).convert("RGBA")
+            blanca = Image.new("RGB", rgba.size, "white")
+            blanca.paste(rgba, mask=rgba.getchannel("A"))
+            imagen = ImageOps.contain(blanca, (850, 610), Image.Resampling.LANCZOS)
+        lamina.paste(imagen, (x + (900 - imagen.width) // 2, y + 15 + (610 - imagen.height) // 2))
+        caja = dibujo.textbbox((0, 0), rotulo, font=fuente)
+        dibujo.text((x + (900 - (caja[2] - caja[0])) // 2 - caja[0], y + 645 - caja[1]),
+                     rotulo, font=fuente, fill=(32, 32, 32))
+    salida = io.BytesIO()
+    lamina.save(salida, format="JPEG", quality=95, subsampling=0)
+    return salida.getvalue(), "image/jpeg"
 
 
 def _dia_cargar_registros(supabase):
@@ -952,22 +1244,174 @@ def _dia_actualizar(supabase, registro_id, datos):
     return supabase.table(_DIA_TABLE).update(payload).eq("id", int(registro_id)).execute()
 
 
-def _dia_limpiar_formulario():
-    for key in [
-        "dia_cliente",
-        "dia_producto",
-        "dia_tecnica",
-        "dia_colores",
-        "dia_ref_link",
-        "dia_instrucciones",
-        "dia_ref_img",
-        "dia_fecha_entrega",
-    ]:
-        st.session_state.pop(key, None)
-    st.session_state.pop("_diseno_ia_actual", None)
+def _dia_limpiar_formulario(abrir=True, activo=None):
+    # Nueva identidad de widgets: Streamlit no recupera valores del formulario anterior.
+    for key in list(st.session_state.keys()):
+        if key.startswith(("dia_form_", "dia_ajuste_", "dia_propuesta_activa", "dia_confirmar_vistas_")) or key in {
+            "dia_cliente", "dia_producto", "dia_tecnica", "dia_colores", "dia_ref_link",
+            "dia_instrucciones", "dia_ref_img", "dia_fecha_entrega"
+        }:
+            st.session_state.pop(key, None)
+    st.session_state.pop("_dia_borrar_pendiente", None)
+    st.session_state["_dia_epoch"] = int(st.session_state.get("_dia_epoch", 0)) + 1
+    st.session_state["_dia_form_abierto"] = abrir
+    st.session_state["_diseno_ia_actual"] = activo
+
+
+def _dia_accion_formulario(accion):
+    _dia_limpiar_formulario(abrir=accion != "cancelar")
+    st.session_state.pop("_dia_mensaje", None)
+    st.session_state["_dia_aviso"] = {
+        "nueva": "Nuevo diseño: formulario listo para completar.",
+        "limpiar": "Formulario limpio. Puedes comenzar de nuevo; el historial no se ha borrado.",
+        "cancelar": "Edición cancelada. Abre un diseño del historial o presiona Nueva o Limpiar.",
+    }[accion]
+
+
+def _dia_seleccionar_propuesta(codigo):
+    """Abre la propuesta elegida, con widgets nuevos y sin borrar registros guardados."""
+    _dia_limpiar_formulario(abrir=False, activo=codigo or None)
+    st.session_state.pop("_dia_mensaje", None)
+    st.session_state.pop("_dia_aviso", None)
+
+
+def _dia_cambiar_selector(clave):
+    codigo = st.session_state.get(clave)
+    _dia_seleccionar_propuesta(codigo)
+
+
+def _dia_puede_eliminar(registro):
+    return (registro.get("estado") in _DIA_ESTADOS_ELIMINABLES
+            and registro.get("orden_id") is None and registro.get("cotizacion_id") is None
+            and not registro.get("fecha_aprobacion") and not registro.get("fecha_envio_diseno"))
+
+
+def _dia_borrar_propuesta(supabase, codigo, registro_id):
+    """Borra solo borradores no vinculados; nunca órdenes ni cotizaciones."""
+    local = isinstance(supabase, _DiaSupabasePrueba)
+    if _dia_modo_prueba() != local:
+        raise RuntimeError("Modo de persistencia incorrecto; no se eliminó nada.")
+    registro = _dia_buscar_registro_db(supabase, codigo)
+    if not registro or registro.get("id") != registro_id or not _dia_puede_eliminar(registro):
+        raise ValueError("El diseño ya no existe, fue aprobado o está vinculado a otro módulo.")
+    consulta = (supabase.table(_DIA_TABLE).delete().eq("id", registro_id).eq("codigo", codigo)
+                .eq("estado", registro["estado"]).eq("revision", registro.get("revision")))
+    if not local:
+        consulta = (consulta.is_("orden_id", "null").is_("cotizacion_id", "null")
+                    .is_("fecha_aprobacion", "null").is_("fecha_envio_diseno", "null"))
+    else:
+        for campo in ("orden_id", "cotizacion_id", "fecha_aprobacion", "fecha_envio_diseno"):
+            consulta = consulta.eq(campo, None)
+    respuesta = consulta.execute()
+    if not respuesta.data or len(respuesta.data) != 1:
+        raise RuntimeError("No se confirmó la eliminación; el diseño pudo haber cambiado.")
+    if local:
+        archivos = st.session_state.get("_dia_prueba_archivos", {})
+        prefijo = f"dia-prueba://disenos-ia/{codigo}/"
+        for url in list(archivos):
+            if url.startswith(prefijo):
+                archivos.pop(url, None)
+        return None
+    # En producción no borrar carpetas completas: podría haber archivos de otra
+    # revisión o un código reutilizado. Solo los objetos registrados en esta fila.
+    from urllib.parse import urlsplit, unquote
+    urls = {r.get("url") for r in _dia_guardadas(registro)}
+    urls.update((registro.get("referencia_url"), registro.get("propuesta_url")))
+    rutas = []
+    prefijo = f"disenos-ia/{codigo}/"
+    marcador = f"/storage/v1/object/public/{_DIA_BUCKET}/"
+    try:
+        bucket = supabase.storage.from_(_DIA_BUCKET)
+        for url in urls:
+            if not url:
+                continue
+            partes = urlsplit(url)
+            if marcador not in partes.path:
+                continue
+            ruta = unquote(partes.path.split(marcador, 1)[1])
+            if not ruta.startswith(prefijo) or '/' in ruta[len(prefijo):] or not ruta[len(prefijo):]:
+                continue
+            if ruta[len(prefijo):] in {'.', '..'} or '\\' in ruta:
+                continue
+            canon = urlsplit(bucket.get_public_url(ruta))
+            if (partes.scheme, partes.netloc, unquote(partes.path)) == (canon.scheme, canon.netloc, unquote(canon.path)):
+                rutas.append(ruta)
+        if rutas:
+            bucket.remove(sorted(set(rutas)))
+    except Exception:
+        return "Diseño eliminado. No se pudo confirmar la limpieza de archivos en Storage."
+    return None
+
+
+def _dia_confirmar_borrado(supabase, codigo, registro_id):
+    try:
+        aviso = _dia_borrar_propuesta(supabase, codigo, registro_id)
+        if st.session_state.get("_diseno_ia_actual") == codigo:
+            _dia_limpiar_formulario(abrir=False)
+        st.session_state.pop("_dia_borrar_pendiente", None)
+        st.session_state.pop("_dia_aviso", None)
+        st.session_state["_dia_mensaje"] = f"{codigo} eliminado del historial."
+        if aviso:
+            st.session_state["_dia_aviso"] = aviso
+    except Exception as e:
+        st.session_state["_dia_aviso"] = f"No se pudo eliminar {codigo}: {e}"
+        st.session_state.pop("_dia_borrar_pendiente", None)
+
+
+def _dia_historial(supabase, registros):
+    st.divider()
+    st.markdown("#### Historial de diseños")
+    st.caption("Propuestas guardadas en memoria local." if _dia_modo_prueba() else "Propuestas guardadas en Supabase.")
+    st.caption("Se muestran todos los estados, incluidas las propuestas aprobadas y enviadas.")
+    for i in range(0, len(registros), 3):
+        fila = registros[i:i + 3]
+        for col, r in zip(st.columns(len(fila)), fila):
+            with col:
+                with st.container(border=True):
+                    icon = {
+                        "PROPUESTA PREPARADA": "🟡", "AJUSTES SOLICITADOS": "🟠",
+                        "PROPUESTA REGENERADA": "🟣", "APROBADO POR CLIENTE": "🟢",
+                        "ENVIADO A DISEÑADOR": "🔵",
+                    }.get(r.get("estado"), "⚪")
+                    titulo, tacho = st.columns([4, 1])
+                    titulo.markdown(f"**{icon} {r.get('codigo', '')}**")
+                    codigo = r.get("codigo")
+                    if codigo:
+                        tacho.button("🗑️", key=f"dia_hist_borrar_{r.get('id')}_{codigo}",
+                                     help="Eliminar propuesta no aprobada" if _dia_puede_eliminar(r) else
+                                     "Protegido: propuesta aprobada o vinculada a otro módulo",
+                                     disabled=not _dia_puede_eliminar(r), use_container_width=True,
+                                     on_click=lambda c=codigo: st.session_state.update({"_dia_borrar_pendiente": c}))
+                    st.caption(r.get("cliente_nombre") or "Sin cliente")
+                    st.write(" | ".join([x for x in [r.get("producto_codigo"), r.get("producto_descripcion")] if x]) or "Sin producto")
+                    st.markdown(f"**Estado:** {r.get('estado', '')}")
+                    extras = [f"Revisión {r.get('revision', 1)}"]
+                    if r.get("orden_id"):
+                        extras.append(f"Orden #{r.get('orden_id')}")
+                    if r.get("cotizacion_id"):
+                        extras.append(f"Cotización #{r.get('cotizacion_id')}")
+                    st.caption(" · ".join(extras))
+                    codigo = r.get("codigo")
+                    if codigo:
+                        seleccionado = codigo == st.session_state.get("_diseno_ia_actual")
+                        st.button("Abierta" if seleccionado else "📂 Abrir diseño",
+                                  key=f"dia_hist_abrir_{r.get('id')}_{codigo}",
+                                  use_container_width=True, disabled=seleccionado,
+                                  on_click=_dia_seleccionar_propuesta, args=(codigo,))
+                        if st.session_state.get("_dia_borrar_pendiente") == codigo and _dia_puede_eliminar(r):
+                            st.warning(f"¿Eliminar {codigo}? Esta acción no se puede deshacer.")
+                            si, no = st.columns(2)
+                            si.button("Eliminar", type="primary", use_container_width=True,
+                                      key=f"dia_hist_confirmar_{r.get('id')}_{codigo}",
+                                      on_click=_dia_confirmar_borrado, args=(supabase, codigo, r.get('id')))
+                            no.button("Conservar", use_container_width=True,
+                                      key=f"dia_hist_conservar_{r.get('id')}_{codigo}",
+                                      on_click=lambda: st.session_state.pop("_dia_borrar_pendiente", None))
 
 
 def _dia_crear_orden_para_disenador(supabase, registro, productos):
+    if isinstance(supabase, _DiaSupabasePrueba) or _dia_modo_prueba():
+        raise RuntimeError("Envío al diseñador bloqueado en modo prueba.")
     if registro.get("orden_id"):
         return int(registro["orden_id"]), None
 
@@ -988,6 +1432,9 @@ def _dia_crear_orden_para_disenador(supabase, registro, productos):
         observaciones.append(f"Último ajuste: {registro.get('ajuste_solicitado')}")
     if registro.get("referencia_link"):
         observaciones.append(f"Enlace externo: {registro.get('referencia_link')}")
+    for ref in _dia_guardadas(registro):
+        observaciones.append(f"Referencia {ref.get('nombre', '')} ({ref.get('zona', '')}): "
+                             f"{ref.get('indicacion', '')} — {ref.get('url', '')}")
 
     fecha_entrega = registro.get("fecha_entrega_estimada") or (
         datetime.date.today() + datetime.timedelta(days=7)
@@ -1045,6 +1492,10 @@ def _render_diseno_ia(supabase):
         "Referencia del cliente → propuesta IA → ajustes → aprobación → diseñador → cotización."
     )
 
+    if _dia_modo_prueba():
+        st.caption("MODO PRUEBA LOCAL · Diseño IA: no escribe en Supabase ni crea órdenes. "
+                   "La generación sí usa Gemini y puede consumir cuota.")
+        supabase = _DiaSupabasePrueba(supabase)
     tabla_ok, error_tabla = _dia_tabla_disponible(supabase)
     if not tabla_ok:
         st.info(
@@ -1090,160 +1541,179 @@ def _render_diseno_ia(supabase):
         for p in productos
     }
 
-    cab1, cab2 = st.columns([5, 1])
-    cab1.markdown("#### 1️⃣ Datos del cliente y referencia")
-    if cab2.button("🆕 Nueva", use_container_width=True, key="dia_nueva_propuesta"):
-        _dia_limpiar_formulario()
-        _dia_rerun_local()
+    epoch = st.session_state.get("_dia_epoch", 0)
+    pref = f"dia_form_{epoch}_"
+    abierto = st.session_state.get("_dia_form_abierto", True)
+    refs_ok = _dia_referencias_disponibles(supabase)
+    if not refs_ok:
+        st.warning("Falta habilitar referencias_imagenes en Supabase. Ejecuta la migración "
+                   "sql/disenos_ia_referencias_multiples.sql antes de generar nuevas propuestas.")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        sel_cliente = st.selectbox(
-            "Cliente *", [""] + list(mapa_clientes.keys()), key="dia_cliente"
-        )
-        sel_producto = st.selectbox(
-            "Prenda / producto de referencia",
-            ["Sin definir"] + list(mapa_productos.keys()),
-            key="dia_producto",
-        )
-        tecnica = st.selectbox(
-            "Técnica prevista",
-            ["Por definir", "Sublimado", "DTF", "Bordado", "Mixto"],
-            key="dia_tecnica",
-        )
-        colores = st.text_input(
-            "Colores solicitados",
-            placeholder="Ej: azul marino, dorado y blanco",
-            key="dia_colores",
-        )
-        fecha_entrega = st.date_input(
-            "Fecha estimada de entrega",
-            value=datetime.date.today() + datetime.timedelta(days=7),
-            key="dia_fecha_entrega",
-        )
+    cab1, cab2, cab3, cab4 = st.columns([3, 1, 1, 1])
+    cab1.markdown("#### 1️⃣ Datos del cliente y referencias")
+    cab2.button("🆕 Nueva", use_container_width=True, key="dia_nueva_propuesta",
+                on_click=_dia_accion_formulario, args=("nueva",))
+    cab3.button("🧹 Limpiar", use_container_width=True, key="dia_limpiar",
+                help="Vacía y abre el formulario, sin borrar diseños guardados.",
+                on_click=_dia_accion_formulario, args=("limpiar",))
+    cab4.button("✖ Cancelar", use_container_width=True, key="dia_cancelar",
+                help="Cierra el formulario y la revisión activa sin borrar diseños guardados.",
+                on_click=_dia_accion_formulario, args=("cancelar",))
 
-    with c2:
-        ref_img = st.file_uploader(
-            "📷 Imagen enviada por el cliente",
-            type=["png", "jpg", "jpeg", "webp"],
-            key="dia_ref_img",
-        )
-        ref_link = st.text_input(
-            "🔗 Enlace de referencia (opcional)",
-            placeholder="https://...",
-            key="dia_ref_link",
-        )
-        if ref_img is not None:
-            st.image(ref_img, caption="Referencia cargada", use_container_width=True)
-
-    instrucciones = st.text_area(
-        "✍️ ¿Qué desea el cliente? *",
-        placeholder=(
-            "Ej: conservar el escudo, usar azul oscuro, agregar líneas doradas "
-            "y dejar espacio para número y apellido."
-        ),
-        height=120,
-        key="dia_instrucciones",
-    )
-
-    st.markdown("#### 2️⃣ Preparar propuesta")
     api_ok = bool(_dia_api_key_gemini())
-    if api_ok:
-        st.caption("✅ Gemini listo para generar la propuesta visual.")
-    else:
-        st.error("Gemini no está configurado. Agregue [gemini][api_key] en secrets.toml.")
+    mensaje = st.session_state.pop("_dia_mensaje", None)
+    if mensaje:
+        st.success(mensaje)
+    aviso = st.session_state.get("_dia_aviso")
+    if aviso:
+        st.info(aviso)
 
-    if st.button(
-        "✨ PREPARAR PROPUESTA CON IA",
-        type="primary",
-        use_container_width=True,
-        key="dia_generar",
-        disabled=not api_ok,
-    ):
-        errores = []
-        if not sel_cliente:
-            errores.append("selecciona un cliente")
-        if ref_img is None and not ref_link.strip():
-            errores.append("sube una imagen o agrega un enlace de referencia")
-        if not instrucciones.strip():
-            errores.append("escribe las indicaciones del cliente")
+    if abierto:
+        c1, c2 = st.columns(2)
+        with c1:
+            sel_cliente = st.selectbox("Cliente *", list(mapa_clientes.keys()), index=None,
+                                       placeholder="Seleccionar cliente", key=pref + "cliente")
+            sel_producto = st.selectbox("Prenda / producto de referencia", ["Sin definir"] + list(mapa_productos.keys()),
+                                        key=pref + "producto")
+            tecnica = st.selectbox("Técnica prevista", ["Por definir", "Sublimado", "DTF", "Bordado", "Mixto"],
+                                   key=pref + "tecnica")
+            colores = st.text_input("Colores solicitados", placeholder="Ej: rojo, logos blancos", key=pref + "colores")
+            fecha_entrega = st.date_input("Fecha estimada de entrega (opcional)", value=None,
+                                          key=pref + "fecha_entrega")
+            st.caption("Si no eliges fecha, se estima una semana desde hoy.")
+        with c2:
+            archivos = st.file_uploader("📷 Imágenes enviadas por el cliente",
+                                        type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True,
+                                        key=pref + "referencias") or []
+            st.caption(f"{len(archivos)} de {_DIA_MAX_REFERENCIAS} archivos subidos · 8 MB máximo por archivo. "
+                       "Usa la X junto al nombre para quitar una imagen.")
+            ref_link = st.text_input("🔗 Enlace de imagen directa (opcional)", placeholder="https://.../logo.png",
+                                     key=pref + "enlace")
+            st.caption("Si el cliente envía una página web, descarga el logo y adjúntalo como imagen.")
+            usar_logo = st.checkbox("Agregar logo institucional YUNPAR", key=pref + "usar_logo",
+                                    help="Solo se adjunta si marcas esta opción. Cuenta como una referencia.")
 
-        if errores:
-            st.error("Antes de continuar: " + "; ".join(errores) + ".")
+        referencias = []
+        errores_refs = []
+        if len(archivos) + int(usar_logo) > _DIA_MAX_REFERENCIAS:
+            errores_refs.append(f"Selecciona máximo {_DIA_MAX_REFERENCIAS} imágenes, incluido el logo YUNPAR si lo agregas.")
         else:
-            cliente = mapa_clientes[sel_cliente]
-            prod = mapa_productos.get(sel_producto) if sel_producto != "Sin definir" else None
-            codigo = _dia_codigo_siguiente(supabase)
-            registro_local = {
-                "codigo": codigo,
-                "cliente_id": cliente.get("id"),
-                "cliente": cliente.get("nombre_completo", ""),
-                "producto_id": prod.get("id") if prod else None,
-                "producto": (
-                    f"{prod.get('codigo_referencia', '')} | {prod.get('descripcion', '')}"
-                    if prod else "Sin definir"
-                ),
-                "tecnica": tecnica,
-                "colores": colores.strip(),
-                "instrucciones": instrucciones.strip(),
-                "referencia_link": ref_link.strip(),
-                "referencia_bytes": ref_img.getvalue() if ref_img is not None else None,
-                "referencia_tipo": ref_img.type if ref_img is not None else None,
-                "ajuste_solicitado": "",
-            }
-
+            import hashlib
+            for indice, archivo in enumerate(archivos, 1):
+                try:
+                    if getattr(archivo, "size", 0) > _DIA_MAX_BYTES:
+                        raise ValueError("Cada referencia debe pesar como máximo 8 MB.")
+                    datos = archivo.getvalue()
+                    mime = _dia_validar_imagen(datos)
+                    # file_id mantiene estables las indicaciones incluso si se quita otra imagen.
+                    ident = getattr(archivo, "file_id", None) or hashlib.sha256(datos + archivo.name.encode()).hexdigest()
+                    # En caso de archivos idénticos con el mismo identificador, evitar widgets duplicados.
+                    if any(r["ident"] == ident for r in referencias):
+                        continue
+                    with st.container(border=True):
+                        mini, info = st.columns([1, 2])
+                        mini.image(datos, caption=f"{indice}. {archivo.name}", use_container_width=True)
+                        zona = info.selectbox("Ubicación / uso", _DIA_ZONAS, key=pref + f"zona_{ident}",
+                                              help="Derecha e izquierda desde la perspectiva de quien lleva la camiseta.")
+                        indicacion = info.text_input("¿Qué hacer con esta imagen?", key=pref + f"indicacion_{ident}",
+                                                    placeholder="Ej: poner este logo en blanco en la manga")
+                    referencias.append({"ident": ident, "nombre": archivo.name, "zona": zona,
+                                        "indicacion": indicacion.strip(), "bytes": datos, "mime": mime})
+                except Exception as e:
+                    errores_refs.append(f"{archivo.name}: {e}")
+        if usar_logo and not errores_refs:
             try:
-                with st.spinner("Gemini está preparando la propuesta visual..."):
-                    propuesta_bytes, propuesta_mime = _dia_generar_imagen_gemini(registro_local)
-
-                referencia_url = None
-                if ref_img is not None:
-                    referencia_url = _dia_subir_bytes(
-                        supabase,
-                        ref_img.getvalue(),
-                        ref_img.type or "image/png",
-                        f"disenos-ia/{codigo}",
-                        "referencia",
-                    )
-
-                propuesta_url = _dia_subir_bytes(
-                    supabase,
-                    propuesta_bytes,
-                    propuesta_mime,
-                    f"disenos-ia/{codigo}",
-                    "propuesta_r1",
-                )
-
-                payload = {
-                    "codigo": codigo,
-                    "cliente_id": cliente.get("id"),
-                    "cliente_nombre": cliente.get("nombre_completo", ""),
-                    "producto_id": prod.get("id") if prod else None,
-                    "producto_codigo": prod.get("codigo_referencia") if prod else None,
-                    "producto_descripcion": prod.get("descripcion") if prod else "Sin definir",
-                    "tecnica": tecnica,
-                    "colores": colores.strip(),
-                    "instrucciones": instrucciones.strip(),
-                    "referencia_url": referencia_url,
-                    "referencia_link": ref_link.strip() or None,
-                    "propuesta_url": propuesta_url,
-                    "generacion_real": True,
-                    "estado": "PROPUESTA PREPARADA",
-                    "revision": 1,
-                    "ajuste_solicitado": "",
-                    "fecha_entrega_estimada": str(fecha_entrega),
-                    "creado_por_id": st.session_state.get("id_usuario"),
-                    "updated_at": _dia_now_iso(),
-                }
-                ins = supabase.table(_DIA_TABLE).insert(payload).execute()
-                if not ins.data:
-                    raise RuntimeError("No se pudo registrar la propuesta en Supabase.")
-
-                st.session_state["_diseno_ia_actual"] = codigo
-                st.success(f"{codigo} creado y guardado correctamente.")
-                _dia_rerun_local()
+                datos_logo, mime_logo = _dia_logo_institucional()
+                with st.container(border=True):
+                    mini, info = st.columns([1, 2])
+                    mini.image(datos_logo, caption="Logo institucional YUNPAR", use_container_width=True)
+                    zona_logo = info.selectbox("Ubicación del logo YUNPAR", _DIA_ZONAS, index=2,
+                                              key=pref + "logo_zona",
+                                              help="Derecha e izquierda desde la perspectiva de quien lleva la camiseta.")
+                    indicacion_logo = info.text_input("Indicaciones del logo YUNPAR", key=pref + "logo_indicacion",
+                                                     placeholder="Ej: pequeño, en el pecho derecho")
+                referencias.append({"ident": "yunpar_institucional", "nombre": "Logo YUNPAR.png",
+                                    "zona": zona_logo, "indicacion": indicacion_logo.strip() or
+                                    "Colocar el logo YUNPAR en la zona seleccionada, respetando su identidad y texto.",
+                                    "bytes": datos_logo, "mime": mime_logo})
             except Exception as e:
-                st.error(f"No se pudo preparar la propuesta: {e}")
+                errores_refs.append(f"Logo institucional: {e}")
+        for error in errores_refs:
+            st.error(error)
+
+        instrucciones = st.text_area("✍️ ¿Qué desea el cliente? (opcional)", height=130, key=pref + "instrucciones",
+                                     placeholder="Ej: camiseta roja, quitar rayas negras y blancas, cuello redondo rojo, "
+                                                 "logos blancos según las referencias adjuntas.")
+        st.caption("Puedes dejar las indicaciones generales vacías. Se usarán las referencias y sus indicaciones individuales.")
+        st.markdown("#### 2️⃣ Preparar propuesta")
+        modo_laterales = _dia_modo_automatico(referencias, instrucciones, enlace=ref_link.strip())
+        st.caption("Se generarán automáticamente cuatro vistas de la misma prenda. "
+                   "Revisa ángulos, posiciones, logos y colores antes de aprobar.")
+        if api_ok:
+            st.caption("✅ Gemini configurado para generar la propuesta visual.")
+        else:
+            st.error("Gemini no está configurado. Agregue [gemini][api_key] en secrets.toml.")
+        if st.button("✨ PREPARAR PROPUESTA CON IA", type="primary", use_container_width=True,
+                     key="dia_generar", disabled=not api_ok or bool(errores_refs) or not refs_ok):
+            errores = []
+            if not sel_cliente:
+                errores.append("selecciona un cliente")
+            if not referencias and not ref_link.strip():
+                errores.append("sube al menos una imagen o agrega un enlace directo")
+            if errores:
+                st.error("Antes de continuar: " + "; ".join(errores) + ".")
+            else:
+                cliente = mapa_clientes[sel_cliente]
+                prod = mapa_productos.get(sel_producto)
+                codigo = _dia_codigo_siguiente(supabase)
+                registro_local = {
+                    "codigo": codigo, "cliente_id": cliente.get("id"),
+                    "cliente": cliente.get("nombre_completo", ""),
+                    "producto_id": prod.get("id") if prod else None,
+                    "producto": f"{prod.get('codigo_referencia', '')} | {prod.get('descripcion', '')}" if prod else "Sin definir",
+                    "tecnica": tecnica, "colores": colores.strip(), "instrucciones": instrucciones.strip(),
+                    "referencia_link": ref_link.strip() or None, "referencias_locales": referencias,
+                    "ajuste_solicitado": "", "modo_laterales": modo_laterales,
+                }
+                try:
+                    with st.spinner("Gemini está preparando las cuatro vistas de la prenda..."):
+                        propuesta_bytes, propuesta_mime = _dia_generar_imagen_gemini(registro_local)
+                    refs_guardadas = []
+                    for indice, ref in enumerate(referencias, 1):
+                        url = _dia_subir_bytes(supabase, ref["bytes"], ref["mime"], f"disenos-ia/{codigo}", f"referencia_{indice}")
+                        if not url:
+                            raise RuntimeError("No se pudo guardar una referencia.")
+                        refs_guardadas.append({"url": url, "nombre": ref["nombre"], "zona": ref["zona"],
+                                               "indicacion": ref["indicacion"]})
+                    propuesta_url = _dia_subir_bytes(supabase, propuesta_bytes, propuesta_mime, f"disenos-ia/{codigo}", f"propuesta_4v_r1_{modo_laterales}")
+                    if not propuesta_url:
+                        raise RuntimeError("No se pudo guardar la lámina.")
+                    payload = {
+                        "codigo": codigo, "cliente_id": cliente.get("id"), "cliente_nombre": cliente.get("nombre_completo", ""),
+                        "producto_id": prod.get("id") if prod else None,
+                        "producto_codigo": prod.get("codigo_referencia") if prod else None,
+                        "producto_descripcion": prod.get("descripcion") if prod else "Sin definir",
+                        "tecnica": tecnica, "colores": colores.strip(), "instrucciones": instrucciones.strip(),
+                        "referencia_url": refs_guardadas[0]["url"] if refs_guardadas else None,
+                        "referencias_imagenes": refs_guardadas, "referencia_link": ref_link.strip() or None,
+                        "propuesta_url": propuesta_url, "generacion_real": True, "estado": "PROPUESTA PREPARADA",
+                        "revision": 1, "ajuste_solicitado": "",
+                        "fecha_entrega_estimada": str(fecha_entrega or datetime.date.today() + datetime.timedelta(days=7)),
+                        "creado_por_id": st.session_state.get("id_usuario"), "updated_at": _dia_now_iso(),
+                    }
+                    ins = supabase.table(_DIA_TABLE).insert(payload).execute()
+                    if not ins.data:
+                        raise RuntimeError("No se pudo confirmar el registro de la propuesta.")
+                    _dia_limpiar_formulario(abrir=False, activo=codigo)
+                    st.session_state.pop("_dia_aviso", None)
+                    st.session_state["_dia_mensaje"] = f"{codigo} creado y guardado correctamente."
+                    _dia_rerun_local()
+                    return
+                except Exception as e:
+                    st.error(f"No se pudo preparar la propuesta: {e}")
+    else:
+        st.caption("Formulario cerrado. Presiona Nueva o Limpiar para iniciar otro diseño; el historial permanece disponible.")
+
 
     registros = _dia_cargar_registros(supabase)
     if not registros:
@@ -1253,14 +1723,26 @@ def _render_diseno_ia(supabase):
     st.markdown("#### 3️⃣ Revisión con el cliente")
     codigos = [r.get("codigo") for r in registros if r.get("codigo")]
     actual = st.session_state.get("_diseno_ia_actual")
-    idx_actual = codigos.index(actual) if actual in codigos else 0
+    opciones = [""] + codigos
+    selector_key = f"dia_propuesta_activa_{epoch}"
+    # No recalcular index con la selección del último rerun: puede cambiar la identidad
+    # del widget en versiones de Streamlit y restaurar la propuesta anterior.
+    if selector_key not in st.session_state or st.session_state[selector_key] not in opciones:
+        st.session_state[selector_key] = actual if actual in opciones else ""
     codigo_sel = st.selectbox(
-        "Propuesta activa", codigos, index=idx_actual, key="dia_propuesta_activa"
+        "Propuesta activa", opciones, index=0, key=selector_key,
+        format_func=lambda c: c or "Seleccionar propuesta del historial",
+        on_change=_dia_cambiar_selector, args=(selector_key,)
     )
-    st.session_state["_diseno_ia_actual"] = codigo_sel
+    st.caption("Puedes elegir cualquier diseño aquí o usar Abrir diseño en su tarjeta del historial, incluso si está aprobado. Abrir uno descarta el formulario no guardado.")
+    st.session_state["_diseno_ia_actual"] = codigo_sel or None
+    if not codigo_sel:
+        _dia_historial(supabase, registros)
+        return
     registro = _dia_buscar_registro_db(supabase, codigo_sel)
     if not registro:
         st.warning("No se pudo cargar la propuesta seleccionada.")
+        _dia_historial(supabase, registros)
         return
 
     estado_actual = registro.get("estado") or "PROPUESTA PREPARADA"
@@ -1273,42 +1755,48 @@ def _render_diseno_ia(supabase):
     }.get(estado_actual, "⚪")
     st.markdown(f"### {estado_icono} {registro.get('codigo')} — {estado_actual}")
 
-    vista1, vista2 = st.columns(2)
-    with vista1:
-        st.markdown("**Referencia original**")
-        ref_visual = registro.get("referencia_url") or registro.get("referencia_link")
-        if ref_visual:
-            try:
-                st.image(ref_visual, caption="Referencia del cliente", use_container_width=True)
-            except Exception:
-                st.markdown(f"[Abrir referencia]({ref_visual})")
-        else:
-            st.caption("Sin referencia visual guardada.")
+    st.markdown("**Referencias originales del cliente**")
+    refs_hist = _dia_guardadas(registro)
+    if refs_hist:
+        for i in range(0, len(refs_hist), 3):
+            fila = refs_hist[i:i+3]
+            for col, ref in zip(st.columns(len(fila)), fila):
+                with col:
+                    origen = _dia_origen_visual(ref.get("url"))
+                    if origen:
+                        try:
+                            st.image(origen, caption=ref.get("nombre") or "Referencia", use_container_width=True)
+                        except Exception:
+                            st.caption("No se pudo mostrar esta referencia.")
+                    st.caption(ref.get("zona") or "Referencia general")
+                    if ref.get("indicacion"):
+                        st.write(ref["indicacion"])
+    if registro.get("referencia_link"):
+        st.write("Enlace original:", registro["referencia_link"])
+    if not refs_hist and not registro.get("referencia_link"):
+        st.caption("Sin referencia visual guardada.")
 
-    with vista2:
-        st.markdown("**Propuesta IA**")
-        if registro.get("propuesta_url"):
-            st.image(
-                registro.get("propuesta_url"),
-                caption=f"{registro.get('codigo')} · Revisión {registro.get('revision', 1)}",
-                use_container_width=True,
-            )
-            st.caption("✨ Imagen generada con Gemini")
-        else:
-            st.warning("No hay propuesta visual almacenada.")
+    st.markdown("**Lámina de propuesta IA**")
+    if registro.get("propuesta_url"):
+        st.image(_dia_origen_visual(registro["propuesta_url"]),
+                 caption=f"{registro.get('codigo')} · Revisión {registro.get('revision', 1)}", use_container_width=True)
+        st.caption("Revisa que los cuatro ángulos sean distintos y que los detalles coincidan antes de aprobar. "
+                   "Las propuestas anteriores pueden no tener las cuatro vistas; pueden regenerarse mientras estén sin aprobar.")
+    else:
+        st.warning("No hay propuesta visual almacenada.")
 
-        producto_txt = " | ".join(
-            [x for x in [registro.get("producto_codigo"), registro.get("producto_descripcion")] if x]
-        ) or "Sin definir"
+    producto_txt = " | ".join([x for x in [registro.get("producto_codigo"), registro.get("producto_descripcion")] if x]) or "Sin definir"
+    with st.expander("Datos e indicaciones del cliente", expanded=True):
         st.write(f"**Cliente:** {registro.get('cliente_nombre', '')}")
         st.write(f"**Producto:** {producto_txt}")
         st.write(f"**Técnica:** {registro.get('tecnica') or 'Por definir'}")
         st.write(f"**Colores:** {registro.get('colores') or 'No especificados'}")
         st.write(f"**Revisión:** {registro.get('revision', 1)}")
         st.write("**Brief:**")
-        st.write(registro.get("instrucciones") or "")
+        st.write(registro.get("instrucciones") or "Sin indicaciones generales; se utilizaron las referencias.")
 
-    ajuste_key = f"dia_ajuste_{registro.get('codigo')}"
+
+    ajuste_key = f"dia_ajuste_{epoch}_{registro.get('codigo')}"
     if ajuste_key not in st.session_state:
         st.session_state[ajuste_key] = registro.get("ajuste_solicitado") or ""
     ajuste = st.text_area(
@@ -1325,6 +1813,16 @@ def _render_diseno_ia(supabase):
         "ENVIADO A DISEÑADOR": "Ya está en la bandeja de Diseño. Puedes crear la cotización.",
     }
     st.caption("➡️ " + siguientes.get(estado_actual, "Continúa con el flujo."))
+
+    puede_aprobar = estado_actual in ["PROPUESTA PREPARADA", "PROPUESTA REGENERADA"] and bool(registro.get("propuesta_url"))
+    if puede_aprobar and "/propuesta_4v_r" in str(registro.get("propuesta_url") or ""):
+        revisadas = st.checkbox("Verifiqué frente, espalda y ambos laterales; los cuatro ángulos y sus detalles son correctos.",
+                                key=f"dia_confirmar_vistas_{epoch}_{registro.get('codigo')}_{registro.get('revision')}")
+        puede_aprobar = puede_aprobar and revisadas
+
+    puede_regenerar = estado_actual == "AJUSTES SOLICITADOS" and api_ok
+    modo_regen = _dia_modo_automatico(_dia_guardadas(registro), registro.get("instrucciones"),
+                                      registro.get("ajuste_solicitado"), enlace=registro.get("referencia_link"))
 
     b1, b2, b3, b4 = st.columns(4)
     bloquear = estado_actual in ["APROBADO POR CLIENTE", "ENVIADO A DISEÑADOR"]
@@ -1350,7 +1848,6 @@ def _render_diseno_ia(supabase):
             st.success("Ajuste guardado. Ahora regenera la propuesta.")
             _dia_rerun_local()
 
-    puede_regenerar = estado_actual == "AJUSTES SOLICITADOS" and api_ok
     if b2.button(
         "✨ Regenerar con IA",
         use_container_width=True,
@@ -1358,7 +1855,7 @@ def _render_diseno_ia(supabase):
         disabled=not puede_regenerar,
     ):
         try:
-            registro_gen = dict(registro)
+            registro_gen = dict(registro, modo_laterales=modo_regen)
             with st.spinner("Generando nueva revisión..."):
                 imagen, mime = _dia_generar_imagen_gemini(registro_gen)
             nueva_revision = int(registro.get("revision") or 1) + 1
@@ -1367,7 +1864,7 @@ def _render_diseno_ia(supabase):
                 imagen,
                 mime,
                 f"disenos-ia/{registro.get('codigo')}",
-                f"propuesta_r{nueva_revision}",
+                f"propuesta_4v_r{nueva_revision}_{modo_regen}",
             )
             _dia_actualizar(
                 supabase,
@@ -1384,7 +1881,6 @@ def _render_diseno_ia(supabase):
         except Exception as e:
             st.error(f"No se pudo regenerar la propuesta: {e}")
 
-    puede_aprobar = estado_actual in ["PROPUESTA PREPARADA", "PROPUESTA REGENERADA"] and bool(registro.get("propuesta_url"))
     if b3.button(
         "✅ Cliente aprueba",
         use_container_width=True,
@@ -1406,7 +1902,7 @@ def _render_diseno_ia(supabase):
         "📤 Enviar al diseñador",
         use_container_width=True,
         key=f"dia_enviar_{registro.get('codigo')}",
-        disabled=estado_actual != "APROBADO POR CLIENTE",
+        disabled=estado_actual != "APROBADO POR CLIENTE" or _dia_modo_prueba(),
     ):
         try:
             orden_id, codigo_orden = _dia_crear_orden_para_disenador(
@@ -1428,14 +1924,16 @@ def _render_diseno_ia(supabase):
         except Exception as e:
             st.error(f"No se pudo enviar al diseñador: {e}")
 
+    if _dia_modo_prueba():
+        st.caption("Modo prueba: enviar al diseñador y crear cotizaciones están bloqueados.")
     st.markdown("#### 4️⃣ Continuar a cotización")
-    puede_cotizar = estado_actual == "ENVIADO A DISEÑADOR"
+    puede_cotizar = estado_actual == "ENVIADO A DISEÑADOR" and not _dia_modo_prueba()
     if st.button(
         "🧾 CREAR COTIZACIÓN CON ESTE DISEÑO",
         use_container_width=True,
         key=f"dia_cotizar_{registro.get('codigo')}",
         disabled=not puede_cotizar,
-    ):
+    ) and puede_cotizar:
         st.session_state["cliente_id_edicion"] = registro.get("cliente_id")
         st.session_state["modo_edicion_cot"] = False
         st.session_state["cot_items"] = []
@@ -1476,37 +1974,7 @@ def _render_diseno_ia(supabase):
         st.session_state["vista_cot"] = "EDITOR"
         st.rerun()
 
-    st.divider()
-    st.markdown("#### Historial de diseños")
-    st.caption("Propuestas guardadas en Supabase.")
-    registros_hist = registros
-    for i in range(0, len(registros_hist), 3):
-        fila = registros_hist[i:i + 3]
-        cols = st.columns(len(fila))
-        for col, r in zip(cols, fila):
-            with col:
-                with st.container(border=True):
-                    icon = {
-                        "PROPUESTA PREPARADA": "🟡",
-                        "AJUSTES SOLICITADOS": "🟠",
-                        "PROPUESTA REGENERADA": "🟣",
-                        "APROBADO POR CLIENTE": "🟢",
-                        "ENVIADO A DISEÑADOR": "🔵",
-                    }.get(r.get("estado"), "⚪")
-                    st.markdown(f"**{icon} {r.get('codigo', '')}**")
-                    st.caption(r.get("cliente_nombre") or "Sin cliente")
-                    st.write(
-                        " | ".join(
-                            [x for x in [r.get("producto_codigo"), r.get("producto_descripcion")] if x]
-                        ) or "Sin producto"
-                    )
-                    st.markdown(f"**Estado:** {r.get('estado', '')}")
-                    extras = [f"Revisión {r.get('revision', 1)}"]
-                    if r.get("orden_id"):
-                        extras.append(f"Orden #{r.get('orden_id')}")
-                    if r.get("cotizacion_id"):
-                        extras.append(f"Cotización #{r.get('cotizacion_id')}")
-                    st.caption(" · ".join(extras))
+    _dia_historial(supabase, registros)
 
 
 # --- RENDER PRINCIPAL ---
