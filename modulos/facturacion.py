@@ -36,9 +36,10 @@ def render(supabase):
             res_pendientes = (
                 supabase.table("ordenes")
                 .select(
-                    "id, codigo_orden, created_at, total_estimado, saldo_pendiente, clientes(nombre_completo, cedula_ruc), estado_facturacion"
+                    "id, codigo_orden, created_at, total_estimado, saldo_pendiente, estado, clientes(nombre_completo, cedula_ruc), estado_facturacion"
                 )
                 .is_("estado_facturacion", False)
+                .or_("estado.neq.ANULADO,estado.is.null")
                 .gte("created_at", f"{f_inicio_pend}T00:00:00")
                 .lte("created_at", f"{f_fin_pend}T23:59:59")
                 .order("created_at", desc=True)
@@ -48,9 +49,10 @@ def render(supabase):
             res_nulas = (
                 supabase.table("ordenes")
                 .select(
-                    "id, codigo_orden, created_at, total_estimado, saldo_pendiente, clientes(nombre_completo, cedula_ruc), estado_facturacion"
+                    "id, codigo_orden, created_at, total_estimado, saldo_pendiente, estado, clientes(nombre_completo, cedula_ruc), estado_facturacion"
                 )
                 .is_("estado_facturacion", "null")
+                .or_("estado.neq.ANULADO,estado.is.null")
                 .gte("created_at", f"{f_inicio_pend}T00:00:00")
                 .lte("created_at", f"{f_fin_pend}T23:59:59")
                 .order("created_at", desc=True)
@@ -61,12 +63,13 @@ def render(supabase):
                 res_nulas.data if res_nulas.data else []
             )
 
-            # --- SOLUCIÓN 2: Filtro estricto de deuda cero ---
+            # Excluir órdenes anuladas y conservar el criterio original de saldo pendiente.
             if datos_combinados:
                 datos_combinados = [
                     d
                     for d in datos_combinados
-                    if float(d.get("saldo_pendiente", 0) or 0) <= 0.01
+                    if str(d.get("estado") or "").strip().upper() != "ANULADO"
+                    and float(d.get("saldo_pendiente", 0) or 0) <= 0.01
                 ]
 
             if datos_combinados:
