@@ -310,6 +310,10 @@ def render(supabase):
     if "uploader_key_vd" not in st.session_state:
         st.session_state["uploader_key_vd"] = str(datetime.now().timestamp())
 
+    # Limpiar la observación de la venta anterior antes de crear los widgets.
+    if st.session_state.pop("vd_limpiar_obs_diseno", False):
+        st.session_state.pop("vd_obs_diseno", None)
+
     st.title("🛍️ Ventas")
 
     tab1, tab2 = st.tabs(["🛒 Nueva Venta", "🧾 Historial de Ventas del Día"])
@@ -821,6 +825,7 @@ def render(supabase):
             st.subheader("🛒 Resumen de Venta")
 
             if not st.session_state["carrito_vd"]:
+                st.session_state.pop("vd_obs_diseno", None)
                 st.info("El carrito está vacío.")
             else:
                 total_venta = 0.0
@@ -918,6 +923,17 @@ def render(supabase):
                             "Pasar Directo a Impresión (Plotter)",
                         ],
                     )
+
+                    observaciones_diseno = ""
+                    if tipo_flujo == "Pasar a Cola de Diseño":
+                        observaciones_diseno = st.text_area(
+                            "📝 Observaciones para el diseñador (opcional)",
+                            key="vd_obs_diseno",
+                            placeholder="Ej.: Diseñar tickets con el logo del cliente y numeración del 001 al 100.",
+                            help="Se guardan en esta venta y se muestran al diseñador en su bandeja de trabajo.",
+                        ).strip()
+                    else:
+                        st.session_state.pop("vd_obs_diseno", None)
 
                     # --- NUEVO: Selector de Modalidad de Pago ---
                     modalidad_pago = st.radio(
@@ -1021,6 +1037,9 @@ def render(supabase):
                                     "creado_por_id": id_creador,
                                     "notas_facturacion": notas_facturacion,
                                 }
+                                if tipo_flujo == "Pasar a Cola de Diseño" and observaciones_diseno:
+                                    data_orden["observaciones_generales"] = observaciones_diseno
+
                                 res_orden = (
                                     supabase.table("ordenes")
                                     .insert(data_orden)
@@ -1098,6 +1117,7 @@ def render(supabase):
                                     ).execute()
 
                             st.session_state["carrito_vd"] = []
+                            st.session_state["vd_limpiar_obs_diseno"] = True
                             st.success(f"🎉 Venta registrada. Código: **{codigo_vd}**")
                             st.balloons()
                             time.sleep(1.5)

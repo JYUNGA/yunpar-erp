@@ -549,7 +549,8 @@ def generar_siguiente_codigo_cot(supabase):
         return f"{prefijo}0001"
 
 
-def generar_pdf_final(cabecera, items, observaciones, vigencia_fecha, total_letras):
+def generar_pdf_final(cabecera, items, observaciones, vigencia_fecha, total_letras,
+                      aviso_sin_iva=False):
     ruta_fondo = "PROFORMA.png"
     pdf = PDFCotizacion(datos_cabecera=cabecera, ruta_fondo=ruta_fondo)
     pdf.add_page()
@@ -563,10 +564,10 @@ def generar_pdf_final(cabecera, items, observaciones, vigencia_fecha, total_letr
     pdf.cell(w_cod, 8, "Codigo", 1, 0, "C", True)
     pdf.cell(w_desc, 8, "Descripcion", 1, 0, "C", True)
     pdf.cell(w_cant, 8, "Cant", 1, 0, "C", True)
-    modalidad_pdf = _cot_modalidad_guardada(cabecera)
     pdf.cell(w_unit, 8, "P.Unit", 1, 0, "C", True)
     pdf.cell(w_tot, 8, "Total", 1, 1, "C", True)
-    pdf.ln(8)
+    # El aviso ocupa 7 mm; compensarlos con espacios, no con letra más pequeña.
+    pdf.ln(4 if aviso_sin_iva else 8)
 
     pdf.set_text_color(0, 0, 0)
     pdf.set_font("Arial", "", 9)
@@ -604,23 +605,21 @@ def generar_pdf_final(cabecera, items, observaciones, vigencia_fecha, total_letr
         qr_data_string += f"- {item['codigo']} ({c_txt})\n"
 
     pdf.ln(2)
-    pdf.set_x(52)
+    # Aviso exclusivamente visual: no altera la modalidad ni los importes.
+    if aviso_sin_iva:
+        pdf.set_x(52)
+        pdf.set_font("Arial", "B", 12)
+        pdf.set_text_color(180, 0, 0)
+        pdf.cell(w_cod + w_desc + w_cant + w_unit + w_tot, 7,
+                 "ESTOS PRECIOS NO INCLUYEN I.V.A.", 0, 1, "L")
+        pdf.set_text_color(0, 0, 0)
     pdf.set_font("Arial", "I", 8)
-    pdf.cell(
-        0, 4,
-        {
-            "INCLUIDO": "Precios de los items: IVA incluido",
-            "AGREGADO": "Precios de los items: sin IVA (se agrega al subtotal)",
-            "SIN_IVA": "Precios cotizados sin incluir IVA.",
-        }[modalidad_pdf],
-        0, 1,
-    )
     if cabecera.get("modo_prueba"):
         pdf.set_x(52)
         pdf.set_text_color(180, 0, 0)
         pdf.cell(0, 4, "MODO PRUEBA - NO VALIDO PARA CLIENTES", 0, 1)
         pdf.set_text_color(0, 0, 0)
-    pdf.ln(1)
+    pdf.ln(1 if observaciones or not aviso_sin_iva else 0)
     y = pdf.get_y()
     if y > 230:
         pdf.add_page()
@@ -630,24 +629,19 @@ def generar_pdf_final(cabecera, items, observaciones, vigencia_fecha, total_letr
     pdf.set_font("Arial", "B", 8)
     pdf.cell(10, 5, "SON:", 0, 0)
     pdf.set_font("Arial", "I", 8)
-    pdf.multi_cell(110, 5, limpiar_texto_pdf(total_letras), 0)
+    # Separar el importe en letras del total para que no se superpongan.
+    pdf.multi_cell(74, 5, limpiar_texto_pdf(total_letras), 0)
+    y_letras = pdf.get_y()
 
     x_totales = 140
     pdf.set_xy(x_totales, y)
-    pdf.set_font("Arial", "", 10)
-    pdf.cell(20, 5, "Subtotal:", 0, 0, "R")
-    pdf.cell(25, 5, f"${float(cabecera['subtotal']):.2f}", 0, 1, "R")
-    if modalidad_pdf != "SIN_IVA" and _cot_dinero(cabecera["iva"]) != Decimal("0.00"):
-        pdf.set_x(x_totales)
-        pdf.cell(20, 5, "IVA (15%):", 0, 0, "R")
-        pdf.cell(25, 5, f"${float(cabecera['iva']):.2f}", 0, 1, "R")
-    pdf.set_x(x_totales)
     pdf.set_font("Arial", "B", 12)
     pdf.set_text_color(18, 38, 122)
     pdf.cell(20, 8, "TOTAL:", 0, 0, "R")
     pdf.cell(25, 8, f"${float(cabecera['total']):.2f}", 0, 1, "R")
     pdf.set_text_color(0, 0, 0)
-    pdf.ln(5)
+    pdf.set_y(max(pdf.get_y(), y_letras))
+    pdf.ln(3 if aviso_sin_iva else 5)
 
     if observaciones:
         pdf.set_x(52)
@@ -656,7 +650,7 @@ def generar_pdf_final(cabecera, items, observaciones, vigencia_fecha, total_letr
         pdf.set_x(52)
         pdf.set_font("Arial", "", 8)
         pdf.multi_cell(140, 5, limpiar_texto_pdf(observaciones), 1)
-        pdf.ln(3)
+        pdf.ln(2 if aviso_sin_iva else 3)
 
     pdf.set_x(52)
     pdf.set_font("Arial", "I", 9)
@@ -664,6 +658,11 @@ def generar_pdf_final(cabecera, items, observaciones, vigencia_fecha, total_letr
     pdf.cell(0, 6, f"Oferta valida hasta: {vigencia_fecha}", 0, 1)
     pdf.set_text_color(0, 0, 0)
 
+    pos_firma = 258
+    # Mantener QR, texto y firmas juntos, respetando el espacio real del código.
+    if pdf.get_y() + 27 + 5 > pos_firma:
+        pdf.add_page()
+    y_qr = pdf.get_y()
     qr = qrcode.QRCode(version=1, box_size=5, border=1)
     try:
         qr.add_data(qr_data_string.encode("utf-8").decode("latin-1"))
@@ -673,17 +672,14 @@ def generar_pdf_final(cabecera, items, observaciones, vigencia_fecha, total_letr
     img_qr = qr.make_image(fill_color="black", back_color="white")
     temp_qr_path = tempfile.mktemp(suffix=".png")
     img_qr.save(temp_qr_path)
-    pdf.image(temp_qr_path, x=52, y=pdf.get_y() + 2, w=25)
+    pdf.image(temp_qr_path, x=52, y=y_qr + 2, w=25)
 
-    pdf.set_xy(75, pdf.get_y() + 7)
+    pdf.set_xy(80, y_qr + 7)
     pdf.set_font("Arial", "", 7)
     pdf.set_text_color(100, 100, 100)
     pdf.multi_cell(65, 4, "Escanea para verificar\ndetalles originales.", 0, "L")
     pdf.set_text_color(0, 0, 0)
 
-    pos_firma = 258
-    if pdf.get_y() > 240:
-        pdf.add_page()
     pdf.set_y(pos_firma)
     pdf.set_font("Arial", "", 8)
     pdf.set_xy(55, pos_firma)
@@ -2187,6 +2183,13 @@ def render(supabase):
                         f"📅 {row_sel.get('fecha_emision', '')} · "
                         f"Estado: {row_sel.get('estado', '')}"
                     )
+                    aviso_sin_iva_pdf = st.checkbox(
+                        "Estos precios no incluyen I.V.A. (solo en el PDF)",
+                        value=False,
+                        key=f"cot_aviso_visual_pdf_{row_sel['id']}",
+                        help="Solo añade una advertencia a la proforma. No modifica los precios, "
+                             "el IVA, el total guardado ni la cotización en Supabase.",
+                    )
                     b1, b2, b3, b4 = st.columns(4)
 
                     if b1.button("✏️ EDITAR", use_container_width=True):
@@ -2273,6 +2276,9 @@ def render(supabase):
                             .data
                         )
                         subtotal_pdf, iva_pdf, total_pdf = _cot_totales_guardados(row_sel)
+                        if sum((_cot_dinero(i["subtotal"]) for i in items_pdf), Decimal("0.00")) != total_pdf:
+                            st.info("El total guardado difiere de la suma de los ítems. "
+                                    "La proforma conserva los importes originales de la cotización.")
                         tl = num2words(float(total_pdf), lang="es").upper() + " DÓLARES"
 
                         try:
@@ -2308,6 +2314,7 @@ def render(supabase):
                             observaciones=row_sel["observaciones"],
                             vigencia_fecha=str_val,
                             total_letras=tl,
+                            aviso_sin_iva=aviso_sin_iva_pdf,
                         )
                         st.download_button(
                             "⬇️ Bajar",
