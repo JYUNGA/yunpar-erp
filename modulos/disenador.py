@@ -314,6 +314,18 @@ def render(supabase):
                     time.sleep(0.5)
                     st.rerun()
 
+        # Las ventas directas no requieren una orden de Producción adicional.
+        es_venta_directa = str(orden.get("codigo_orden") or "").upper().startswith("VD-")
+        if es_venta_directa:
+            st.markdown("### 📝 Observaciones de Ventas para Diseño")
+            nota_ventas = orden.get("observaciones_generales")
+            if isinstance(nota_ventas, str) and nota_ventas.strip():
+                with st.container(border=True):
+                    st.caption("Indicaciones registradas por Ventas")
+                    st.text(nota_ventas)
+            else:
+                st.caption("Esta venta no tiene observaciones para Diseño.")
+
         # --- IMÁGENES DE REFERENCIA ---
         st.markdown("### 🖼️ Referencias Visuales")
 
@@ -399,14 +411,15 @@ def render(supabase):
                 else:
                     st.info("No hay arte final registrado en la base de datos.")
 
-        st.markdown("### 📝 Observaciones Generales de la Orden")
+        if not es_venta_directa:
+            st.markdown("### 📝 Observaciones Generales de la Orden")
 
-        if orden.get("observaciones_generales"):
-            st.info(
-                f"**Nota del cliente/comercial:** {orden['observaciones_generales']}"
-            )
-        else:
-            st.warning("No hay observaciones generales registradas para esta orden.")
+            if orden.get("observaciones_generales"):
+                st.info(
+                    f"**Nota del cliente/comercial:** {orden['observaciones_generales']}"
+                )
+            else:
+                st.warning("No hay observaciones generales registradas para esta orden.")
         st.divider()
 
         try:
