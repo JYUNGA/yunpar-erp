@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+from pathlib import Path
 from config import OrderState, transicionar_estado
 
 
@@ -46,6 +47,90 @@ def formatear_fecha_espanol(fecha_str):
         return f"{nombre_dia}, {dt.day} de {nombre_mes} del {dt.year}"
     except Exception:
         return str(fecha_str)
+
+
+# YUNPAR: visor de artes multiples (solo lectura)
+# Compatibilidad: arte principal historico + archivos adicionales de Produccion.
+def _url_arte_impresion_valida(valor):
+    """No interpretar NULL, NaN ni otros textos vacios como enlaces."""
+    if valor is None:
+        return False
+    try:
+        if bool(pd.isna(valor)):
+            return False
+    except (TypeError, ValueError):
+        return False
+    texto = str(valor).strip()
+    return texto.lower().startswith(("https://", "http://")) and texto.lower() not in ("nan", "none", "null")
+
+
+def _artes_orden_impresion(supabase, codigo_orden, principal):
+    """Devuelve URLs sin duplicados, sin modificar registros ni archivos.
+
+    Si Storage no deja listar, mantiene la URL principal y avisa al operador.
+    """
+    from urllib.parse import urlparse
+
+    vistos = set()
+    artes = []
+
+    def agregar(url, etiqueta):
+        if not _url_arte_impresion_valida(url):
+            return
+        url = str(url).strip()
+        clave = urlparse(url).path.rstrip("/")
+        if clave in vistos:
+            return
+        vistos.add(clave)
+        artes.append({"url": url, "etiqueta": etiqueta})
+
+    agregar(principal, "Arte principal")
+
+    codigo = str(codigo_orden or "").strip()
+    codigo_seguro = "".join(
+        c if c.isalnum() or c in "-_" else "_" for c in codigo
+    )
+    if not codigo_seguro:
+        return artes, None
+
+    carpeta = f"artes_orden/{codigo_seguro}"
+    try:
+        bucket = supabase.storage.from_("ordenes_produccion")
+        archivos = bucket.list(carpeta) or []
+        nombres = sorted(
+            item.get("name", "") for item in archivos
+            if isinstance(item, dict) and item.get("name")
+        )
+        for nombre in nombres:
+            if Path(nombre).suffix.lower() not in (".jpg", ".jpeg", ".png", ".pdf", ".webp"):
+                continue
+            ruta = f"{carpeta}/{nombre}"
+            agregar(bucket.get_public_url(ruta), f"Arte adicional: {nombre}")
+    except Exception as exc:
+        return artes, f"No se pudo consultar la carpeta de artes adicionales: {exc}"
+
+    return artes, None
+
+
+def _mostrar_arte_impresion(arte):
+    """Previsualiza imagenes; abre PDF o formatos no compatibles por enlace."""
+    from urllib.parse import urlparse
+
+    url = arte["url"]
+    nombre = arte["etiqueta"]
+    st.markdown(f"**{nombre}**")
+    extension = Path(urlparse(url).path).suffix.lower()
+    if extension == ".pdf":
+        st.info("Documento PDF. Ábrelo para consultar el arte final.")
+        st.link_button("📄 Abrir / Descargar PDF", url, use_container_width=True)
+    elif extension in (".jpg", ".jpeg", ".png", ".webp"):
+        try:
+            st.image(url, use_container_width=True, caption=nombre)
+        except Exception:
+            st.warning("No se pudo generar una vista previa de este archivo.")
+            st.link_button("🔗 Abrir archivo original", url)
+    else:
+        st.link_button("🔗 Abrir archivo original", url)
 
 
 # ==========================================
@@ -515,38 +600,25 @@ def render(supabase):
                 ] = OrderState.EN_IMPRESION
                 st.rerun()
 
-        # Mostrar Arte Final en tamaño muy grande
-        st.markdown("### 🖼️ Arte Final de Referencia")
-
-        url_arte = orden_actual.get("url_arte_final")
-
-        # 1. Validar que la variable no sea nula ni un NaN de Pandas
-        if pd.notna(url_arte) and url_arte:
-            url_str = str(url_arte).strip().lower()
-
-            # 2. Si es un archivo PDF, mostramos un botón para abrirlo
-            if url_str.endswith(".pdf"):
-                st.info("📄 El Arte Final se ha subido como un documento PDF.")
-                st.link_button(
-                    "👁️ Abrir / Descargar PDF de Arte Final",
-                    url_arte,
-                    use_container_width=True,
-                )
-            else:
-                # 3. Si es imagen (JPG/PNG), usamos st.image pero protegido con try/except
-                try:
-                    st.image(
-                        url_arte,
-                        use_container_width=True,
-                        caption="Arte Final para Impresión",
-                    )
-                except Exception as e:
-                    st.error(
-                        "No se pudo previsualizar el archivo. Es posible que el formato no sea compatible."
-                    )
-                    st.link_button("🔗 Abrir Archivo Original", url_arte)
+        # Mostrar arte principal y todos los artes adicionales (SOLO LECTURA)
+        st.markdown("### 🖼️ Artes finales de referencia")
+        artes_orden, aviso_artes = _artes_orden_impresion(
+            supabase,
+            orden_actual.get("codigo_orden"),
+            orden_actual.get("url_arte_final"),
+        )
+        if aviso_artes:
+            st.warning(aviso_artes)
+        if not artes_orden:
+            st.info("No se adjuntaron artes finales para esta orden.")
         else:
-            st.info("No se adjuntó un Arte Final visual para esta orden.")
+            st.caption(f"{len(artes_orden)} archivo(s) disponibles para consultar.")
+            for indice_arte, arte in enumerate(artes_orden, start=1):
+                with st.expander(
+                    f"{indice_arte}. {arte['etiqueta']}",
+                    expanded=(indice_arte == 1),
+                ):
+                    _mostrar_arte_impresion(arte)
 
         st.markdown("### 📝 Observaciones Generales de la Orden")
         if orden_actual.get("observaciones_generales"):
