@@ -3083,6 +3083,7 @@ def mostrar_paso_3(
 def mostrar_paso_4(
     orden_actual,
     datos_mockups,
+    supabase,
 ):
 
     st.divider()
@@ -3531,6 +3532,35 @@ def mostrar_paso_4(
         key=f"preparacion_enviar_catalogo_{orden_id}",
     ):
 
+        # Comprobar el permiso vigente, por si cambió en Producción
+        # después de seleccionar el arte o generar los mockups.
+        try:
+            respuesta_permiso = (
+                supabase.table("ordenes")
+                .select("catalogo_permitido, estado")
+                .eq("id", orden_id)
+                .limit(1)
+                .execute()
+            )
+            filas_permiso = respuesta_permiso.data or []
+        except Exception as e:
+            st.error(
+                "❌ No se pudo verificar el permiso de catálogo. "
+                f"No se enviará el diseño: {e}"
+            )
+            return False
+
+        if not filas_permiso or (
+            filas_permiso[0].get("catalogo_permitido") is not True
+            or str(filas_permiso[0].get("estado") or "").strip().upper()
+            in ("ANULADO", "ANULADA", "CANCELADO", "CANCELADA")
+        ):
+            st.error(
+                "🔒 Esta orden no está autorizada actualmente para el "
+                "catálogo. Comprueba su decisión en Producción."
+            )
+            return False
+
         paquete = construir_paquete_catalogo(
             orden_actual=orden_actual,
             datos_mockups=datos_mockups_finales,
@@ -3788,6 +3818,97 @@ def mostrar_paso_4(
 
 
 # =========================================================
+# LECTURA PAGINADA DE ÓRDENES PARA PREPARACIÓN
+# =========================================================
+
+def consultar_ordenes_preparacion(supabase, tamano_pagina=500):
+    """Lee todas las órdenes por bloques, sin cambiar datos en Supabase."""
+    ordenes = []
+    inicio = 0
+
+    while True:
+        respuesta = (
+            supabase.table("ordenes")
+            .select(
+                "id, codigo_orden, estado, cliente_id, created_at, "
+                "url_arte_final, url_diseno_final, observaciones_generales, "
+                "catalogo_permitido, catalogo_motivo"
+            )
+            .order("id", desc=True)
+            .range(inicio, inicio + tamano_pagina - 1)
+            .execute()
+        )
+        lote = respuesta.data or []
+        ordenes.extend(lote)
+        if len(lote) < tamano_pagina:
+            break
+        inicio += tamano_pagina
+
+    return ordenes
+
+
+def tiene_arte_principal(orden):
+    """Solo comprueba URLs principales; no cuenta archivos adicionales."""
+    for campo in ("url_arte_final", "url_diseno_final"):
+        valor = orden.get(campo)
+        if valor is not None and str(valor).strip():
+            return True
+    return False
+
+
+def clasificar_orden_preparacion(orden):
+    """Agrupa órdenes sin eliminar ni alterar el permiso comercial."""
+    estado = str(orden.get("estado") or "").strip().upper()
+    if estado in ("ANULADO", "ANULADA", "CANCELADO", "CANCELADA"):
+        return "🚫 Anuladas"
+
+    if orden.get("catalogo_permitido") is False:
+        return "🔒 Excluidas"
+
+    if not tiene_arte_principal(orden):
+        return "🖼️ Sin arte principal"
+
+    if orden.get("catalogo_permitido") is True:
+        return "✅ Autorizadas con arte"
+
+    return "⏳ Pendientes con arte"
+
+
+# =========================================================
+# INDICADORES DEL CATÁLOGO (SOLO LECTURA)
+# =========================================================
+
+def consultar_codigos_enviados_catalogo(tamano_pagina=500):
+    """Consulta los diseños guardados sin cambiar datos en Supabase.
+
+    Un diseño en BORRADOR, PUBLICADO u OCULTO ya fue enviado
+    desde Preparación. Un mismo código cuenta una sola vez.
+    """
+    cliente_admin = catalogo_db.obtener_cliente_admin()
+    codigos = set()
+    inicio = 0
+
+    while True:
+        respuesta = (
+            cliente_admin.table("catalogo_disenos")
+            .select("codigo_orden_origen")
+            .order("id")
+            .range(inicio, inicio + tamano_pagina - 1)
+            .execute()
+        )
+        lote = respuesta.data or []
+        for diseno in lote:
+            codigo = str(diseno.get("codigo_orden_origen") or "").strip().casefold()
+            if codigo:
+                codigos.add(codigo)
+        if len(lote) < tamano_pagina:
+            break
+        inicio += tamano_pagina
+
+    return codigos
+
+
+# =========================================================
 # FUNCIÓN PRINCIPAL
 # =========================================================
 
@@ -3845,437 +3966,312 @@ def render(
 
     st.divider()
 
-    st.markdown(
-        "## 1️⃣ Órdenes con arte disponible"
+    st.markdown("## 1️⃣ Control de órdenes para catálogo")
+    st.caption(
+        "Se revisan todas las órdenes de la base. Solo las autorizadas, "
+        "vigentes y con arte pueden continuar a la creación de mockups."
     )
+
+    try:
+        ordenes = consultar_ordenes_preparacion(supabase)
+    except Exception as e:
+        st.error(f"❌ No se pudieron consultar las órdenes: {e}")
+        return
+
+    for orden in ordenes:
+        arte = (orden.get("url_arte_final") or orden.get("url_diseno_final"))
+        orden["arte_preparacion"] = (
+            str(arte).strip() if arte is not None and str(arte).strip() else None
+        )
+        orden["grupo_preparacion"] = clasificar_orden_preparacion(orden)
+
+    total_ordenes = len(ordenes)
+    total_arte = sum(tiene_arte_principal(o) for o in ordenes)
+    total_autorizadas = sum(
+        o.get("catalogo_permitido") is True and tiene_arte_principal(o)
+        for o in ordenes
+    )
+    total_pendientes = sum(
+        o.get("catalogo_permitido") is None and tiene_arte_principal(o)
+        for o in ordenes
+    )
+    total_excluidas = sum(o.get("catalogo_permitido") is False for o in ordenes)
+    total_sin_arte = total_ordenes - total_arte
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Órdenes totales", total_ordenes)
+        st.metric("Con arte principal", total_arte)
+    with col2:
+        st.metric("Autorizadas con arte", total_autorizadas)
+        st.metric("Pendientes con arte", total_pendientes)
+    with col3:
+        st.metric("Excluidas", total_excluidas)
+        st.metric("Sin arte principal", total_sin_arte)
 
     st.caption(
-        "Aquí aparecen únicamente las órdenes "
-        "que tienen un arte cargado en el sistema."
+        "Los conteos incluyen órdenes históricas y anuladas. 'Sin arte principal' "
+        "significa que no hay URL principal registrada; podrían existir "
+        "archivos adicionales en Producción."
     )
 
-    col_bus1, col_bus2 = (
-        st.columns(2)
+    # Solo mostrar órdenes que Producción autorizó para el catálogo.
+    opciones = ["✅ Autorizadas con arte"]
+    vista = st.selectbox(
+        "Qué órdenes deseas revisar",
+        opciones,
+        key="preparacion_filtro_estado_catalogo",
     )
 
+    col_bus1, col_bus2 = st.columns(2)
     with col_bus1:
-
         buscar_codigo = st.text_input(
             "Buscar por código de orden",
             placeholder="Ej: ORD-7259",
             key="preparacion_buscar_codigo",
         )
-
     with col_bus2:
-
         buscar_cliente = st.text_input(
             "Buscar por cliente",
             placeholder="Ej: AGRISUM",
             key="preparacion_buscar_cliente",
         )
 
-    try:
+    ordenes_vista = [
+        orden for orden in ordenes if orden["grupo_preparacion"] == vista
+    ]
 
-        respuesta = (
-            supabase
-            .table("ordenes")
-            .select(
-                "id, "
-                "codigo_orden, "
-                "estado, "
-                "cliente_id, "
-                "created_at, "
-                "url_arte_final, "
-                "url_diseno_final, "
-                "observaciones_generales"
-            )
-            .order(
-                "created_at",
-                desc=True,
-            )
-            .limit(200)
-            .execute()
-        )
-
-        ordenes = (
-            respuesta.data
-            or []
-        )
-
-    except Exception as e:
-
-        st.error(
-            f"❌ No se pudieron consultar "
-            f"las órdenes: {e}"
-        )
-
-        return
-
-    ordenes_con_arte = []
-
-    for orden in ordenes:
-
-        arte = (
-            orden.get(
-                "url_arte_final"
-            )
-            or orden.get(
-                "url_diseno_final"
-            )
-        )
-
-        if (
-            arte
-            and str(
-                arte
-            ).strip()
-        ):
-
-            orden[
-                "arte_preparacion"
-            ] = arte
-
-            ordenes_con_arte.append(
-                orden
-            )
-
-    if not ordenes_con_arte:
-
-        st.warning(
-            "⚠️ Actualmente no existen "
-            "órdenes con arte disponible."
-        )
-
-        return
-
-    ids_clientes = list(
-        {
-            orden.get(
-                "cliente_id"
-            )
-            for orden
-            in ordenes_con_arte
-            if orden.get(
-                "cliente_id"
-            )
-        }
-    )
-
+    ids_clientes = sorted({
+        orden.get("cliente_id") for orden in ordenes_vista
+        if orden.get("cliente_id") is not None
+    })
     mapa_clientes = {}
-
     if ids_clientes:
-
         try:
-
-            respuesta_clientes = (
-                supabase
-                .table("clientes")
-                .select(
-                    "id, nombre_completo"
+            # Consultar clientes por bloques, para no sobrepasar los
+            # límites de longitud de las solicitudes a Supabase.
+            for inicio in range(0, len(ids_clientes), 100):
+                lote_ids = ids_clientes[inicio:inicio + 100]
+                respuesta_clientes = (
+                    supabase.table("clientes")
+                    .select("id, nombre_completo")
+                    .in_("id", lote_ids)
+                    .execute()
                 )
-                .in_(
-                    "id",
-                    ids_clientes,
-                )
-                .execute()
-            )
-
-            for cliente in (
-                respuesta_clientes.data
-                or []
-            ):
-
-                mapa_clientes[
-                    cliente[
-                        "id"
-                    ]
-                ] = (
-                    cliente.get(
-                        "nombre_completo"
+                for cliente in respuesta_clientes.data or []:
+                    mapa_clientes[cliente["id"]] = (
+                        cliente.get("nombre_completo") or "Sin nombre"
                     )
-                    or "Sin nombre"
-                )
-
-        except Exception:
-
-            mapa_clientes = {}
+        except Exception as e:
+            st.warning(
+                "No fue posible obtener algunos nombres de clientes. "
+                f"Detalles: {e}"
+            )
 
     registros = []
-
-    for orden in ordenes_con_arte:
-
-        fecha_original = (
-            orden.get(
-                "created_at"
+    for orden in ordenes_vista:
+        fecha_original = orden.get("created_at")
+        try:
+            fecha = (
+                pd.to_datetime(fecha_original).strftime("%d/%m/%Y %H:%M")
+                if fecha_original else ""
             )
-        )
+        except Exception:
+            fecha = str(fecha_original or "")
 
-        fecha = ""
+        registros.append({
+            "ID": orden.get("id"),
+            "Código": orden.get("codigo_orden") or "",
+            "Cliente": mapa_clientes.get(
+                orden.get("cliente_id"), "Consumidor Final"
+            ),
+            "Estado": orden.get("estado") or "",
+            "Fecha": fecha,
+            "Arte": orden.get("arte_preparacion"),
+            "Observaciones": orden.get("observaciones_generales") or "",
+            "Permiso": orden.get("catalogo_permitido"),
+            "Motivo catálogo": orden.get("catalogo_motivo") or "",
+            "Grupo": orden.get("grupo_preparacion"),
+        })
 
-        if fecha_original:
+    df = pd.DataFrame(registros, columns=[
+        "ID", "Código", "Cliente", "Estado", "Fecha", "Arte",
+        "Observaciones", "Permiso", "Motivo catálogo", "Grupo"
+    ])
 
-            try:
-
-                fecha = (
-                    pd.to_datetime(
-                        fecha_original
-                    )
-                    .strftime(
-                        "%d/%m/%Y %H:%M"
-                    )
-                )
-
-            except Exception:
-
-                fecha = str(
-                    fecha_original
-                )
-
-        registros.append(
-            {
-
-                "ID": (
-                    orden.get(
-                        "id"
-                    )
-                ),
-
-                "Código": (
-                    orden.get(
-                        "codigo_orden",
-                        "",
-                    )
-                ),
-
-                "Cliente": (
-                    mapa_clientes.get(
-                        orden.get(
-                            "cliente_id"
-                        ),
-                        "Consumidor Final",
-                    )
-                ),
-
-                "Estado": (
-                    orden.get(
-                        "estado",
-                        "",
-                    )
-                ),
-
-                "Fecha": (
-                    fecha
-                ),
-
-                "Arte": (
-                    orden.get(
-                        "arte_preparacion"
-                    )
-                ),
-
-                "Observaciones": (
-                    orden.get(
-                        "observaciones_generales",
-                        "",
-                    )
-                ),
-            }
-        )
-
-    df = pd.DataFrame(
-        registros
-    )
-
-    if buscar_codigo:
-
+    if buscar_codigo.strip():
         df = df[
-            df["Código"]
-            .astype(str)
-            .str.contains(
-                buscar_codigo,
-                case=False,
-                na=False,
+            df["Código"].astype(str).str.contains(
+                buscar_codigo.strip(), case=False, na=False, regex=False
+            )
+        ]
+    if buscar_cliente.strip():
+        df = df[
+            df["Cliente"].astype(str).str.contains(
+                buscar_cliente.strip(), case=False, na=False, regex=False
             )
         ]
 
-    if buscar_cliente:
+    # Buscador adicional bajo los indicadores. Se combina con los dos
+    # buscadores originales y encuentra código O cliente (texto literal).
+    clave_busqueda_rapida = "preparacion_busqueda_rapida_catalogo"
+    busqueda_rapida = str(
+        st.session_state.get(clave_busqueda_rapida, "") or ""
+    ).strip()
+    if busqueda_rapida:
+        coincide_codigo = df["Código"].astype(str).str.contains(
+            busqueda_rapida, case=False, na=False, regex=False
+        )
+        coincide_cliente = df["Cliente"].astype(str).str.contains(
+            busqueda_rapida, case=False, na=False, regex=False
+        )
+        df = df[coincide_codigo | coincide_cliente]
 
-        df = df[
-            df["Cliente"]
-            .astype(str)
-            .str.contains(
-                buscar_cliente,
-                case=False,
-                na=False,
+    df = df.reset_index(drop=True)
+
+    # Los indicadores se calculan sobre todas las órdenes autorizadas,
+    # independientemente de la búsqueda y del filtro visual de envío.
+    enviadas = None
+    pendientes_envio = None
+    codigos_enviados = set()
+    if not ordenes_vista:
+        enviadas = 0
+        pendientes_envio = 0
+    else:
+        try:
+            codigos_enviados = consultar_codigos_enviados_catalogo()
+            enviadas = sum(
+                str(orden.get("codigo_orden") or "").strip().casefold()
+                in codigos_enviados
+                for orden in ordenes_vista
             )
-        ]
+            pendientes_envio = len(ordenes_vista) - enviadas
+        except Exception:
+            # No mostrar un cero falso si Supabase no permite la consulta.
+            pass
 
-    df = df.reset_index(
-        drop=True
-    )
+    # Este filtro SOLO cambia las filas visibles de la bandeja.
+    # No modifica permisos, diseños, registros ni el proceso de envío.
+    clave_filtro_envio = "preparacion_filtro_envio_catalogo"
+    if enviadas is None and st.session_state.get(clave_filtro_envio) != "Todas":
+        # Si falla la lectura del catálogo, no se adivina qué está enviado.
+        st.session_state[clave_filtro_envio] = "Todas"
 
-    col_res1, col_res2 = (
-        st.columns(2)
-    )
+    filtro_envio = st.session_state.get(clave_filtro_envio, "Todas")
+    if enviadas is not None and filtro_envio in ("Pendientes", "Enviadas"):
+        es_enviada = (
+            df["Código"].astype(str).str.strip().str.casefold()
+            .isin(codigos_enviados)
+        )
+        df = df[es_enviada if filtro_envio == "Enviadas" else ~es_enviada]
+        df = df.reset_index(drop=True)
 
+    col_res1, col_res2, col_res3, col_res4 = st.columns(4, gap="small")
     with col_res1:
-
-        st.metric(
-            "Artes disponibles",
-            len(
-                ordenes_con_arte
-            ),
-        )
-
+        with st.container(border=True):
+            st.metric("Autorizadas", len(ordenes_vista))
     with col_res2:
+        with st.container(border=True):
+            st.metric("Ya enviadas", enviadas if enviadas is not None else "—")
+    with col_res3:
+        with st.container(border=True):
+            st.metric(
+                "Pendientes", pendientes_envio if pendientes_envio is not None else "—"
+            )
+    with col_res4:
+        with st.container(border=True):
+            st.metric("Resultados mostrados", len(df))
 
-        st.metric(
-            "Resultados mostrados",
-            len(
-                df
-            ),
+    # Buscar sin quitar los dos campos originales que aparecen arriba.
+    st.text_input(
+        "Buscar órdenes",
+        placeholder="Buscar por código o cliente...",
+        key=clave_busqueda_rapida,
+    )
+
+    # Debajo del buscador rápido, filtrar por estado de envío.
+    opciones_envio = ["Todas", "Pendientes", "Enviadas"]
+    if hasattr(st, "segmented_control"):
+        st.segmented_control(
+            "Filtrar por estado de envío",
+            options=opciones_envio,
+            default="Todas",
+            key=clave_filtro_envio,
+            disabled=enviadas is None,
         )
+    else:
+        # Compatibilidad con versiones anteriores de Streamlit.
+        st.radio(
+            "Filtrar por estado de envío",
+            options=opciones_envio,
+            index=0,
+            horizontal=True,
+            key=clave_filtro_envio,
+            disabled=enviadas is None,
+        )
+
+    if enviadas is None:
+        st.caption(
+            "No se pudieron consultar los diseños guardados en Supabase; "
+            "los indicadores y filtros de envío no están disponibles por ahora."
+        )
+
+    # Evitamos que una orden guardada en sesión siga seleccionada al
+    # cambiar el filtro, incluso si el operador no escribió una búsqueda.
+    ids_visibles = set(df["ID"].astype(str).tolist())
+    orden_almacenada = st.session_state.get("preparacion_catalogo_orden_actual")
+    if orden_almacenada and str(orden_almacenada.get("ID")) not in ids_visibles:
+        limpiar_memoria_mockups_orden(orden_almacenada.get("ID"))
+        st.session_state.pop("preparacion_catalogo_orden_actual", None)
 
     if df.empty:
-
-        st.warning(
-            "🔎 No se encontraron órdenes "
-            "que coincidan con la búsqueda."
-        )
-
+        st.info("No hay órdenes que coincidan con estos filtros.")
+        mostrar_estado_proceso()
         return
 
-    st.markdown(
-        "### 📥 Bandeja de trabajos disponibles"
-    )
+    st.markdown("### 📥 Bandeja de trabajos disponibles")
+    st.caption("Selecciona una orden para ver su arte y su estado comercial.")
 
-    st.caption(
-        "Selecciona una fila para comenzar "
-        "la preparación de ese arte."
+    # La clave depende del filtro y de la búsqueda: no reutiliza un índice
+    # de fila de otro conjunto de resultados.
+    clave_tabla = (
+        f"preparacion_tabla_{opciones.index(vista)}_{filtro_envio}_"
+        f"{buscar_codigo.strip().lower()}_{buscar_cliente.strip().lower()}_"
+        f"{busqueda_rapida.casefold()}"
     )
-
     evento = st.dataframe(
-        df[
-            [
-                "Código",
-                "Cliente",
-                "Estado",
-                "Fecha",
-            ]
-        ],
+        df[["Código", "Cliente", "Estado", "Fecha"]],
         width="stretch",
         hide_index=True,
         on_select="rerun",
         selection_mode="single-row",
-        key="preparacion_tabla_ordenes",
+        key=clave_tabla,
     )
 
     if evento.selection.rows:
+        indice = evento.selection.rows[0]
+        if 0 <= indice < len(df):
+            nueva_orden = df.iloc[indice].to_dict()
+            anterior = st.session_state.get("preparacion_catalogo_orden_actual")
+            if anterior and str(anterior.get("ID")) != str(nueva_orden.get("ID")):
+                limpiar_memoria_mockups_orden(anterior.get("ID"))
+            st.session_state["preparacion_catalogo_orden_actual"] = nueva_orden
 
-        indice = (
-            evento.selection.rows[
-                0
-            ]
-        )
-
-        orden_seleccionada = (
-            df.iloc[
-                indice
-            ].to_dict()
-        )
-
-        id_nueva = str(
-            orden_seleccionada.get(
-                "ID"
-            )
-        )
-
-        orden_anterior = (
-            st.session_state.get(
-                "preparacion_catalogo_orden_actual"
-            )
-        )
-
-        id_anterior = (
-            str(
-                orden_anterior.get(
-                    "ID"
-                )
-            )
-            if orden_anterior
-            else ""
-        )
-
-        if (
-            id_anterior
-            and id_anterior != id_nueva
-        ):
-
-            limpiar_memoria_mockups_orden(
-                id_anterior
-            )
-
-        st.session_state[
-            "preparacion_catalogo_orden_actual"
-        ] = orden_seleccionada
-
-    orden_actual = (
-        st.session_state.get(
-            "preparacion_catalogo_orden_actual"
-        )
-    )
-
+    orden_actual = st.session_state.get("preparacion_catalogo_orden_actual")
     if not orden_actual:
-
-        st.info(
-            "👆 Selecciona una orden "
-            "de la bandeja para continuar."
-        )
-
-        mostrar_estado_proceso(
-            paso1_completo=False,
-            paso2_completo=False,
-            paso3_completo=False,
-            paso4_completo=False,
-        )
-
+        st.info("👆 Selecciona una orden de la bandeja para continuar.")
+        mostrar_estado_proceso()
         return
 
-    ids_actuales = (
-        df[
-            "ID"
-        ]
-        .astype(str)
-        .tolist()
-    )
-
-    id_seleccionado = str(
-        orden_actual.get(
-            "ID"
-        )
-    )
-
-    if (
-        buscar_codigo
-        or buscar_cliente
-    ) and (
-        id_seleccionado
-        not in ids_actuales
-    ):
-
-        st.info(
-            "👆 Selecciona una orden "
-            "de los resultados actuales."
-        )
-
-        mostrar_estado_proceso(
-            paso1_completo=False,
-            paso2_completo=False,
-            paso3_completo=False,
-            paso4_completo=False,
-        )
-
+    # Actualizamos la información de la selección a la leída en esta carga.
+    # Así, si se cambió un permiso en Producción, no permanece obsoleto.
+    coincidencias = df[df["ID"].astype(str) == str(orden_actual.get("ID"))]
+    if coincidencias.empty:
+        st.session_state.pop("preparacion_catalogo_orden_actual", None)
+        mostrar_estado_proceso()
         return
+    orden_actual = coincidencias.iloc[0].to_dict()
+    st.session_state["preparacion_catalogo_orden_actual"] = orden_actual
 
     st.divider()
 
@@ -4394,6 +4390,29 @@ def render(
                 observaciones
             )
 
+    # El archivo original no validaba permisos antes de crear mockups.
+    # En esta primera revisión solo LEEMOS permisos; no escribimos nada.
+    if orden_actual.get("Grupo") != "✅ Autorizadas con arte":
+        if orden_actual.get("Grupo") == "⏳ Pendientes con arte":
+            st.warning(
+                "⏳ Esta orden tiene arte, pero aún requiere autorización "
+                "comercial en Producción antes de prepararla."
+            )
+        elif orden_actual.get("Grupo") == "🖼️ Sin arte principal":
+            st.warning(
+                "🖼️ Esta orden no tiene un arte principal registrado. "
+                "Revisa los archivos de Producción."
+            )
+        elif orden_actual.get("Grupo") == "🔒 Excluidas":
+            st.error(
+                "🔒 Esta orden está excluida del catálogo. "
+                f"Motivo: {orden_actual.get('Motivo catálogo') or 'Sin especificar'}."
+            )
+        else:
+            st.error("🚫 Esta orden está anulada o cancelada.")
+        mostrar_estado_proceso()
+        return
+
     st.success(
         "✅ PASO 1 COMPLETADO. "
         "La orden tiene un arte disponible "
@@ -4426,6 +4445,7 @@ def render(
             mostrar_paso_4(
                 orden_actual,
                 datos_mockups,
+                supabase,
             )
         )
 
@@ -4435,3 +4455,4 @@ def render(
         paso3_completo=paso3_completo,
         paso4_completo=paso4_completo,
     )
+    
