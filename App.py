@@ -136,6 +136,7 @@ PERMISOS = {
         "Caja y Finanzas",
         "Clientes",
         "Reportes",
+        "Preparación de Catálogo",
         "Polines",
     ],
     "IMPRESION": ["Inicio", "Impresión", "Reportes"],
